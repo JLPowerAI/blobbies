@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type BlobMemory,
   htmlToText,
+  MEMORY_LIMIT,
+  MEMORY_PROMPT_CHARS,
+  MEMORY_TEXT_LIMIT,
   makeBlobTools,
   parseDdgLite,
   renderMemories,
@@ -65,6 +68,20 @@ describe("blob tools", () => {
     const block = renderMemories([{ id: "abc123", text: "Likes pigeons", createdAt: 1 }]);
     expect(block).toContain("[abc123] Likes pigeons");
     expect(renderMemories([])).toBe("");
+  });
+
+  it("budgets the memory block so it cannot overrun a local context window", () => {
+    // Worst case the store allows: every slot filled to the text cap.
+    const full: BlobMemory[] = Array.from({ length: MEMORY_LIMIT }, (_, index) => ({
+      id: `id${index}`,
+      text: "x".repeat(MEMORY_TEXT_LIMIT),
+      createdAt: index,
+    }));
+    const block = renderMemories(full);
+    expect(block.length).toBeLessThanOrEqual(MEMORY_PROMPT_CHARS + 120);
+    // Newest survive the budget, oldest are dropped.
+    expect(block).toContain(`id${MEMORY_LIMIT - 1}`);
+    expect(block).not.toContain("[id0]");
   });
 
   it("web_fetch refuses non-https and malformed URLs", async () => {

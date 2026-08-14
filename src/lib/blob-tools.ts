@@ -19,8 +19,20 @@ import { hostIsPublic, isTauri } from "@/lib/tauri";
 /** Cap page text handed to a small local model; more just evicts context. */
 const FETCH_TEXT_LIMIT = 8_000;
 const SEARCH_RESULT_LIMIT = 5;
-export const MEMORY_LIMIT = 60;
-export const MEMORY_TEXT_LIMIT = 600;
+
+/**
+ * Memory sizing is bounded by the *local* context window, not by disk.
+ *
+ * Measured against Ollama 0.32.9 / qwen3.5:0.8b: one 600-char memory costs
+ * ~104 prompt tokens, so 60 of them is ~6.3k tokens — more than a default
+ * local context (~2k here), and Ollama truncates silently, taking the
+ * conversation with it. A memory is one sentence, so 200 chars is plenty,
+ * and the rendered block is budgeted on top of that.
+ */
+export const MEMORY_LIMIT = 40;
+export const MEMORY_TEXT_LIMIT = 200;
+/** Hard ceiling on the memory block in the prompt (~450 tokens at 4 chars). */
+export const MEMORY_PROMPT_CHARS = 1_800;
 
 /** In a plain browser (dev/tests) the plugin IPC is absent; fall back. */
 function httpFetch(url: string, init?: RequestInit): Promise<Response> {
@@ -233,11 +245,35 @@ export function makeBlobTools(memory: MemoryAccess): AgentTool[] {
   return [makeWebFetchTool(), makeWebSearchTool(), ...makeMemoryTools(memory)];
 }
 
-/** Render memories for the system prompt; empty string when none. */
+/**
+ * Render memories for the system prompt; empty string when none.
+ *
+ * Budgeted: the newest memories that fit within [`MEMORY_PROMPT_CHARS`] are
+ * included, oldest dropped first. Without this the block can outgrow a local
+ * model's context window, which Ollama resolves by silently truncating the
+ * prompt — losing the conversation rather than the memories.
+ */
 export function renderMemories(memories: BlobMemory[]): string {
   if (memories.length === 0) {
     return "";
   }
-  const lines = memories.map((memory) => `- [${memory.id}] ${memory.text}`);
+  const lines: string[] = [];
+  let used = 0;
+  // Newest first so the most recent facts survive the budget.
+  for (let index = memories.length - 1; index >= 0; index--) {
+    const memory = memories[index];
+    if (memory === undefined) {
+      continue;
+    }
+    const line = `- [${memory.id}] ${memory.text}`;
+    if (used + line.length > MEMORY_PROMPT_CHARS) {
+      break;
+    }
+    used += line.length + 1;
+    lines.unshift(line);
+  }
+  if (lines.length === 0) {
+    return "";
+  }
   return `\nThings you remember (manage with remember/update_memory/forget):\n${lines.join("\n")}`;
 }
