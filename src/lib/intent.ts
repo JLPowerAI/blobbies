@@ -29,6 +29,29 @@ export type Intent =
   | { action: "delete_fact"; memoryNumber: number }
   | { action: "change_job" };
 
+/**
+ * Hard ceiling on the router call. It runs before every reply, so a stalled
+ * or cold-loading model must not hold the conversation hostage: on timeout the
+ * turn proceeds as `none` and the tools remain available.
+ */
+const ROUTER_TIMEOUT_MS = 5_000;
+
+/**
+ * The router emits a handful of JSON tokens; capping stops a confused model
+ * padding the `fact` field until the turn times out.
+ */
+const ROUTER_MAX_TOKENS = 256;
+
+/**
+ * Deterministic classification: same message, same route, every time.
+ *
+ * Note this is the opposite of what temperature does for tool *choice* — the
+ * sim measured a small model calling `remember` 0/8 times at temperature 0.
+ * Grammar-constrained output cannot fail to emit, so determinism is free here
+ * and slightly more accurate (83% vs 80% over 30 classifications).
+ */
+const ROUTER_TEMPERATURE = 0;
+
 /** Grammar the model must fill; `action` is a closed enum, so it cannot stray. */
 const INTENT_SCHEMA = {
   type: "object",
@@ -106,16 +129,29 @@ export async function routeIntent(options: {
   if (text.trim() === "") {
     return { action: "none" };
   }
+  // Chain the caller's abort with our own deadline, so cancelling the turn
+  // cancels the router too and neither can outlive the other.
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), ROUTER_TIMEOUT_MS);
+  const onParentAbort = () => deadline.abort();
+  if (options.signal !== undefined) {
+    if (options.signal.aborted) {
+      deadline.abort();
+    } else {
+      options.signal.addEventListener("abort", onParentAbort, { once: true });
+    }
+  }
   try {
     const response = await fetch(`${OLLAMA_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      signal: deadline.signal,
       body: JSON.stringify({
         model: options.model,
         stream: false,
         think: false,
         format: INTENT_SCHEMA,
+        options: { temperature: ROUTER_TEMPERATURE, num_predict: ROUTER_MAX_TOKENS },
         messages: [
           {
             role: "system",
@@ -162,6 +198,11 @@ export async function routeIntent(options: {
         return { action: "none" };
     }
   } catch {
+    // Timeout, abort, offline server, malformed JSON: the turn continues with
+    // the tools, which is exactly the behaviour before the router existed.
     return { action: "none" };
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onParentAbort);
   }
 }
