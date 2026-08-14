@@ -56,5 +56,5 @@ src-tauri/
 
 ## License
 
-[GNU AGPL-3.0-only](LICENSE). Network use counts as distribution: if you run a modified
-version for users over a network, you must offer them the corresponding source.
+[GNU AGPL-3.0-only](LICENSE). Beyond the GPL, section 13 adds a network clause: if you
+let users interact with a modified version remotely, you must offer them its source.
