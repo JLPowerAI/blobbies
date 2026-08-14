@@ -133,8 +133,10 @@ fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             let [a, b, _, _] = v4.octets();
-            // 100.64.0.0/10 (CGNAT) has no stable std predicate.
+            // Neither predicate is stable in std: 100.64.0.0/10 is carrier-grade
+            // NAT, and 0.0.0.0/8 ("this network") is not routable either.
             let carrier_grade_nat = a == 100 && (64..=127).contains(&b);
+            let this_network = a == 0;
             !(v4.is_private()
                 || v4.is_loopback()
                 || v4.is_link_local()
@@ -142,22 +144,30 @@ fn is_public_ip(ip: IpAddr) -> bool {
                 || v4.is_broadcast()
                 || v4.is_unspecified()
                 || v4.is_documentation()
-                || carrier_grade_nat)
+                || carrier_grade_nat
+                || this_network)
         }
         IpAddr::V6(v6) => {
-            // ::ffff:192.168.1.1 is an IPv4 address wearing a hat.
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                return is_public_ip(IpAddr::V4(mapped));
-            }
             let [first, ..] = v6.segments();
             // Unique-local fc00::/7 and link-local fe80::/10 are unstable in std.
             let unique_local = (first & 0xfe00) == 0xfc00;
             let link_local = (first & 0xffc0) == 0xfe80;
-            !(v6.is_loopback()
+            // These must be refused before the IPv4 conversion below, which
+            // would otherwise turn ::1 into the v4 address 0.0.0.1.
+            if v6.is_loopback()
                 || v6.is_multicast()
                 || v6.is_unspecified()
                 || unique_local
-                || link_local)
+                || link_local
+            {
+                return false;
+            }
+            // Both ::ffff:192.168.1.1 (mapped) and ::192.168.1.1 (compatible)
+            // are IPv4 addresses wearing a hat; judge them as IPv4.
+            match v6.to_ipv4() {
+                Some(v4) => is_public_ip(IpAddr::V4(v4)),
+                None => true,
+            }
         }
     }
 }
@@ -270,7 +280,12 @@ mod tests {
             "fc00::1",
             "fd12:3456::1",
             "fe80::1",
+            // IPv4-mapped and the older IPv4-compatible spelling of the same
+            // hosts; both must be judged as their IPv4 address.
             "::ffff:192.168.1.1",
+            "::ffff:169.254.169.254",
+            "::192.168.1.1",
+            "::127.0.0.1",
         ] {
             assert!(!is_public_ip(ip(address)), "{address} must be refused");
         }
