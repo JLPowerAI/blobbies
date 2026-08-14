@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { OLLAMA_URL } from "@/lib/ollama";
 
@@ -18,13 +17,124 @@ const MODEL = process.env.SIM_MODEL ?? "qwen3.5:2b";
 const PROBE_TIMEOUT_MS = 180_000;
 
 /**
- * A real screenshot from the repo: text, UI chrome and colour, like anything
- * a user would actually share with a Blob.
+ * The word rendered into the probe image, and expected back from the model.
+ * Drawn as blocky 5x7 glyphs, so only these letters need shapes.
+ */
+const IMAGE_WORD = "DELETE";
+
+/** 5x7 bitmap font, enough for IMAGE_WORD. Each string is one pixel row. */
+const GLYPHS: Record<string, string[]> = {
+  D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+  E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+  L: ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+  T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+};
+
+/**
+ * Build a PNG of `IMAGE_WORD` in black on white, with no dependencies.
+ *
+ * Deliberately not a checked-in screenshot: `.gg/` is gitignored, so a file
+ * fixture only works on the machine that produced it. jsdom has no canvas
+ * renderer either, so the pixels are drawn by hand and wrapped in a
+ * hand-rolled PNG — a PNG is a header plus zlib-stored scanlines, which needs
+ * only CRC32 and Adler-32.
  */
 function testImageBase64(): string {
-  // process.cwd(), not import.meta.url: under Vite the module URL is an http
-  // URL, which fileURLToPath rejects.
-  return readFileSync(`${process.cwd()}/.gg/screenshots/ctxmenu.png`).toString("base64");
+  const scale = 8;
+  const pad = 8;
+  const width = pad * 2 + IMAGE_WORD.length * 6 * scale;
+  const height = pad * 2 + 7 * scale;
+
+  // One byte per pixel per channel (RGB), preceded by a filter byte per row.
+  const raw = Buffer.alloc(height * (1 + width * 3), 0xff);
+  for (let row = 0; row < height; row++) {
+    raw[row * (1 + width * 3)] = 0; // filter: none
+  }
+  const setPixel = (x: number, y: number) => {
+    const offset = y * (1 + width * 3) + 1 + x * 3;
+    raw[offset] = 0;
+    raw[offset + 1] = 0;
+    raw[offset + 2] = 0;
+  };
+  [...IMAGE_WORD].forEach((letter, index) => {
+    const glyph = GLYPHS[letter];
+    if (glyph === undefined) {
+      throw new Error(`no glyph for ${letter}`);
+    }
+    glyph.forEach((rowBits, gy) => {
+      [...rowBits].forEach((bit, gx) => {
+        if (bit === "1") {
+          for (let dy = 0; dy < scale; dy++) {
+            for (let dx = 0; dx < scale; dx++) {
+              setPixel(pad + (index * 6 + gx) * scale + dx, pad + gy * scale + dy);
+            }
+          }
+        }
+      });
+    });
+  });
+
+  return encodePng(raw, width, height).toString("base64");
+}
+
+/** Minimal PNG encoder: IHDR + stored-deflate IDAT + IEND. */
+function encodePng(raw: Buffer, width: number, height: number): Buffer {
+  const crcTable = Array.from({ length: 256 }, (_unused, index) => {
+    let value = index;
+    for (let bit = 0; bit < 8; bit++) {
+      value = value & 1 ? 0xed_b8_83_20 ^ (value >>> 1) : value >>> 1;
+    }
+    return value >>> 0;
+  });
+  const crc32 = (data: Buffer) => {
+    let value = 0xff_ff_ff_ff;
+    for (const byte of data) {
+      value = (crcTable[(value ^ byte) & 0xff] ?? 0) ^ (value >>> 8);
+    }
+    return (value ^ 0xff_ff_ff_ff) >>> 0;
+  };
+  const chunk = (type: string, body: Buffer) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(body.length);
+    const typed = Buffer.concat([Buffer.from(type, "ascii"), body]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(typed));
+    return Buffer.concat([length, typed, crc]);
+  };
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // colour type: truecolour
+
+  // zlib stream with stored (uncompressed) deflate blocks: no compressor.
+  const blocks: Buffer[] = [Buffer.from([0x78, 0x01])];
+  const maxBlock = 65_535;
+  for (let offset = 0; offset < raw.length; offset += maxBlock) {
+    const slice = raw.subarray(offset, Math.min(offset + maxBlock, raw.length));
+    const header = Buffer.alloc(5);
+    header[0] = offset + maxBlock >= raw.length ? 1 : 0;
+    header.writeUInt16LE(slice.length, 1);
+    header.writeUInt16LE(~slice.length & 0xff_ff, 3);
+    blocks.push(header, slice);
+  }
+  let a = 1;
+  let b = 0;
+  for (const byte of raw) {
+    a = (a + byte) % 65_521;
+    b = (b + a) % 65_521;
+  }
+  const adler = Buffer.alloc(4);
+  adler.writeUInt32BE(((b << 16) | a) >>> 0);
+  blocks.push(adler);
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", Buffer.concat(blocks)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
 }
 
 interface ChatResult {
@@ -61,8 +171,7 @@ describe(`capabilities (${MODEL})`, () => {
         messages: [
           {
             role: "user",
-            content:
-              "This is a screenshot of an app. List the menu items you can read, exactly as written.",
+            content: "List every word you can read in this image, exactly as written.",
             images: [testImageBase64()],
           },
         ],
@@ -70,12 +179,9 @@ describe(`capabilities (${MODEL})`, () => {
       console.log(
         `   vision (${result.ms}ms): ${result.content.replace(/\s+/g, " ").slice(0, 220)}`,
       );
-      // The screenshot's context menu contains these entries; a model that
-      // cannot read them is not usable for the image work Blobbies needs.
-      const hits = ["pin", "duplicate", "delete", "unread"].filter((word) =>
-        result.content.toLowerCase().includes(word),
-      );
-      expect(hits.length, `only matched ${JSON.stringify(hits)}`).toBeGreaterThanOrEqual(2);
+      // A model that cannot read one large, high-contrast word is not usable
+      // for the image work Blobbies needs.
+      expect(result.content.toLowerCase()).toContain(IMAGE_WORD.toLowerCase());
     },
     PROBE_TIMEOUT_MS,
   );
