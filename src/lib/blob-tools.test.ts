@@ -244,6 +244,49 @@ describe("blob tools", () => {
     expect(unwrapBingRedirect(target)).toBe(target);
   });
 
+  it("names why each engine failed instead of reporting a silent nothing", async () => {
+    // A blocked request and an empty result set used to look identical, which
+    // is what made the packaged app's broken search so hard to diagnose.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).includes("bing")
+          ? new Response("blocked", { status: 403 })
+          : new Response("<html>Unfortunately, bots use DuckDuckGo too.</html>"),
+      ),
+    );
+    try {
+      const tools = makeBlobTools({ list: () => [], save: () => {} });
+      const search = tools.find((tool) => tool.name === "web_search");
+      const result = String(await search?.execute({ query: "anything" }, context));
+      expect(result).toContain("Bing: HTTP 403");
+      expect(result).toContain("blocked as a bot");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("stops searching when the turn is cancelled", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        controller.abort();
+        throw new Error("aborted");
+      }),
+    );
+    try {
+      const tools = makeBlobTools({ list: () => [], save: () => {} });
+      const search = tools.find((tool) => tool.name === "web_search");
+      // Must propagate, not fall through to the next engine and stall.
+      await expect(
+        search?.execute({ query: "anything" }, { toolCallId: "t1", signal: controller.signal }),
+      ).rejects.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("strips markup and parses DDG Lite results", () => {
     expect(htmlToText("<p>Hello <script>evil()</script><b>world</b></p>")).toBe("Hello world");
     const html = `<table><tr><td><a class="result-link" href="https://example.com">Example</a></td></tr>

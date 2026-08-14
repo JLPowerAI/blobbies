@@ -453,8 +453,9 @@ export function App() {
         patchReply(text);
       }
     } catch {
+      // Whitespace-only counts as nothing said, matching the check above.
       text =
-        text === ""
+        text.trim() === ""
           ? "I couldn't reach the local model. Check that Ollama is running in Settings \u2192 Model."
           : `${text}\u2026 (the model stopped responding)`;
       patchReply(text);

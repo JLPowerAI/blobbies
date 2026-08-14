@@ -343,7 +343,11 @@ function makeWebSearchTool() {
             )
             .join("\n");
         } catch (error) {
-          // Network error or abort on this engine: fall through to the next.
+          // A cancelled turn must stop the whole search, not quietly move on to
+          // the next engine and keep the user waiting.
+          if (context.signal.aborted) {
+            throw error;
+          }
           failures.push(`${engine.name}: ${error instanceof Error ? error.message : "failed"}`);
         }
       }
