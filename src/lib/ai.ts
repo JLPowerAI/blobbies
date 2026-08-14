@@ -586,13 +586,17 @@ export async function streamBlobTurn(options: {
   // back what the tools found and ask again with no tools available, so the
   // only thing left to do is reply.
   if (text.trim() === "" && gathered.length > 0) {
+    // Budgeted: a fetch result is up to 3k chars, and several of them replayed
+    // whole would push the earlier conversation out of a small context window
+    // — losing the very question this round exists to answer.
+    const perResult = Math.max(400, Math.floor(4_000 / gathered.length));
     conversation = [
       ...conversation,
       {
         role: "user",
         content:
           "Results from the tools you just used:\n" +
-          gathered.map((call) => `${call.name}: ${call.result}`).join("\n\n") +
+          gathered.map((call) => `${call.name}: ${call.result.slice(0, perResult)}`).join("\n\n") +
           "\n\nAnswer my message now, in your own words. Do not use any more tools.",
       },
     ];

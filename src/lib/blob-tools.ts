@@ -222,7 +222,9 @@ export function cleanResultUrl(rawUrl: string): string | null {
   } catch {
     return null;
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+  // HTTPS only, matching web_fetch: an http:// result is unusable to the
+  // Blob (the fetch tool refuses it) and would waste a tool round.
+  if (parsed.protocol !== "https:") {
     return null;
   }
   if (AD_HOSTS.test(parsed.hostname) || AD_PATHS.test(parsed.pathname)) {

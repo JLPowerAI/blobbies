@@ -227,6 +227,8 @@ describe("blob tools", () => {
       { title: "Sponsored: deal", url: "https://legit.example/deal", snippet: "" },
       // Same destination as the first, only differing by tracking + slash.
       { title: "Dupe", url: "https://example.com/page?id=7&fbclid=zz", snippet: "" },
+      // web_fetch is https-only, so an http result would be a dead end.
+      { title: "Insecure", url: "http://plain.example/page", snippet: "" },
     ]);
     expect(cleaned.map((hit) => hit.title)).toEqual(["Real result"]);
     // utm_/fbclid stripped, real query kept.
