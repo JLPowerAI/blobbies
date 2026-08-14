@@ -35,6 +35,32 @@ describe("blob tools", () => {
     expect(stored).toHaveLength(0);
   });
 
+  it("update_memory revises a fact in place instead of adding a contradiction", async () => {
+    let stored: BlobMemory[] = [];
+    const tools = makeBlobTools({
+      list: () => stored,
+      save: (next) => {
+        stored = next;
+      },
+    });
+    const remember = tools.find((tool) => tool.name === "remember");
+    const update = tools.find((tool) => tool.name === "update_memory");
+
+    await remember?.execute({ text: "Ken prefers short replies" }, context);
+    const id = stored[0]?.id ?? "";
+    const createdAt = stored[0]?.createdAt ?? 0;
+
+    await update?.execute({ id, text: "Ken prefers long replies" }, context);
+    // One memory, not two contradicting ones.
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.text).toBe("Ken prefers long replies");
+    expect(stored[0]?.createdAt).toBe(createdAt);
+    expect(stored[0]?.updatedAt).toBeGreaterThanOrEqual(createdAt);
+
+    const missing = await update?.execute({ id: "nope", text: "x" }, context);
+    expect(missing).toBe("No memory with id nope.");
+  });
+
   it("renders memories into the prompt with their ids", () => {
     const block = renderMemories([{ id: "abc123", text: "Likes pigeons", createdAt: 1 }]);
     expect(block).toContain("[abc123] Likes pigeons");

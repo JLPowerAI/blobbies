@@ -138,6 +138,8 @@ export interface BlobMemory {
   id: string;
   text: string;
   createdAt: number;
+  /** Set when the Blob revised this fact via update_memory. */
+  updatedAt?: number;
 }
 
 /** Callbacks the memory tools use to mutate the owning Blob's stored memories. */
@@ -149,6 +151,10 @@ export interface MemoryAccess {
 function makeMemoryTools(access: MemoryAccess) {
   const rememberParams = z.object({
     text: z.string().describe("The fact to remember, one short sentence"),
+  });
+  const updateParams = z.object({
+    id: z.string().describe("The id of the memory to revise"),
+    text: z.string().describe("The corrected fact, replacing the old wording"),
   });
   const forgetParams = z.object({
     id: z.string().describe("The id of the memory to delete"),
@@ -179,6 +185,31 @@ function makeMemoryTools(access: MemoryAccess) {
       return "Remembered.";
     },
   };
+  const update: AgentTool<typeof updateParams> = {
+    name: "update_memory",
+    description:
+      "Revise a memory you already saved, by its id. Use this when a fact " +
+      "changes or you got it wrong \u2014 do not save a second, contradicting memory.",
+    parameters: updateParams,
+    executionMode: "sequential",
+    execute: (args) => {
+      const text = args.text.trim().slice(0, MEMORY_TEXT_LIMIT);
+      if (text === "") {
+        return "Nothing to save: empty text. Use forget to delete instead.";
+      }
+      const memories = access.list();
+      if (!memories.some((memory) => memory.id === args.id)) {
+        return `No memory with id ${args.id}.`;
+      }
+      access.save(
+        memories.map((memory) =>
+          // createdAt is preserved: this is the same fact, reworded.
+          memory.id === args.id ? { ...memory, text, updatedAt: Date.now() } : memory,
+        ),
+      );
+      return "Updated.";
+    },
+  };
   const forget: AgentTool<typeof forgetParams> = {
     name: "forget",
     description: "Delete a memory by its id (shown in your memory list).",
@@ -194,7 +225,7 @@ function makeMemoryTools(access: MemoryAccess) {
       return "Forgotten.";
     },
   };
-  return [remember, forget];
+  return [remember, update, forget];
 }
 
 /** The full tool catalog for one Blob's chat turn. */
@@ -208,5 +239,5 @@ export function renderMemories(memories: BlobMemory[]): string {
     return "";
   }
   const lines = memories.map((memory) => `- [${memory.id}] ${memory.text}`);
-  return `\nThings you remember (manage with remember/forget):\n${lines.join("\n")}`;
+  return `\nThings you remember (manage with remember/update_memory/forget):\n${lines.join("\n")}`;
 }
