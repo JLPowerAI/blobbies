@@ -13,6 +13,7 @@ import {
   makeBlobTools,
   renderMemories,
 } from "@/lib/blob-tools";
+import { type Intent, routeIntent } from "@/lib/intent";
 import { OLLAMA_URL } from "@/lib/ollama";
 
 /**
@@ -192,6 +193,45 @@ export function blobSystemPrompt(
 const MAX_TOOL_ROUNDS = 3;
 
 /**
+ * Carry out a routed intent using the same memory tools the model would have
+ * called, so both paths share one implementation (including dedupe and the
+ * lenient memory lookup). Returns null when there was nothing to do.
+ */
+function applyIntent(intent: Intent, memory: MemoryAccess): ToolCallRecord | null {
+  const tools = makeBlobTools(memory);
+  const run = (name: string, args: Record<string, unknown>): ToolCallRecord | null => {
+    const tool = tools.find((candidate) => candidate.name === name);
+    if (tool === undefined) {
+      return null;
+    }
+    // These memory tools are synchronous; `execute` is typed as possibly async.
+    const result = tool.execute(args, {
+      toolCallId: "intent-1",
+      signal: new AbortController().signal,
+    });
+    return typeof result === "string" ? { name, args, result, isError: false } : null;
+  };
+  switch (intent.action) {
+    case "save_fact":
+      return run("remember", { text: intent.fact });
+    case "delete_fact":
+      return run("forget", { id: String(intent.memoryNumber) });
+    default:
+      // change_job is handled by the forced configure round, not here.
+      return null;
+  }
+}
+
+/** Append a completed tool call to the conversation so the model can confirm it. */
+function withToolExchange(conversation: Message[], call: ToolCallRecord, id: string): Message[] {
+  return [
+    ...conversation,
+    { role: "assistant", content: [{ type: "tool_call", id, name: call.name, args: call.args }] },
+    { role: "tool", content: [{ type: "tool_result", toolCallId: id, content: call.result }] },
+  ];
+}
+
+/**
  * Force an unconfigured Blob to write its own configuration.
  *
  * Free-form tool calling is unreliable here: small models skip or refuse the
@@ -319,10 +359,36 @@ export async function streamBlobTurn(options: {
 }): Promise<string> {
   let conversation = options.messages;
 
+  // Reliability floor for weak models: classify the request with a grammar
+  // (which a sub-1B model can satisfy) and act on it, rather than depending on
+  // it choosing a tool (which it mostly does not). The tools stay available,
+  // so a capable model keeps working and both paths land the same effect.
+  const intent = await routeIntent({
+    model: options.model,
+    messages: conversation,
+    memories: options.memory.list(),
+  });
+  let handledByRouter = false;
+  if (intent.action !== "none") {
+    const applied = applyIntent(intent, options.memory);
+    if (applied !== null) {
+      options.onToolCall?.(applied);
+      conversation = withToolExchange(conversation, applied, "intent-1");
+      handledByRouter = true;
+    }
+  }
+
+  // A job change is a reconfigure: run the same forced round that sets up a
+  // new Blob, which is the only path measured reliable on a small model.
+  const forceConfigure = options.forceConfigure === true || intent.action === "change_job";
+  if (forceConfigure) {
+    handledByRouter = true;
+  }
+
   // simplification: forcing configure_blob on the first unconfigured turn
   // means a greeting like "hi" also triggers a (generic) self-config; the
   // model can refine it on later turns via the same tool.
-  if (options.forceConfigure === true) {
+  if (forceConfigure) {
     const patch = await forcedConfigureCall(options.model, conversation);
     if (patch !== null) {
       options.onConfigure(patch);
@@ -402,6 +468,22 @@ export async function streamBlobTurn(options: {
     }
     return text;
   };
+
+  // The router already did what the message asked. Offering the tools again
+  // now is what produced the worst failure the sim found: a small model piling
+  // on extra calls (configure + forget + two updates in one turn) and wiping
+  // the memories it had just been told to correct. With the action already
+  // applied, this turn only has to speak.
+  if (handledByRouter) {
+    try {
+      return await runLoop(false);
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      return "";
+    }
+  }
 
   try {
     return await runLoop(true);
