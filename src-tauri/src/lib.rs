@@ -1,5 +1,6 @@
 mod commands;
 mod error;
+mod store;
 
 pub use error::Error;
 
@@ -15,7 +16,17 @@ pub use error::Error;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![commands::greet])
+        .invoke_handler(tauri::generate_handler![
+            commands::greet,
+            store::store_read,
+            store::store_write,
+            store::store_delete_blob,
+            store::store_list_blobs
+        ])
+        .setup(|app| {
+            store::startup_maintenance(app.handle());
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

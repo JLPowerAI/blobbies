@@ -35,3 +35,10 @@ src-tauri/gen
 *.njsproj
 *.sln
 *.sw?
+
+# Generated mobile icons (no mobile targets configured)
+src-tauri/icons/android
+src-tauri/icons/ios
+
+# Agent scratch
+.gg/

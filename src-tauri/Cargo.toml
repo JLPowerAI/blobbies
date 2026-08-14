@@ -1,8 +1,8 @@
 [package]
-name = "unshackled-bot"
+name = "blobbies"
 version = "0.1.0"
-description = "Unshackled Bot desktop app"
-authors = ["Unshackled"]
+description = "Blobbies desktop app"
+authors = ["Blobbies"]
 edition = "2024"
 # Matches the toolchain pinned in rust-toolchain.toml. Kept in sync deliberately: a
 # lower value makes cargo's MSRV-aware resolver hold back security patches.
@@ -13,8 +13,13 @@ publish = false
 [lib]
 # The `_lib` suffix keeps the lib name distinct from the bin name on Windows.
 # https://github.com/rust-lang/cargo/issues/8519
-name = "unshackled_bot_lib"
+name = "blobbies_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+# Capital-B binary so the dev dock name matches the product name.
+name = "Blobbies"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

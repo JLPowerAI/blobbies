@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "unshackled-bot",
+  "productName": "Blobbies",
   "version": "0.1.0",
-  "identifier": "com.unshackled.bot",
+  "identifier": "com.blobbies.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1421",
@@ -13,13 +13,16 @@
     "windows": [
       {
         "label": "main",
-        "title": "unshackled-bot",
-        "width": 1100,
-        "height": 720,
-        "minWidth": 640,
-        "minHeight": 480,
+        "title": "Blobbies",
+        "width": 1080,
+        "height": 728,
+        "minWidth": 720,
+        "minHeight": 520,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 16, "y": 22 }
       }
     ],
     "security": {

@@ -16,3 +16,11 @@ export async function greet(name: string): Promise<string> {
 export async function openExternal(url: string): Promise<void> {
   return openUrl(url);
 }
+
+/**
+ * True when running inside the Tauri webview (native window chrome present),
+ * false in a plain browser during `pnpm dev`.
+ */
+export function isTauri(): boolean {
+  return "__TAURI_INTERNALS__" in window;
+}

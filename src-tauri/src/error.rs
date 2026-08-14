@@ -12,6 +12,24 @@ pub enum Error {
 
     #[error("input must be at most {max} characters")]
     InputTooLong { max: usize },
+
+    #[error("unknown storage slice")]
+    InvalidSliceKey,
+
+    #[error("stored data uses schema {found}, but this app supports up to {supported}")]
+    SchemaTooNew { found: u64, supported: u64 },
+
+    #[error("stored file is too large to load")]
+    SliceTooLarge,
+
+    #[error("stored data is corrupted: {0}")]
+    Corrupt(String),
+
+    #[error("no such Blob")]
+    BlobNotFound,
+
+    #[error("storage error: {0}")]
+    Io(String),
 }
 
 impl Serialize for Error {

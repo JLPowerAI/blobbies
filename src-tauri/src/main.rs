@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    unshackled_bot_lib::run();
+    blobbies_lib::run();
 }
