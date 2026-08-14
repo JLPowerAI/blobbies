@@ -229,6 +229,20 @@ function contentWords(text: string): Set<string> {
 }
 
 /**
+ * True when two facts about the same topic are alternatives rather than
+ * additions — the kind a correction replaces.
+ *
+ * Overlap alone cannot tell "I train Mondays" -> "I train Fridays" (a
+ * correction) from "allergic to peanuts" + "allergic to shellfish" (two real
+ * facts): both score 0.50. The difference is that a correction *replaces* the
+ * distinguishing word, while an addition keeps the old one meaningful. Only
+ * time-like words are treated as replaceable, because a person has one
+ * training schedule but can have several allergies.
+ */
+const SCHEDULE_WORDS =
+  /\b(mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?|mornings?|afternoons?|evenings?|nights?|daily|weekly|weekends?|weekdays?|\d{1,2}(:\d{2})?\s?(am|pm))\b/i;
+
+/**
  * Fraction of the shorter fact's content words that also appear in the other.
  * 1 means one fact's words are wholly contained in the other.
  */
@@ -266,6 +280,12 @@ export function factOverlap(left: string, right: string): number {
  * later turn instead of occasionally losing one fact.
  */
 const SUPERSEDE_OVERLAP = 0.3;
+
+/**
+ * At or above this, the new text is a restatement of the old fact whatever it
+ * is about, so it supersedes without needing the schedule test.
+ */
+const RESTATEMENT_OVERLAP = 0.8;
 
 /**
  * Find the memory a model meant, given whatever it put in the `id` argument.
@@ -333,11 +353,19 @@ function makeMemoryTools(access: MemoryAccess) {
       // Small models reach for `remember` even when correcting a fact (proven
       // in sim/), which would leave two contradicting memories. Supersede the
       // closest matching fact instead, so the outcome is right either way.
-      // Best match, not merely the first above the line.
+      // Best match, not merely the first above the line. A near-identical
+      // restatement always supersedes; a partial match only when both facts
+      // are schedule-like, where the new value replaces the old rather than
+      // adding to it (two allergies are both true; two schedules are not).
       const superseded = memories.reduce<{ memory: BlobMemory; score: number } | null>(
         (best, memory) => {
           const score = factOverlap(memory.text, text);
-          if (score < SUPERSEDE_OVERLAP) {
+          const replaces =
+            score >= RESTATEMENT_OVERLAP ||
+            (score >= SUPERSEDE_OVERLAP &&
+              SCHEDULE_WORDS.test(memory.text) &&
+              SCHEDULE_WORDS.test(text));
+          if (!replaces) {
             return best;
           }
           return best === null || score > best.score ? { memory, score } : best;

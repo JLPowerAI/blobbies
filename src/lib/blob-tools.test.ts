@@ -119,6 +119,29 @@ describe("blob tools", () => {
     expect(stored).toHaveLength(2);
   });
 
+  it("keeps two facts of the same kind rather than silently losing one", async () => {
+    let stored: BlobMemory[] = [
+      { id: "aaa11111", text: "the user is allergic to peanuts", createdAt: 1 },
+    ];
+    const tools = makeBlobTools({
+      list: () => stored,
+      save: (next) => {
+        stored = next;
+      },
+    });
+    const remember = tools.find((tool) => tool.name === "remember");
+
+    // Both allergies are true at once: merging them would lose real data,
+    // which is worse than storing a contradiction.
+    await remember?.execute({ text: "the user is allergic to shellfish" }, context);
+    expect(stored).toHaveLength(2);
+
+    // Same for preferences that can coexist.
+    await remember?.execute({ text: "the user likes coffee" }, context);
+    await remember?.execute({ text: "the user likes tea" }, context);
+    expect(stored).toHaveLength(4);
+  });
+
   it("budgets the memory block so it cannot overrun a local context window", () => {
     // Worst case the store allows: every slot filled to the text cap.
     const full: BlobMemory[] = Array.from({ length: MEMORY_LIMIT }, (_, index) => ({
