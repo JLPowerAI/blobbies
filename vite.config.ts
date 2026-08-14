@@ -4,6 +4,10 @@ import { defineConfig } from "vite";
 
 const host = process.env.TAURI_DEV_HOST;
 
+// Must stay in sync with `build.devUrl` in src-tauri/tauri.conf.json.
+const DEV_PORT = 1421;
+const HMR_PORT = DEV_PORT + 1;
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -25,10 +29,10 @@ export default defineConfig({
   clearScreen: false,
   server: {
     // 2. Tauri expects a fixed port and fails if it is taken.
-    port: 1420,
+    port: DEV_PORT,
     strictPort: true,
     host: host || false,
-    hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
+    hmr: host ? { protocol: "ws", host, port: HMR_PORT } : undefined,
     watch: {
       // 3. Vite must not watch the Rust side.
       ignored: ["**/src-tauri/**"],

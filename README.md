@@ -21,7 +21,7 @@ pnpm tauri:dev   # run the desktop app with HMR
 | --- | --- |
 | `pnpm tauri:dev` | Desktop app in dev mode (Vite HMR + Rust watch) |
 | `pnpm tauri:build` | Production bundle for the current platform |
-| `pnpm dev` | Frontend only, in a browser at `localhost:1420` |
+| `pnpm dev` | Frontend only, in a browser at `localhost:1421` |
 | `pnpm lint` / `pnpm lint:fix` | Biome lint + format + import sorting |
 | `pnpm typecheck` | `tsc --build` over both TS projects |
 | `pnpm test` / `pnpm test:coverage` | Vitest (jsdom + Testing Library) |
@@ -53,3 +53,8 @@ src-tauri/
   to the OS browser — a navigated webview would keep the IPC bridge.
 - **CSP is on** in `tauri.conf.json` (`default-src 'self'`, no `unsafe-eval`).
 - Git hooks: Biome + rustfmt on commit, typecheck/tests/clippy on push (`lefthook.yml`).
+
+## License
+
+[GNU AGPL-3.0-only](LICENSE). Network use counts as distribution: if you run a modified
+version for users over a network, you must offer them the corresponding source.
