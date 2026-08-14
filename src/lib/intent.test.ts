@@ -75,6 +75,31 @@ describe("routeIntent", () => {
     }
   });
 
+  it("gives up on a stalled model rather than blocking the reply", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      // A model that never answers: the router's own deadline must fire.
+      vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+      ),
+    );
+    try {
+      const pending = routeIntent({
+        ...base,
+        messages: [{ role: "user", content: "hello" }],
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(pending).resolves.toEqual({ action: "none" });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects a malformed delete without a usable memory number", async () => {
     vi.stubGlobal(
       "fetch",
