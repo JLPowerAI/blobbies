@@ -16,6 +16,10 @@ import { OLLAMA_URL } from "@/lib/ollama";
  * This runs *alongside* the tools rather than replacing them, so a capable
  * model that calls tools directly still works and the two paths converge on
  * the same effect (memory writes dedupe, config writes are idempotent).
+ *
+ * Cost: one extra non-streaming call per message, measured at roughly +300ms
+ * on this model (plain chat turn 500ms -> 860ms). Paid on every message to
+ * make the ones that matter deterministic.
  */
 
 /** What the router decided the user's last message calls for. */
