@@ -8,6 +8,7 @@ import {
   makeBlobTools,
   parseDdgLite,
   renderMemories,
+  resolveMemory,
 } from "@/lib/blob-tools";
 
 const context = { signal: new AbortController().signal, toolCallId: "t1" };
@@ -61,13 +62,55 @@ describe("blob tools", () => {
     expect(stored[0]?.updatedAt).toBeGreaterThanOrEqual(createdAt);
 
     const missing = await update?.execute({ id: "nope", text: "x" }, context);
-    expect(missing).toBe("No memory with id nope.");
+    expect(missing).toContain("No memory nope");
   });
 
-  it("renders memories into the prompt with their ids", () => {
-    const block = renderMemories([{ id: "abc123", text: "Likes pigeons", createdAt: 1 }]);
-    expect(block).toContain("[abc123] Likes pigeons");
+  it("renders memories by position, which small models can actually cite", () => {
+    const block = renderMemories([
+      { id: "abc123", text: "Likes pigeons", createdAt: 1 },
+      { id: "def456", text: "Dislikes mornings", createdAt: 2 },
+    ]);
+    expect(block).toContain("[1] Likes pigeons");
+    expect(block).toContain("[2] Dislikes mornings");
+    // The opaque id is never shown: the sim caught models inventing them.
+    expect(block).not.toContain("abc123");
     expect(renderMemories([])).toBe("");
+  });
+
+  it("resolves a memory by position, id, or quoted text", () => {
+    const memories: BlobMemory[] = [
+      { id: "abc123", text: "Likes pigeons", createdAt: 1 },
+      { id: "def456", text: "Dislikes mornings", createdAt: 2 },
+    ];
+    expect(resolveMemory(memories, "2")?.id).toBe("def456");
+    expect(resolveMemory(memories, "[2]")?.id).toBe("def456");
+    expect(resolveMemory(memories, "abc123")?.id).toBe("abc123");
+    expect(resolveMemory(memories, "pigeons")?.id).toBe("abc123");
+    expect(resolveMemory(memories, "9")).toBeUndefined();
+    expect(resolveMemory(memories, "")).toBeUndefined();
+  });
+
+  it("supersedes a restated fact instead of storing both", async () => {
+    let stored: BlobMemory[] = [
+      { id: "aaa11111", text: "Ken trains on Mondays and Thursdays", createdAt: 1 },
+    ];
+    const tools = makeBlobTools({
+      list: () => stored,
+      save: (next) => {
+        stored = next;
+      },
+    });
+    const remember = tools.find((tool) => tool.name === "remember");
+
+    // Small models reach for `remember` when correcting; the outcome must
+    // still be one coherent fact, not two contradicting ones.
+    await remember?.execute({ text: "Ken trains on Tuesdays and Fridays" }, context);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.text).toBe("Ken trains on Tuesdays and Fridays");
+
+    // An unrelated fact is still added alongside.
+    await remember?.execute({ text: "Ken is allergic to peanuts" }, context);
+    expect(stored).toHaveLength(2);
   });
 
   it("budgets the memory block so it cannot overrun a local context window", () => {
@@ -78,10 +121,10 @@ describe("blob tools", () => {
       createdAt: index,
     }));
     const block = renderMemories(full);
-    expect(block.length).toBeLessThanOrEqual(MEMORY_PROMPT_CHARS + 120);
+    expect(block.length).toBeLessThanOrEqual(MEMORY_PROMPT_CHARS + 200);
     // Newest survive the budget, oldest are dropped.
-    expect(block).toContain(`id${MEMORY_LIMIT - 1}`);
-    expect(block).not.toContain("[id0]");
+    expect(block).toContain(`[${MEMORY_LIMIT}]`);
+    expect(block).not.toContain("[1]");
   });
 
   it("web_fetch refuses non-https and malformed URLs", async () => {

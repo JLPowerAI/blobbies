@@ -61,6 +61,14 @@ export function streamLocalChat(options: {
   });
 }
 
+/** One completed tool call, as observed by a caller of `streamBlobTurn`. */
+export interface ToolCallRecord {
+  name: string;
+  args: Record<string, unknown>;
+  result: string;
+  isError: boolean;
+}
+
 /** What a Blob may change about itself via the configure tool. */
 export interface BlobConfigPatch {
   title?: string;
@@ -306,6 +314,8 @@ export async function streamBlobTurn(options: {
   memory: MemoryAccess;
   onText: (fullText: string) => void;
   onConfigure: (patch: BlobConfigPatch) => void;
+  /** Observes each completed tool call: drives the sim harness and, later, UI. */
+  onToolCall?: (call: ToolCallRecord) => void;
 }): Promise<string> {
   let conversation = options.messages;
 
@@ -316,6 +326,13 @@ export async function streamBlobTurn(options: {
     const patch = await forcedConfigureCall(options.model, conversation);
     if (patch !== null) {
       options.onConfigure(patch);
+      // Report as a tool call: same effect, just forced rather than chosen.
+      options.onToolCall?.({
+        name: CONFIGURE_TOOL_NAME,
+        args: patch as Record<string, unknown>,
+        result: "Configuration saved.",
+        isError: false,
+      });
       // Feed the exchange back (as a tool round) so the streamed turn knows
       // it just configured itself and can confirm briefly instead of asking.
       conversation = [
@@ -356,10 +373,24 @@ export async function streamBlobTurn(options: {
       maxTokens: MAX_REPLY_TOKENS,
       maxTurns: MAX_TOOL_ROUNDS,
     });
+    const pending = new Map<string, { name: string; args: Record<string, unknown> }>();
     for await (const event of loop) {
       if (event.type === "text_delta") {
         text += event.text;
         options.onText(text);
+      }
+      if (event.type === "tool_call_start") {
+        pending.set(event.toolCallId, { name: event.name, args: event.args });
+      }
+      if (event.type === "tool_call_end") {
+        const started = pending.get(event.toolCallId);
+        pending.delete(event.toolCallId);
+        options.onToolCall?.({
+          name: started?.name ?? "unknown",
+          args: started?.args ?? {},
+          result: event.result,
+          isError: event.isError,
+        });
       }
       if (event.type === "error") {
         // Preserve any streamed text: partial reply beats a retry from zero.
