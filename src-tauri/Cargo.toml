@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Unshackled Bot desktop app"
 authors = ["Unshackled"]
 edition = "2024"
-rust-version = "1.85"
+# Matches the toolchain pinned in rust-toolchain.toml. Kept in sync deliberately: a
+# lower value makes cargo's MSRV-aware resolver hold back security patches.
+rust-version = "1.90"
 license = "AGPL-3.0-only"
 publish = false
 

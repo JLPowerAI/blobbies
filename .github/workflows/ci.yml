@@ -79,6 +79,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
 
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # Installed with --locked on purpose: rustsec/audit-check installs cargo-audit
+      # unlocked, which resolves newest transitive deps and broke on the rustc version
+      # pinned in rust-toolchain.toml. --locked uses cargo-audit's own lockfile.
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: cargo install --locked cargo-audit
+      - run: cargo audit
+        working-directory: src-tauri
