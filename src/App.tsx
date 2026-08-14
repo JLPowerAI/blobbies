@@ -252,35 +252,44 @@ export function App() {
     setDetailOpen(true);
   };
 
-  // Lazily hydrate a Blob's routines and transcript when it becomes active.
+  // Hydrate the Blob that is actually on screen — which is `agent`, not
+  // `selectedId`. On a fresh launch nothing is selected yet, so `agent` falls
+  // back to the first row and its conversation renders; keying this off
+  // `selectedId` meant that transcript never loaded, so the chat reopened
+  // empty and the model was sent no history at all.
+  const activeBlobId = agent?.id;
   useEffect(() => {
-    if (selectedId === null) {
+    if (activeBlobId === undefined) {
       return;
     }
     let cancelled = false;
     void (async () => {
       const [routines, transcript] = await Promise.all([
-        store.loadBlobRoutines(selectedId),
-        store.loadBlobTranscript(selectedId),
+        store.loadBlobRoutines(activeBlobId),
+        store.loadBlobTranscript(activeBlobId),
       ]);
       if (cancelled) {
         return;
       }
       if (routines !== null) {
         setRoutinesByAgent((previous) =>
-          previous[selectedId] === undefined ? { ...previous, [selectedId]: routines } : previous,
+          previous[activeBlobId] === undefined
+            ? { ...previous, [activeBlobId]: routines }
+            : previous,
         );
       }
       if (transcript !== null) {
         setSentByAgent((previous) =>
-          previous[selectedId] === undefined ? { ...previous, [selectedId]: transcript } : previous,
+          previous[activeBlobId] === undefined
+            ? { ...previous, [activeBlobId]: transcript }
+            : previous,
         );
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [activeBlobId]);
 
   const setAgentRoutines = (agentId: string, update: (current: Routine[]) => Routine[]) => {
     setRoutinesByAgent((previous) => {

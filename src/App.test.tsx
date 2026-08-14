@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
-import { flushRoster, loadRoster } from "@/lib/store";
+import { flushRoster, loadRoster, saveBlobTranscript } from "@/lib/store";
 
 /** Completes the first-run creator with the given Blob name. */
 async function createFirstBlob(user: UserEvent, name = "Ken") {
@@ -26,6 +26,44 @@ describe("App", () => {
 
     // The persisted Blob replaces the empty first-run state.
     expect(await screen.findByRole("heading", { name: "Restored", level: 1 })).toBeInTheDocument();
+  });
+
+  it("restores the conversation of the Blob shown on startup", async () => {
+    const id = "61ec34f1-9ba5-4eff-b8e1-7acefb2148ea";
+    await flushRoster([
+      {
+        id,
+        name: "Ken",
+        time: "Now",
+        snippet: "Biscuit is a beagle",
+        tone: "blue",
+        shape: "sphere",
+      },
+    ]);
+    saveBlobTranscript(id, [
+      {
+        id: "sent-1",
+        kind: "text",
+        author: "user",
+        segments: [{ text: "My dog is called Biscuit." }],
+      },
+      {
+        id: "agent-1",
+        kind: "text",
+        author: "agent",
+        segments: [{ text: "Noted, Biscuit it is." }],
+      },
+    ]);
+    // saveBlobTranscript is debounced; let the write land before mounting.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    render(<App />);
+
+    // Nothing is clicked: the first Blob is shown by fallback, and its history
+    // must load or the model is sent a conversation with no past turns.
+    const log = await screen.findByRole("log");
+    expect(await within(log).findByText("My dog is called Biscuit.")).toBeInTheDocument();
+    expect(await within(log).findByText("Noted, Biscuit it is.")).toBeInTheDocument();
   });
 
   it("clears the draft when switching Blobs without remounting the pane", async () => {

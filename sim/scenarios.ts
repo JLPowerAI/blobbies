@@ -97,6 +97,16 @@ export const memoryOmits =
         )}`
       : null;
 
+/** The reply contains at least one of these words: proof it kept context. */
+export const replyMentions =
+  (...words: string[]): Check =>
+  (outcome) =>
+    words.some((word) => outcome.reply.toLowerCase().includes(word.toLowerCase()))
+      ? null
+      : `reply mentions none of [${words.join(", ")}]: ${JSON.stringify(
+          outcome.reply.replace(/\s+/g, " ").slice(0, 140),
+        )}`;
+
 /** The reply is non-empty and not an internal error string. */
 export const replied: Check = (outcome) => {
   const text = outcome.reply.trim();
@@ -246,6 +256,40 @@ export const scenarios: Scenario[] = [
         say: "Stop being my gym coach. I want you to help me write blog posts instead.",
         expect: [replied, configMentions("writ", "blog", "content")],
       },
+    ],
+  },
+  {
+    name: "conversation: recalls what was said one turn ago",
+    start: { ...newBlob("Ken"), title: "Companion", description: "Chats with Ken." },
+    turns: [
+      { say: "I'm planning a trip to Lisbon in October.", expect: [replied] },
+      {
+        // No noun repeated: only the previous turn says where.
+        say: "What should I pack for it?",
+        expect: [replied, replyMentions("lisbon", "portugal", "october", "autumn", "fall")],
+      },
+    ],
+  },
+  {
+    name: "conversation: holds a detail across several turns",
+    start: { ...newBlob("Ken"), title: "Companion", description: "Chats with Ken." },
+    turns: [
+      { say: "My dog is called Biscuit and he's a beagle.", expect: [replied] },
+      { say: "He's been limping since yesterday.", expect: [replied] },
+      { say: "Do you think I should take him to the vet?", expect: [replied] },
+      {
+        // Four turns later, the name only ever appeared in turn one.
+        say: "What's my dog's name again?",
+        expect: [replied, replyMentions("biscuit")],
+      },
+    ],
+  },
+  {
+    name: "conversation: follows a pronoun back to the earlier subject",
+    start: { ...newBlob("Ken"), title: "Assistant", description: "Helps Ken." },
+    turns: [
+      { say: "I'm reading Dune at the moment.", expect: [replied] },
+      { say: "Who wrote it?", expect: [replied, replyMentions("herbert")] },
     ],
   },
   {
