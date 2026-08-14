@@ -21,6 +21,7 @@ pub fn run() {
             commands::greet,
             commands::ollama_installed,
             commands::ollama_start,
+            commands::host_is_public,
             store::store_read,
             store::store_write,
             store::store_delete_blob,

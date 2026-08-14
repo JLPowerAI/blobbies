@@ -1,7 +1,12 @@
+use std::net::{IpAddr, ToSocketAddrs};
+
 use crate::error::{Error, Result};
 
 /// Upper bound on any free-text field arriving from the webview.
 const MAX_INPUT_CHARS: usize = 128;
+
+/// Longest legal DNS name; anything longer cannot resolve, so reject early.
+const MAX_HOST_CHARS: usize = 253;
 
 /// Validate a free-text value coming from the frontend.
 ///
@@ -117,6 +122,77 @@ pub(crate) fn ollama_start() -> Result<()> {
         .map_err(|e| Error::Io(e.to_string()))
 }
 
+/// True when `ip` is on the public internet rather than this machine or the
+/// local network.
+///
+/// The webview's HTTP capability can only match hostname patterns, so a public
+/// name that resolves inward (`internal.example.com` → `192.168.1.1`, or a
+/// rebinding host aimed at cloud metadata on 169.254.169.254) slips straight
+/// past it. Everything not provably public is refused.
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, _, _] = v4.octets();
+            // 100.64.0.0/10 (CGNAT) has no stable std predicate.
+            let carrier_grade_nat = a == 100 && (64..=127).contains(&b);
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || v4.is_documentation()
+                || carrier_grade_nat)
+        }
+        IpAddr::V6(v6) => {
+            // ::ffff:192.168.1.1 is an IPv4 address wearing a hat.
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_public_ip(IpAddr::V4(mapped));
+            }
+            let [first, ..] = v6.segments();
+            // Unique-local fc00::/7 and link-local fe80::/10 are unstable in std.
+            let unique_local = (first & 0xfe00) == 0xfc00;
+            let link_local = (first & 0xffc0) == 0xfe80;
+            !(v6.is_loopback()
+                || v6.is_multicast()
+                || v6.is_unspecified()
+                || unique_local
+                || link_local)
+        }
+    }
+}
+
+/// Resolve `host` and report whether every answer is a public-internet address.
+///
+/// Fails closed: an empty/oversized name, a DNS failure, no answers, or a
+/// single private answer all return false. Residual risk this cannot close:
+/// the HTTP client resolves the name again when it connects, so a record that
+/// changes between the two lookups (DNS rebinding) is still possible.
+#[tauri::command]
+pub(crate) async fn host_is_public(host: String) -> bool {
+    if host.is_empty() || host.chars().count() > MAX_HOST_CHARS {
+        return false;
+    }
+
+    // Name resolution blocks; keep it off the async runtime's worker threads.
+    tauri::async_runtime::spawn_blocking(move || {
+        // The port is irrelevant to resolution, it only completes the socket addr.
+        let Ok(addresses) = (host.as_str(), 443u16).to_socket_addrs() else {
+            return false;
+        };
+        let mut resolved_any = false;
+        for address in addresses {
+            resolved_any = true;
+            if !is_public_ip(address.ip()) {
+                return false;
+            }
+        }
+        resolved_any
+    })
+    .await
+    .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +220,71 @@ mod tests {
     fn counts_characters_not_bytes() {
         let emoji = "🦀".repeat(MAX_INPUT_CHARS);
         assert!(greet(&emoji).is_ok());
+    }
+
+    fn ip(text: &str) -> IpAddr {
+        match text.parse() {
+            Ok(address) => address,
+            Err(_) => unreachable!("test address must parse: {text}"),
+        }
+    }
+
+    #[test]
+    fn accepts_public_addresses() {
+        assert!(is_public_ip(ip("93.184.216.34")));
+        assert!(is_public_ip(ip("1.1.1.1")));
+        assert!(is_public_ip(ip("2606:4700:4700::1111")));
+    }
+
+    #[test]
+    fn rejects_loopback_and_private_v4() {
+        for address in [
+            "127.0.0.1",
+            "127.0.0.2",
+            "10.0.0.5",
+            "192.168.1.1",
+            "172.16.0.1",
+            "172.18.0.1",
+            "172.31.255.254",
+            "0.0.0.0",
+        ] {
+            assert!(!is_public_ip(ip(address)), "{address} must be refused");
+        }
+    }
+
+    #[test]
+    fn rejects_link_local_and_carrier_grade_nat() {
+        // 169.254.169.254 is the cloud metadata endpoint.
+        assert!(!is_public_ip(ip("169.254.169.254")));
+        assert!(!is_public_ip(ip("100.64.0.1")));
+        assert!(!is_public_ip(ip("100.127.255.255")));
+        // 100.128.0.0 is outside the CGNAT block and stays public.
+        assert!(is_public_ip(ip("100.128.0.1")));
+    }
+
+    #[test]
+    fn rejects_local_v6_including_mapped_v4() {
+        for address in [
+            "::1",
+            "::",
+            "fc00::1",
+            "fd12:3456::1",
+            "fe80::1",
+            "::ffff:192.168.1.1",
+        ] {
+            assert!(!is_public_ip(ip(address)), "{address} must be refused");
+        }
+    }
+
+    #[test]
+    fn refuses_hosts_that_resolve_locally() {
+        // Tauri's runtime, so the test needs no extra async dev-dependency.
+        tauri::async_runtime::block_on(async {
+            assert!(!host_is_public(String::new()).await);
+            assert!(!host_is_public("localhost".into()).await);
+            assert!(!host_is_public("127.0.0.1".into()).await);
+            // .invalid never resolves (RFC 2606), so this needs no network.
+            assert!(!host_is_public("no-such-host.invalid".into()).await);
+        });
     }
 }

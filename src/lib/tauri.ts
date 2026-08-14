@@ -18,6 +18,24 @@ export async function openExternal(url: string): Promise<void> {
 }
 
 /**
+ * True when `host` resolves only to public-internet addresses.
+ *
+ * The HTTP capability scope matches hostname patterns, so it cannot see that a
+ * public name points at the local network. Fails closed: outside Tauri, or if
+ * the command errors, the host is treated as not public.
+ */
+export async function hostIsPublic(host: string): Promise<boolean> {
+  if (!isTauri()) {
+    return false;
+  }
+  try {
+    return await invoke<boolean>("host_is_public", { host });
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when running inside the Tauri webview (native window chrome present),
  * false in a plain browser during `pnpm dev`.
  */

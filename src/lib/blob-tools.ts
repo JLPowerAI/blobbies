@@ -1,7 +1,7 @@
 import type { AgentTool } from "@kenkaiiii/gg-agent";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { z } from "zod";
-import { isTauri } from "@/lib/tauri";
+import { hostIsPublic, isTauri } from "@/lib/tauri";
 
 /**
  * Tools every Blob can call during a chat turn. Security posture (per the
@@ -10,8 +10,10 @@ import { isTauri } from "@/lib/tauri";
  * untrusted page data, memory is inspectable/clearable per Blob, and there is
  * no shell or unrestricted filesystem access in this catalog.
  *
- * The HTTP scope itself is enforced outside the model in the Tauri capability
- * (https only, private/loopback ranges denied) — see capabilities/default.json.
+ * Egress limits are enforced outside the model, in two layers: the Tauri
+ * capability scope (https only, private/loopback hostname patterns denied —
+ * see capabilities/default.json), and a resolved-address check in Rust that
+ * catches public names pointing at the local network.
  */
 
 /** Cap page text handed to a small local model; more just evicts context. */
@@ -56,6 +58,10 @@ function makeWebFetchTool() {
       // Defense in depth: the capability scope already denies non-https.
       if (url.protocol !== "https:") {
         return "Only valid https:// URLs can be fetched.";
+      }
+      // Hostname patterns cannot see where a name resolves; this can.
+      if (!(await hostIsPublic(url.hostname))) {
+        return "That host is not on the public internet, so it cannot be fetched.";
       }
       const response = await httpFetch(url.toString(), { signal: context.signal });
       if (!response.ok) {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type BlobMemory,
   htmlToText,
@@ -49,6 +49,22 @@ describe("blob tools", () => {
     // Malformed model output must return an error string, not throw.
     const malformed = await webFetch?.execute({ url: "not a url at all" }, context);
     expect(malformed).toBe("Only valid https:// URLs can be fetched.");
+  });
+
+  it("web_fetch refuses a host that is not verified public, without requesting it", async () => {
+    // The resolved-address check fails closed when it cannot run (here: no
+    // Tauri IPC), so no request may leave even for a well-formed https URL.
+    const fetchSpy = vi.fn(async () => new Response("<p>secret</p>"));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const tools = makeBlobTools({ list: () => [], save: () => {} });
+      const webFetch = tools.find((tool) => tool.name === "web_fetch");
+      const result = await webFetch?.execute({ url: "https://internal.example.com/" }, context);
+      expect(result).toBe("That host is not on the public internet, so it cannot be fetched.");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("strips markup and parses DDG Lite results", () => {
