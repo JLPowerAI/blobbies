@@ -172,6 +172,53 @@ export const scenarios: Scenario[] = [
     ],
   },
   {
+    name: "memory: catches a fact mentioned in passing, unprompted",
+    start: { ...newBlob("Ken"), title: "Coach", description: "Helps Ken train." },
+    turns: [
+      {
+        // Nobody says "remember this" in real conversation.
+        say: "I'm knackered today, my new job at Acme has me starting at 6am every morning.",
+        expect: [replied, memoryCount(1), memoryMentions("acme")],
+      },
+    ],
+  },
+  {
+    name: "memory: a life change replaces the stale fact, not sits beside it",
+    start: {
+      ...newBlob("Ken"),
+      title: "Companion",
+      description: "Chats with Ken.",
+      memories: [{ id: "ccc11111", text: "Ken's girlfriend is called Sarah", createdAt: 1 }],
+    },
+    turns: [
+      {
+        // The old fact is not corrected wording, it is no longer true.
+        say: "Rough week. Sarah and I broke up on Tuesday.",
+        expect: [replied, memoryCount(1), memoryOmits("girlfriend is called")],
+      },
+    ],
+  },
+  {
+    name: "memory: a new job supersedes the old employer",
+    start: {
+      ...newBlob("Ken"),
+      title: "Assistant",
+      description: "Helps Ken with work.",
+      memories: [{ id: "ddd11111", text: "Ken works at Acme as a designer", createdAt: 1 }],
+    },
+    turns: [
+      {
+        say: "I left Acme last month, I'm at Beta Corp now doing the same kind of work.",
+        expect: [
+          replied,
+          memoryCount(1),
+          memoryMentions("beta"),
+          memoryOmits("acme as a designer"),
+        ],
+      },
+    ],
+  },
+  {
     name: "memory: forgets on request",
     start: {
       ...newBlob("Ken"),

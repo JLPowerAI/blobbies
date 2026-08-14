@@ -165,6 +165,11 @@ export interface BlobMemory {
 export interface MemoryAccess {
   list: () => BlobMemory[];
   save: (memories: BlobMemory[]) => void;
+  /**
+   * Judge which saved facts a new one makes untrue, as 1-based positions.
+   * Omit to fall back to word overlap, which only catches restatements.
+   */
+  reconcile?: (fact: string, existing: BlobMemory[]) => Promise<number[]>;
 }
 
 /**
@@ -321,6 +326,25 @@ export function resolveMemory(memories: BlobMemory[], reference: string): BlobMe
   );
 }
 
+/**
+ * Word-overlap fallback for when no model judge is available (unit tests,
+ * offline). Catches a restatement of the same fact, and a replaced schedule;
+ * it cannot see that "we broke up" invalidates "my girlfriend is Sarah".
+ */
+function supersededByOverlap(memories: BlobMemory[], text: string): BlobMemory[] {
+  const best = memories.reduce<{ memory: BlobMemory; score: number } | null>((carry, memory) => {
+    const score = factOverlap(memory.text, text);
+    const replaces =
+      score >= RESTATEMENT_OVERLAP ||
+      (score >= SUPERSEDE_OVERLAP && SCHEDULE_WORDS.test(memory.text) && SCHEDULE_WORDS.test(text));
+    if (!replaces) {
+      return carry;
+    }
+    return carry === null || score > carry.score ? { memory, score } : carry;
+  }, null);
+  return best === null ? [] : [best.memory];
+}
+
 function makeMemoryTools(access: MemoryAccess) {
   const rememberParams = z.object({
     text: z.string().describe("The fact to remember, one short sentence"),
@@ -341,7 +365,7 @@ function makeMemoryTools(access: MemoryAccess) {
       "will remember is not enough: the fact is only kept if you call this.",
     parameters: rememberParams,
     executionMode: "sequential",
-    execute: (args) => {
+    execute: async (args) => {
       const text = args.text.trim().slice(0, MEMORY_TEXT_LIMIT);
       if (text === "") {
         return "Nothing to remember: empty text.";
@@ -350,35 +374,30 @@ function makeMemoryTools(access: MemoryAccess) {
       if (memories.some((memory) => memory.text === text)) {
         return "Already remembered.";
       }
-      // Small models reach for `remember` even when correcting a fact (proven
-      // in sim/), which would leave two contradicting memories. Supersede the
-      // closest matching fact instead, so the outcome is right either way.
-      // Best match, not merely the first above the line. A near-identical
-      // restatement always supersedes; a partial match only when both facts
-      // are schedule-like, where the new value replaces the old rather than
-      // adding to it (two allergies are both true; two schedules are not).
-      const superseded = memories.reduce<{ memory: BlobMemory; score: number } | null>(
-        (best, memory) => {
-          const score = factOverlap(memory.text, text);
-          const replaces =
-            score >= RESTATEMENT_OVERLAP ||
-            (score >= SUPERSEDE_OVERLAP &&
-              SCHEDULE_WORDS.test(memory.text) &&
-              SCHEDULE_WORDS.test(text));
-          if (!replaces) {
-            return best;
-          }
-          return best === null || score > best.score ? { memory, score } : best;
-        },
-        null,
-      )?.memory;
-      if (superseded !== undefined) {
+      // Which saved facts does this one make untrue? The model judges meaning
+      // ("we broke up" kills "my girlfriend is Sarah"); word overlap, used
+      // when no judge is wired up, only catches restatements.
+      const stale =
+        access.reconcile === undefined
+          ? supersededByOverlap(memories, text)
+          : (await access.reconcile(text, memories))
+              .map((position) => memories[position - 1])
+              .filter((memory): memory is BlobMemory => memory !== undefined);
+      if (stale.length > 0) {
+        const staleIds = new Set(stale.map((memory) => memory.id));
+        // Rewrite the first stale fact in place so its slot (and createdAt)
+        // survives; drop any others the new fact also invalidated.
+        const first = stale[0];
         access.save(
-          memories.map((memory) =>
-            memory.id === superseded.id ? { ...memory, text, updatedAt: Date.now() } : memory,
-          ),
+          memories
+            .filter((memory) => memory.id === first?.id || !staleIds.has(memory.id))
+            .map((memory) =>
+              memory.id === first?.id ? { ...memory, text, updatedAt: Date.now() } : memory,
+            ),
         );
-        return `Updated what I remembered about that (replaced: "${superseded.text}").`;
+        return `Updated. That replaced what I knew: ${stale
+          .map((memory) => `"${memory.text}"`)
+          .join(", ")}.`;
       }
       if (memories.length >= MEMORY_LIMIT) {
         return `Memory is full (${MEMORY_LIMIT}). Forget something first.`;

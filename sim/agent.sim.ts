@@ -1,6 +1,7 @@
 import type { Message } from "@kenkaiiii/gg-ai";
 import { afterAll, describe, expect, it } from "vitest";
 import { blobSystemPrompt, streamBlobTurn, type ToolCallRecord } from "@/lib/ai";
+import { reconcileMemories } from "@/lib/intent";
 import { type SimBlob, scenarios, type TurnOutcome } from "./scenarios";
 
 /**
@@ -49,6 +50,9 @@ async function runScenario(turns: { say: string }[], start: SimBlob): Promise<Tu
         save: (memories) => {
           blob.memories = memories;
         },
+        // Mirrors App.tsx: without this the sim would exercise a different
+        // wiring than the app actually runs.
+        reconcile: (fact, existing) => reconcileMemories({ model: MODEL, fact, existing }),
       },
       onText: () => {},
       onConfigure: (patch) => {

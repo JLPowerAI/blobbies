@@ -104,6 +104,97 @@ const ROUTER_PROMPT =
  */
 const MEMORY_WORDS = /\b(remember|memory|memories|forget|forgot|recall)\b/i;
 
+/** Grammar for the reconcile call: only a list of positions is legal. */
+const RECONCILE_SCHEMA = {
+  type: "object",
+  required: ["obsolete"],
+  properties: {
+    obsolete: { type: "array", items: { type: "integer" } },
+  },
+} as const;
+
+/**
+ * Decide which saved facts a new fact makes untrue.
+ *
+ * Word overlap cannot do this: "Ken's girlfriend is called Sarah" and "Sarah
+ * and Ken broke up" share almost no words yet cannot both be true, while
+ * "allergic to peanuts" and "allergic to shellfish" share nearly all of theirs
+ * and both are. Meaning is the model's job — asked through a grammar so even a
+ * 2B model can only answer with positions.
+ *
+ * Returns 1-based positions into `existing`. Empty on any failure, so a
+ * reconcile problem can only ever leave memory as it was.
+ */
+export async function reconcileMemories(options: {
+  model: string;
+  fact: string;
+  existing: BlobMemory[];
+  signal?: AbortSignal;
+}): Promise<number[]> {
+  if (options.existing.length === 0) {
+    return [];
+  }
+  const numbered = options.existing
+    .map((memory, index) => `${index + 1}. ${memory.text}`)
+    .join("\n");
+  try {
+    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      body: JSON.stringify({
+        model: options.model,
+        stream: false,
+        think: false,
+        format: RECONCILE_SCHEMA,
+        options: { temperature: ROUTER_TEMPERATURE, num_predict: ROUTER_MAX_TOKENS },
+        messages: [
+          {
+            role: "system",
+            content:
+              "You keep a person's saved facts up to date.\n\n" +
+              "Given a NEW fact, list the numbers of saved facts that are now " +
+              "WRONG or OUT OF DATE because of it. A saved fact is obsolete when " +
+              "the new fact replaces it or contradicts it \u2014 people change jobs, " +
+              "partners, cities and schedules, and the old version is no longer " +
+              "true. Facts that can BOTH be true at once are not obsolete.\n\n" +
+              "Examples:\n" +
+              "new: 'Ken and Sarah broke up' / saved: '1. Ken's girlfriend is " +
+              "called Sarah' -> obsolete [1]\n" +
+              "new: 'Ken works at Beta Corp' / saved: '1. Ken works at Acme' -> obsolete [1]\n" +
+              "new: 'Ken is allergic to shellfish' / saved: '1. Ken is allergic " +
+              "to peanuts' -> obsolete [] (both are true)\n" +
+              "new: 'Ken trains on Fridays' / saved: '1. Ken trains on Mondays', " +
+              "'2. Ken has a sister' -> obsolete [1]",
+          },
+          { role: "user", content: `NEW fact:\n${options.fact}\n\nSaved facts:\n${numbered}` },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const payload = (await response.json()) as { message?: { content?: string } };
+    const parsed: unknown = JSON.parse(payload.message?.content ?? "{}");
+    if (parsed === null || typeof parsed !== "object") {
+      return [];
+    }
+    const list = (parsed as Record<string, unknown>).obsolete;
+    if (!Array.isArray(list)) {
+      return [];
+    }
+    return list.filter(
+      (value): value is number =>
+        typeof value === "number" &&
+        Number.isInteger(value) &&
+        value >= 1 &&
+        value <= options.existing.length,
+    );
+  } catch {
+    return [];
+  }
+}
+
 /** Text of the most recent user message, or "" when there is none. */
 function lastUserText(messages: Message[]): string {
   for (let index = messages.length - 1; index >= 0; index--) {

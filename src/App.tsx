@@ -26,6 +26,7 @@ import {
   transcriptFor,
 } from "@/data/agents";
 import { blobSystemPrompt, streamBlobTurn } from "@/lib/ai";
+import { reconcileMemories } from "@/lib/intent";
 import { readPreference, writePreference } from "@/lib/preferences";
 import * as store from "@/lib/store";
 import "./App.css";
@@ -423,6 +424,9 @@ export function App() {
           list: () =>
             agentsRef.current.find((candidate) => candidate.id === target.id)?.memories ?? [],
           save: (memories) => updateBlob(target.id, { memories }),
+          // Let the model judge which saved facts a new one makes untrue, so
+          // memory reflects the user's life now rather than a pile of history.
+          reconcile: (fact, existing) => reconcileMemories({ model, fact, existing }),
         },
         onText: (fullText) => {
           text = fullText;

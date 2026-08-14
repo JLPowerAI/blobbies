@@ -119,6 +119,30 @@ describe("blob tools", () => {
     expect(stored).toHaveLength(2);
   });
 
+  it("drops the facts a life change makes untrue, as judged by the model", async () => {
+    let stored: BlobMemory[] = [
+      { id: "aaa11111", text: "Ken's girlfriend is called Sarah", createdAt: 1 },
+      { id: "bbb22222", text: "Ken is allergic to peanuts", createdAt: 2 },
+    ];
+    const tools = makeBlobTools({
+      list: () => stored,
+      save: (next) => {
+        stored = next;
+      },
+      // Stands in for the grammar call: only the first fact is now untrue.
+      reconcile: async () => [1],
+    });
+    const remember = tools.find((tool) => tool.name === "remember");
+
+    const result = await remember?.execute({ text: "Ken and Sarah broke up" }, context);
+    // The stale fact is replaced in place; the unrelated one is untouched.
+    expect(stored).toHaveLength(2);
+    expect(stored[0]?.text).toBe("Ken and Sarah broke up");
+    expect(stored[0]?.createdAt).toBe(1);
+    expect(stored[1]?.text).toBe("Ken is allergic to peanuts");
+    expect(result).toContain("girlfriend is called Sarah");
+  });
+
   it("keeps two facts of the same kind rather than silently losing one", async () => {
     let stored: BlobMemory[] = [
       { id: "aaa11111", text: "the user is allergic to peanuts", createdAt: 1 },
