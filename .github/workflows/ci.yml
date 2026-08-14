@@ -79,10 +79,21 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
 
-      # Installed with --locked on purpose: rustsec/audit-check installs cargo-audit
-      # unlocked, which resolves newest transitive deps and broke on the rustc version
-      # pinned in rust-toolchain.toml. --locked uses cargo-audit's own lockfile.
+      # Toolchain first: rust-cache keys on the active rustc version.
       - run: rustup show active-toolchain || rustup toolchain install
+
+      # Caches ~/.cargo/bin (cache-bin defaults true), so the cargo-audit build below
+      # is a no-op on subsequent runs. cache-all-crates keeps its deps too, since
+      # cargo-audit is CI tooling rather than a dependency of this crate.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-all-crates: true
+          cache-targets: false
+
+      # --locked on purpose: rustsec/audit-check installs cargo-audit unlocked, which
+      # resolves newest transitive deps and broke on the rustc version pinned in
+      # rust-toolchain.toml. --locked uses cargo-audit's own lockfile.
       - run: cargo install --locked cargo-audit
       - run: cargo audit
         working-directory: src-tauri
