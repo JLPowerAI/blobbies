@@ -314,20 +314,26 @@ function makeWebSearchTool() {
     parameters,
     execute: async (args, context) => {
       // Engines rate-limit and serve bot challenges, so try each in turn and
-      // take the first that yields usable results.
+      // take the first that yields usable results. Why each one failed is
+      // recorded and reported: a silent "nothing found" is indistinguishable
+      // from a blocked request, which cost hours of debugging once already.
+      const failures: string[] = [];
       for (const engine of SEARCH_ENGINES) {
         const { url, init } = engine.request(args.query);
         try {
           const response = await httpFetch(url, { ...init, signal: context.signal });
           if (!response.ok) {
+            failures.push(`${engine.name}: HTTP ${response.status}`);
             continue;
           }
           const html = await response.text();
           if (BOT_BLOCK.test(html)) {
+            failures.push(`${engine.name}: blocked as a bot`);
             continue;
           }
           const hits = cleanResults(engine.parse(html));
           if (hits.length === 0) {
+            failures.push(`${engine.name}: no usable results`);
             continue;
           }
           return hits
@@ -336,11 +342,15 @@ function makeWebSearchTool() {
                 `- ${hit.title}\n  ${hit.url}${hit.snippet === "" ? "" : `\n  ${hit.snippet}`}`,
             )
             .join("\n");
-        } catch {
+        } catch (error) {
           // Network error or abort on this engine: fall through to the next.
+          failures.push(`${engine.name}: ${error instanceof Error ? error.message : "failed"}`);
         }
       }
-      return "Search returned nothing. Tell the user the search failed, and answer from what you already know.";
+      return (
+        `Search failed (${failures.join("; ")}). ` +
+        "Tell the user the search did not work, and answer from what you already know."
+      );
     },
   };
   return tool;

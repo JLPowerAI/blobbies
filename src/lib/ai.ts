@@ -610,5 +610,8 @@ export async function streamBlobTurn(options: {
       }
     }
   }
-  return text;
+  // Whitespace-only is empty as far as the user is concerned; returning it
+  // verbatim showed up as a blank bubble, or as "(no response from the
+  // model)" because the caller only checks for the empty string.
+  return text.trim() === "" ? "" : text;
 }

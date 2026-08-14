@@ -445,8 +445,11 @@ export function App() {
         // uses, so title/description show up there immediately.
         onConfigure: (patch) => updateBlob(target.id, patch),
       });
-      if (text === "") {
-        text = "(no response from the model)";
+      if (text.trim() === "") {
+        // Every rescue inside streamBlobTurn has already been tried by here.
+        text =
+          "I couldn't put a reply together for that. Try asking again, or in " +
+          "smaller pieces \u2014 smaller models sometimes stall on broad questions.";
         patchReply(text);
       }
     } catch {
