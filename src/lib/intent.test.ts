@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { routeIntent } from "@/lib/intent";
+import type { BlobMemory } from "@/lib/blob-tools";
+import { reconcileMemories, routeIntent } from "@/lib/intent";
 
 const base = { model: "qwen3.5:0.8b", memories: [] };
 
@@ -127,6 +128,85 @@ describe("routeIntent", () => {
         messages: [{ role: "user", content: "Update what you remember about my training" }],
       });
       expect(intent).toEqual({ action: "none" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("reconcileMemories", () => {
+  const existing: BlobMemory[] = [
+    { id: "a", text: "Ken's girlfriend is called Sarah", createdAt: 1 },
+    { id: "b", text: "Ken is allergic to peanuts", createdAt: 2 },
+  ];
+
+  it("returns the positions the model marks obsolete", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => reply({ obsolete: [1] })),
+    );
+    try {
+      const stale = await reconcileMemories({
+        model: "qwen3.5:2b",
+        fact: "Ken and Sarah broke up",
+        existing,
+      });
+      expect(stale).toEqual([1]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("discards positions outside the saved list, so nothing wrong is deleted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => reply({ obsolete: [0, 2, 99, -1] })),
+    );
+    try {
+      const stale = await reconcileMemories({
+        model: "qwen3.5:2b",
+        fact: "something new",
+        existing,
+      });
+      expect(stale).toEqual([2]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps memory untouched when the model stalls", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+      ),
+    );
+    try {
+      const pending = reconcileMemories({
+        model: "qwen3.5:2b",
+        fact: "Ken and Sarah broke up",
+        existing,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(pending).resolves.toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips the call entirely when there is nothing saved yet", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      await expect(
+        reconcileMemories({ model: "qwen3.5:2b", fact: "anything", existing: [] }),
+      ).resolves.toEqual([]);
+      expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }

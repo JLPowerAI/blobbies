@@ -137,11 +137,23 @@ export async function reconcileMemories(options: {
   const numbered = options.existing
     .map((memory, index) => `${index + 1}. ${memory.text}`)
     .join("\n");
+  // Same deadline discipline as the router: a stalled model must not hang a
+  // memory save, and cancelling the turn must cancel this too.
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), ROUTER_TIMEOUT_MS);
+  const onParentAbort = () => deadline.abort();
+  if (options.signal !== undefined) {
+    if (options.signal.aborted) {
+      deadline.abort();
+    } else {
+      options.signal.addEventListener("abort", onParentAbort, { once: true });
+    }
+  }
   try {
     const response = await fetch(`${OLLAMA_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      signal: deadline.signal,
       body: JSON.stringify({
         model: options.model,
         stream: false,
@@ -191,7 +203,11 @@ export async function reconcileMemories(options: {
         value <= options.existing.length,
     );
   } catch {
+    // Timeout, abort, offline server, malformed JSON: keep memory as it was.
     return [];
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onParentAbort);
   }
 }
 
