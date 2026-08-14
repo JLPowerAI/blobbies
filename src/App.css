@@ -2178,6 +2178,8 @@ a.modal-button {
   border: 1px solid var(--border-hairline);
   border-radius: 30px;
   background: var(--surface-composer);
+  /* Ease the focus border in and out instead of snapping between states. */
+  transition: border-color var(--duration-compose) var(--ease-standard);
 }
 
 .composer-main {

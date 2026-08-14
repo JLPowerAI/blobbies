@@ -12,6 +12,7 @@ import {
 import {
   type FormEvent,
   type KeyboardEvent,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -256,19 +257,18 @@ export function ChatPane({
   // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot messages only when the conversation switches
   const initialIds = useMemo(() => new Set(messages.map((entry) => entry.id)), [agent.id]);
 
-  // The header model picker needs the downloaded models; refresh on mount so
-  // a model pulled while the app is open shows up on the next conversation.
-  useEffect(() => {
-    let cancelled = false;
-    void listOllamaModels().then((models) => {
-      if (!cancelled) {
-        setAvailableModels(models);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
+  /**
+   * Load the downloaded models for the header picker.
+   *
+   * Also re-run on demand (see the select's handlers): fetching only at mount
+   * leaves the list empty forever if Ollama was starting up at the time, and
+   * stale after the user pulls or removes a model with the app open.
+   */
+  const refreshModels = useCallback(() => {
+    void listOllamaModels().then(setAvailableModels);
   }, []);
+
+  useEffect(refreshModels, [refreshModels]);
 
   // Fresh conversation, fresh composer: clear the draft, reply chip and
   // reaction picker when switching Blobs so state never leaks across.
@@ -480,7 +480,15 @@ export function ChatPane({
             <option value="off">Thinking off</option>
             <option value="on">Thinking on</option>
           </PillSelect>
-          <PillSelect id="header-model" label="Model" value={model} onChange={onModelChange}>
+          {/* Re-read the list as the menu opens: it may have been empty at
+              mount (Ollama still starting) or gone stale since. */}
+          <PillSelect
+            id="header-model"
+            label="Model"
+            value={model}
+            onChange={onModelChange}
+            onOpen={refreshModels}
+          >
             <option value="">Choose a model</option>
             {model !== "" && !availableModels.some((entry) => entry.name === model) ? (
               <option value={model}>{model}</option>

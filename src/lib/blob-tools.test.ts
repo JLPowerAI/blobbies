@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   type BlobMemory,
+  cleanResults,
   htmlToText,
   MEMORY_LIMIT,
   MEMORY_PROMPT_CHARS,
@@ -9,6 +10,7 @@ import {
   parseDdgLite,
   renderMemories,
   resolveMemory,
+  unwrapBingRedirect,
 } from "@/lib/blob-tools";
 
 const context = { signal: new AbortController().signal, toolCallId: "t1" };
@@ -190,20 +192,54 @@ describe("blob tools", () => {
     expect(malformed).toBe("Only valid https:// URLs can be fetched.");
   });
 
-  it("web_fetch refuses a host that is not verified public, without requesting it", async () => {
-    // The resolved-address check fails closed when it cannot run (here: no
-    // Tauri IPC), so no request may leave even for a well-formed https URL.
+  it("web_fetch refuses local addresses, without requesting them", async () => {
+    // Outside Tauri there is no resolver, so literal local names must still be
+    // refused — and no request may leave for them.
     const fetchSpy = vi.fn(async () => new Response("<p>secret</p>"));
     vi.stubGlobal("fetch", fetchSpy);
     try {
       const tools = makeBlobTools({ list: () => [], save: () => {} });
       const webFetch = tools.find((tool) => tool.name === "web_fetch");
-      const result = await webFetch?.execute({ url: "https://internal.example.com/" }, context);
-      expect(result).toBe("That host is not on the public internet, so it cannot be fetched.");
+      for (const url of [
+        "https://localhost/admin",
+        "https://127.0.0.1:11434/",
+        "https://192.168.1.1/",
+        "https://169.254.169.254/latest/meta-data",
+        "https://printer.local/",
+      ]) {
+        const result = await webFetch?.execute({ url }, context);
+        expect(result, url).toBe(
+          "That host is not on the public internet, so it cannot be fetched.",
+        );
+      }
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("drops ads and tracking junk so results are clean", () => {
+    const cleaned = cleanResults([
+      { title: "Real result", url: "https://example.com/page?utm_source=bing&id=7", snippet: "ok" },
+      { title: "Paid", url: "https://www.bing.com/aclk?ld=abc", snippet: "buy now" },
+      { title: "Network ad", url: "https://doubleclick.net/x", snippet: "" },
+      { title: "Tagged ad", url: "https://shop.example/x?gclid=123", snippet: "" },
+      { title: "Sponsored: deal", url: "https://legit.example/deal", snippet: "" },
+      // Same destination as the first, only differing by tracking + slash.
+      { title: "Dupe", url: "https://example.com/page?id=7&fbclid=zz", snippet: "" },
+    ]);
+    expect(cleaned.map((hit) => hit.title)).toEqual(["Real result"]);
+    // utm_/fbclid stripped, real query kept.
+    expect(cleaned[0]?.url).toBe("https://example.com/page?id=7");
+  });
+
+  it("unwraps a Bing redirect to the real destination", () => {
+    const target = "https://ollama.com/download";
+    const encoded = btoa(target).replace(/\+/g, "-").replace(/\//g, "_");
+    const wrapped = `https://www.bing.com/ck/a?!&&p=abc&u=a1${encoded}`;
+    expect(unwrapBingRedirect(wrapped)).toBe(target);
+    // A plain URL passes through untouched.
+    expect(unwrapBingRedirect(target)).toBe(target);
   });
 
   it("strips markup and parses DDG Lite results", () => {

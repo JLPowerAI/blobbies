@@ -7,12 +7,15 @@ export function PillSelect({
   label,
   value,
   onChange,
+  onOpen,
   children,
 }: {
   id: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
+  /** Runs just before the menu opens, for refreshing the options. */
+  onOpen?: () => void;
   children: ReactNode;
 }) {
   return (
@@ -21,6 +24,8 @@ export function PillSelect({
         id={id}
         aria-label={label}
         value={value}
+        onPointerDown={onOpen}
+        onFocus={onOpen}
         onChange={(event) => {
           // Native selects keep focus after the popup closes, leaving the
           // focus ring glowing until something else is clicked. Drop focus

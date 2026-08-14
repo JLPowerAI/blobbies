@@ -82,7 +82,13 @@ function makeWebFetchTool() {
       if (!(await hostIsPublic(url.hostname))) {
         return "That host is not on the public internet, so it cannot be fetched.";
       }
-      const response = await httpFetch(url.toString(), { signal: context.signal });
+      // As with search: report the failure, never throw out of the turn.
+      let response: Response;
+      try {
+        response = await httpFetch(url.toString(), { signal: context.signal });
+      } catch {
+        return `Could not reach ${url.hostname}. Tell the user the page is unavailable.`;
+      }
       if (!response.ok) {
         return `Fetch failed: HTTP ${response.status}`;
       }
@@ -101,6 +107,76 @@ interface SearchHit {
   title: string;
   url: string;
   snippet: string;
+}
+
+/**
+ * A plain browser User-Agent.
+ *
+ * Search engines serve a bot challenge to anything that looks automated:
+ * measured 2026-08-15, DuckDuckGo Lite returns a CAPTCHA page to a default
+ * fetch, while Bing returns full results with these headers. Same approach
+ * gg-coder's web-search tool uses.
+ */
+const BROWSER_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
+/** Phrases that mean the engine served a block page instead of results. */
+const BOT_BLOCK = /captcha|unusual traffic|bots use duckduckgo|access denied|challenge-form/i;
+
+/** Bing wraps every result URL in a redirect carrying the real one base64'd. */
+export function unwrapBingRedirect(rawUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl, "https://www.bing.com");
+  } catch {
+    return rawUrl;
+  }
+  const encoded = parsed.searchParams.get("u");
+  if (encoded === null) {
+    return parsed.href;
+  }
+  try {
+    // The "a1" prefix marks base64url; atob needs the standard alphabet.
+    const base64 = (encoded.startsWith("a1") ? encoded.slice(2) : encoded)
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+    return atob(base64);
+  } catch {
+    return parsed.href;
+  }
+}
+
+/** Parse Bing's result list. */
+export function parseBing(html: string): SearchHit[] {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const hits: SearchHit[] = [];
+  for (const item of doc.querySelectorAll("li.b_algo")) {
+    const link = item.querySelector("h2 a");
+    const href = link?.getAttribute("href") ?? "";
+    const title = link?.textContent?.trim() ?? "";
+    if (href === "" || title === "") {
+      continue;
+    }
+    const url = unwrapBingRedirect(href);
+    if (!url.startsWith("http")) {
+      continue;
+    }
+    hits.push({
+      title,
+      url,
+      snippet:
+        (item.querySelector(".b_caption p") ?? item.querySelector("p"))?.textContent?.trim() ?? "",
+    });
+    if (hits.length >= SEARCH_RESULT_LIMIT) {
+      break;
+    }
+  }
+  return hits;
 }
 
 /** Parse DuckDuckGo Lite's plain-HTML results table. */
@@ -122,6 +198,108 @@ export function parseDdgLite(html: string): SearchHit[] {
   return hits;
 }
 
+/** Ad networks and affiliate redirectors; never useful as a result. */
+const AD_HOSTS =
+  /(?:^|\.)(?:googleadservices\.com|doubleclick\.net|googlesyndication\.com|adservice\.google\.[a-z.]+|adsystem\.com|adnxs\.com|taboola\.com|outbrain\.com|awin1\.com|shareasale\.com|linksynergy\.com|impact\.com)$/i;
+
+/** Ad-serving paths, e.g. Bing's /aclk and Google's /pagead. */
+const AD_PATHS = /^\/(?:aclk|aclick|pagead|y\.js)/i;
+
+/** Click-tracking parameters: their presence marks a paid placement. */
+const AD_PARAMS = new Set(["gclid", "gbraid", "wbraid", "msclkid", "adurl", "ad_domain"]);
+
+/** Analytics parameters: harmless, but noise in a prompt. */
+const TRACKING_PARAMS = /^(?:utm_|fbclid|igshid|yclid|mc_cid|mc_eid|_hs(?:enc|mi)|spm|scid)/i;
+
+/**
+ * Drop paid placements, and strip tracking junk from the URLs that remain, so
+ * the model sees clean data. Returns null when the result is an ad.
+ */
+export function cleanResultUrl(rawUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return null;
+  }
+  if (AD_HOSTS.test(parsed.hostname) || AD_PATHS.test(parsed.pathname)) {
+    return null;
+  }
+  for (const key of parsed.searchParams.keys()) {
+    if (AD_PARAMS.has(key.toLowerCase())) {
+      return null;
+    }
+  }
+  parsed.hash = "";
+  for (const key of [...parsed.searchParams.keys()]) {
+    if (TRACKING_PARAMS.test(key)) {
+      parsed.searchParams.delete(key);
+    }
+  }
+  return parsed.href;
+}
+
+/** Text that marks a sponsored result whatever its URL looks like. */
+const SPONSORED_TEXT = /\b(sponsored|advertisement|promoted result|ad\s*·)\b/i;
+
+/** Remove ads, tracking junk and duplicate destinations from raw hits. */
+export function cleanResults(hits: SearchHit[]): SearchHit[] {
+  const seen = new Set<string>();
+  const clean: SearchHit[] = [];
+  for (const hit of hits) {
+    if (SPONSORED_TEXT.test(`${hit.title} ${hit.snippet}`)) {
+      continue;
+    }
+    const url = cleanResultUrl(hit.url);
+    if (url === null) {
+      continue;
+    }
+    // Same page reached twice (http/https, trailing slash) is one result.
+    const key = url
+      .replace(/^https?:\/\//, "")
+      .replace(/\/$/, "")
+      .toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    clean.push({ ...hit, url });
+  }
+  return clean;
+}
+
+/** Engines tried in order; the first that returns results wins. */
+const SEARCH_ENGINES: {
+  name: string;
+  request: (query: string) => { url: string; init: RequestInit };
+  parse: (html: string) => SearchHit[];
+}[] = [
+  {
+    name: "Bing",
+    request: (query) => ({
+      // Pin language so an IP-localized fallback cannot replace the query.
+      url: `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=en-US&cc=US`,
+      init: { headers: BROWSER_HEADERS },
+    }),
+    parse: parseBing,
+  },
+  {
+    name: "DuckDuckGo Lite",
+    request: (query) => ({
+      url: "https://lite.duckduckgo.com/lite/",
+      init: {
+        method: "POST",
+        headers: { ...BROWSER_HEADERS, "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ q: query }).toString(),
+      },
+    }),
+    parse: parseDdgLite,
+  },
+];
+
 function makeWebSearchTool() {
   const parameters = z.object({
     query: z.string().describe("Search query, a few words"),
@@ -133,20 +311,34 @@ function makeWebSearchTool() {
       "Follow up with web_fetch to read a result.",
     parameters,
     execute: async (args, context) => {
-      const response = await httpFetch("https://lite.duckduckgo.com/lite/", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ q: args.query }).toString(),
-        signal: context.signal,
-      });
-      if (!response.ok) {
-        return `Search failed: HTTP ${response.status}`;
+      // Engines rate-limit and serve bot challenges, so try each in turn and
+      // take the first that yields usable results.
+      for (const engine of SEARCH_ENGINES) {
+        const { url, init } = engine.request(args.query);
+        try {
+          const response = await httpFetch(url, { ...init, signal: context.signal });
+          if (!response.ok) {
+            continue;
+          }
+          const html = await response.text();
+          if (BOT_BLOCK.test(html)) {
+            continue;
+          }
+          const hits = cleanResults(engine.parse(html));
+          if (hits.length === 0) {
+            continue;
+          }
+          return hits
+            .map(
+              (hit) =>
+                `- ${hit.title}\n  ${hit.url}${hit.snippet === "" ? "" : `\n  ${hit.snippet}`}`,
+            )
+            .join("\n");
+        } catch {
+          // Network error or abort on this engine: fall through to the next.
+        }
       }
-      const hits = parseDdgLite(await response.text());
-      if (hits.length === 0) {
-        return "No results found.";
-      }
-      return hits.map((hit) => `- ${hit.title}\n  ${hit.url}\n  ${hit.snippet}`).join("\n");
+      return "Search returned nothing. Tell the user the search failed, and answer from what you already know.";
     },
   };
   return tool;
@@ -493,9 +685,10 @@ export function renderMemories(memories: BlobMemory[]): string {
   if (lines.length === 0) {
     return "";
   }
+  // Titled section so it reads as data, matching blobSystemPrompt's layout.
   return (
-    "\nThings you remember about the user, each with its id in brackets. " +
-    "To delete one, call forget with that id. To correct one, call " +
-    `update_memory with that id:\n${lines.join("\n")}`
+    "\n\n## What you remember about the user\n" +
+    "Each fact is numbered. To delete one, call forget with its number; to " +
+    `correct one, call update_memory with its number.\n${lines.join("\n")}`
   );
 }
