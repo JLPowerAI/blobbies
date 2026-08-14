@@ -1,0 +1,7 @@
+{
+  // Solution-style root: `tsc --build` type-checks both projects.
+  // Keep tsconfig.node.json first: TypeScript 7 build mode leaks `paths` between
+  // sibling projects, and a different order breaks the "@/*" alias.
+  "files": [],
+  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.app.json" }]
+}

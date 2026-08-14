@@ -1,0 +1,31 @@
+# Git hooks. Docs: https://lefthook.dev/configuration/
+# Installed automatically via the `prepare` script; run `pnpm lefthook install`
+# by hand after cloning if hooks are missing.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: biome
+      glob: "*.{js,jsx,ts,tsx,json,jsonc,css}"
+      run: pnpm biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      stage_fixed: true
+
+    - name: rustfmt
+      glob: "*.rs"
+      run: cargo fmt --manifest-path src-tauri/Cargo.toml --all
+      stage_fixed: true
+
+pre-push:
+  parallel: true
+  jobs:
+    - name: typecheck
+      glob: "*.{ts,tsx}"
+      run: pnpm typecheck
+
+    - name: test
+      glob: "*.{ts,tsx}"
+      run: pnpm test
+
+    - name: clippy
+      glob: "{*.rs,src-tauri/Cargo.toml}"
+      run: pnpm rs:lint
