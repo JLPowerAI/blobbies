@@ -108,8 +108,14 @@ describe("blob tools", () => {
     expect(stored).toHaveLength(1);
     expect(stored[0]?.text).toBe("Ken trains on Tuesdays and Fridays");
 
+    // A correction still merges when the model rewords the subject, which the
+    // sim caught it doing ("Ken" -> "the user").
+    await remember?.execute({ text: "the user trains on Saturdays" }, context);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.text).toBe("the user trains on Saturdays");
+
     // An unrelated fact is still added alongside.
-    await remember?.execute({ text: "Ken is allergic to peanuts" }, context);
+    await remember?.execute({ text: "Ken has a sister called Mia" }, context);
     expect(stored).toHaveLength(2);
   });
 

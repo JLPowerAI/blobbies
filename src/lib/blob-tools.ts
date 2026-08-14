@@ -167,8 +167,36 @@ export interface MemoryAccess {
   save: (memories: BlobMemory[]) => void;
 }
 
-/** Words too common to signal that two facts are about the same thing. */
+/**
+ * Words too common to signal that two facts are about the same thing.
+ *
+ * Includes the ways a model refers to the person the memory is about: the sim
+ * caught "Ken trains on Mondays" and "the user trains on Tuesdays" scoring
+ * 0.25 purely because the subject was worded differently, so a correction was
+ * stored as a second, contradicting fact.
+ */
 const STOP_WORDS = new Set([
+  "user",
+  "users",
+  "i",
+  "me",
+  "my",
+  "mine",
+  "you",
+  "your",
+  "yours",
+  "he",
+  "she",
+  "they",
+  "them",
+  "their",
+  "his",
+  "her",
+  "now",
+  "new",
+  "also",
+  "prefers",
+  "prefer",
   "a",
   "an",
   "and",
@@ -223,7 +251,9 @@ export function factOverlap(left: string, right: string): number {
 
 /**
  * Above this, two facts are treated as the same fact restated — the new one
- * supersedes the old instead of sitting beside it.
+ * supersedes the old instead of sitting beside it. Facts about different
+ * subjects score 0.00, so the gap between "same topic" and "unrelated" is
+ * wide: measured 0.33-0.67 for corrections, 0.00 for unrelated pairs.
  *
  * Tuned against sim/: "Ken trains on Mondays and Thursdays" vs "…Tuesdays
  * and Fridays" scores 0.5 (a correction, replace); "Ken is allergic to
@@ -235,7 +265,7 @@ export function factOverlap(left: string, right: string): number {
  * it; the alternative, silently accumulating contradictions, misleads on every
  * later turn instead of occasionally losing one fact.
  */
-const SUPERSEDE_OVERLAP = 0.5;
+const SUPERSEDE_OVERLAP = 0.3;
 
 /**
  * Find the memory a model meant, given whatever it put in the `id` argument.
