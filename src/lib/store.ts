@@ -14,6 +14,8 @@ export interface Settings {
   userName: string;
   theme: string;
   timezone: string;
+  /** Ollama model tag used for chat, e.g. "llama3.2:latest". Empty = unset. */
+  model: string;
   plugins: string[];
 }
 

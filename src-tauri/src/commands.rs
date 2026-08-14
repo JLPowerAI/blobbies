@@ -30,6 +30,93 @@ pub(crate) fn greet(name: &str) -> Result<String> {
     Ok(format!("Hello, {name}! You've been greeted from Rust!"))
 }
 
+/// Locate the Ollama CLI binary.
+///
+/// GUI-launched apps inherit a minimal `PATH` (especially on macOS), so the
+/// well-known install locations are checked alongside it.
+fn find_ollama_binary() -> Option<std::path::PathBuf> {
+    let binary = if cfg!(windows) {
+        "ollama.exe"
+    } else {
+        "ollama"
+    };
+
+    if let Some(path) = std::env::var_os("PATH")
+        && let Some(dir) = std::env::split_paths(&path).find(|dir| dir.join(binary).is_file())
+    {
+        return Some(dir.join(binary));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        const FALLBACKS: &[&str] = &[
+            "/opt/homebrew/bin/ollama",
+            "/usr/local/bin/ollama",
+            // The menu-bar app bundles the same CLI; using it directly starts
+            // the server without opening the app's chat window.
+            "/Applications/Ollama.app/Contents/Resources/ollama",
+        ];
+        for candidate in FALLBACKS {
+            let path = std::path::Path::new(candidate);
+            if path.is_file() {
+                return Some(path.to_path_buf());
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let exe = std::path::Path::new(&local).join("Programs\\Ollama\\ollama.exe");
+            if exe.is_file() {
+                return Some(exe);
+            }
+        }
+    }
+
+    None
+}
+
+/// True when the macOS menu-bar app is installed (it bundles the server).
+#[cfg(target_os = "macos")]
+fn macos_ollama_app_installed() -> bool {
+    std::path::Path::new("/Applications/Ollama.app").exists()
+}
+
+/// True when the Ollama CLI or app is present on this machine, whether or not
+/// the server is currently running.
+#[tauri::command]
+pub(crate) fn ollama_installed() -> bool {
+    #[cfg(target_os = "macos")]
+    if macos_ollama_app_installed() {
+        return true;
+    }
+
+    find_ollama_binary().is_some()
+}
+
+/// Start the local Ollama server without blocking.
+///
+/// Always spawns a headless `ollama serve` (never the GUI app, which would
+/// open its own chat window). Returns once the process is launched — the
+/// frontend polls the HTTP endpoint to learn when the server is actually up.
+#[tauri::command]
+pub(crate) fn ollama_start() -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    let Some(binary) = find_ollama_binary() else {
+        return Err(Error::Io("Ollama is not installed".into()));
+    };
+    Command::new(binary)
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| Error::Io(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

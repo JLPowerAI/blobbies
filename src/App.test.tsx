@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import { flushRoster, loadRoster } from "@/lib/store";
 
@@ -91,7 +91,7 @@ describe("App", () => {
     const conversations = screen.getByRole("navigation", { name: "Conversations" });
     // "Ken" the Blob row, not the "Ken Kai" account row in the footer.
     expect(
-      within(conversations).getByRole("button", { name: /New Blob\. Say hello/ }),
+      within(conversations).getByRole("button", { name: /What do you need me to do\?/ }),
     ).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Message Ken")).toBeInTheDocument();
   });
@@ -136,6 +136,19 @@ describe("App", () => {
     expect(within(screen.getByRole("log")).getByText(/line one/)).toBeInTheDocument();
   });
 
+  it("answers a sent message with the no-model fallback when none is chosen", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user);
+
+    await user.type(screen.getByLabelText("Message Ken"), "hello{Enter}");
+
+    // No model configured: the Blob must still respond, pointing at Settings.
+    expect(
+      await within(screen.getByRole("log")).findByText(/pick one in Settings/),
+    ).toBeInTheDocument();
+  });
+
   it("replies to a message via the hover actions", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -150,7 +163,7 @@ describe("App", () => {
     const log = screen.getByRole("log");
     expect(within(log).getByText("On it")).toBeInTheDocument();
     expect(
-      within(log).getByText("New Blob. Say hello", { selector: ".bubble-quote" }),
+      within(log).getByText("What do you need me to do?", { selector: ".bubble-quote" }),
     ).toBeInTheDocument();
   });
 
@@ -255,6 +268,52 @@ describe("App", () => {
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("lists downloaded Ollama models in the settings Model tab", async () => {
+    // Deterministic local server: version probe succeeds, one model pulled.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/version")) {
+          return new Response(JSON.stringify({ version: "0.5.0" }));
+        }
+        if (url.endsWith("/api/tags")) {
+          return new Response(
+            JSON.stringify({
+              models: [
+                {
+                  name: "llama3.2:latest",
+                  size: 2_000_000_000,
+                  details: { parameter_size: "3.2B" },
+                },
+              ],
+            }),
+          );
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+
+      await user.click(screen.getByRole("button", { name: /Ken Kai/ }));
+      await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+      const dialog = screen.getByRole("dialog", { name: "Settings" });
+      await user.click(within(dialog).getByRole("button", { name: "Model" }));
+
+      // Section 1: install/server status.
+      expect(await within(dialog).findByText(/Running v0\.5\.0/)).toBeInTheDocument();
+
+      // Section 2: choosing between the downloaded models.
+      const select = within(dialog).getByLabelText("Chat model");
+      await user.selectOptions(select, "llama3.2:latest");
+      expect(select).toHaveValue("llama3.2:latest");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("collapses and expands the sidebar via the resize splitter", async () => {

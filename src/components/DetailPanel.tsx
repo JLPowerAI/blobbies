@@ -42,10 +42,6 @@ export function DetailPanel({
         </div>
       </header>
 
-      {/* Live screen placeholder: intentionally blank until capture exists. */}
-      <div className="screen-frame screen-frame-blank" aria-hidden="true" />
-      <p className="screen-caption">{agent.name}'s screen</p>
-
       <section className="routines" aria-label="Routines">
         {routines.length === 0 ? (
           <div className="routines-empty">

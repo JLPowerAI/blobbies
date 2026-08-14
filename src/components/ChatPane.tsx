@@ -1,18 +1,39 @@
-import { ArrowUp, CornerUpRight, Download, Ellipsis, Monitor, Plus, Smile, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  CornerUpRight,
+  Download,
+  Ellipsis,
+  Monitor,
+  Plus,
+  Smile,
+  X,
+} from "lucide-react";
 import {
   type FormEvent,
   type KeyboardEvent,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
+import { PillSelect } from "@/components/PillSelect";
 import type { Agent, Message } from "@/data/agents";
+import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
 
 interface ChatPaneProps {
   agent: Agent;
   messages: Message[];
+  /** True while the Blob is generating a reply; shows the thinking blob. */
+  thinking?: boolean;
+  /** Ollama model tag driving replies; "" until one is chosen. */
+  model: string;
+  onModelChange: (model: string) => void;
+  /** Whether the model may use chain-of-thought (slower, deeper). */
+  reasoning: boolean;
+  onReasoningChange: (on: boolean) => void;
   onSend: (text: string, replyTo?: string) => void;
   detailOpen: boolean;
   onToggleDetail: () => void;
@@ -80,6 +101,8 @@ interface MessageRowProps {
   message: Message;
   reaction: string | undefined;
   pickerOpen: boolean;
+  /** Arrived after mount: plays the in-place jelly pop exactly once. */
+  fresh: boolean;
   onTogglePicker: () => void;
   onReact: (emoji: string) => void;
   onReply: () => void;
@@ -90,13 +113,14 @@ function MessageRow({
   message,
   reaction,
   pickerOpen,
+  fresh,
   onTogglePicker,
   onReact,
   onReply,
 }: MessageRowProps) {
   const side = message.kind === "text" && message.author === "user" ? "user" : "agent";
   return (
-    <div className={`message-row message-row-${side}`}>
+    <div className={`message-row message-row-${side}${fresh ? " message-fresh" : ""}`}>
       <div className="message-actions" role="toolbar" aria-label="Message actions">
         <button type="button" className="icon-button message-action" aria-label="More options">
           <Ellipsis size={15} strokeWidth={1.8} aria-hidden="true" />
@@ -114,6 +138,9 @@ function MessageRow({
           className="icon-button message-action"
           aria-label="React"
           aria-expanded={pickerOpen}
+          // Without this, the outside-click dismiss fires on pointerdown and
+          // the click then re-toggles the picker straight back open.
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={onTogglePicker}
         >
           <Smile size={15} strokeWidth={1.8} aria-hidden="true" />
@@ -169,6 +196,11 @@ const COMPOSER_LINE_HEIGHT = 32;
 export function ChatPane({
   agent,
   messages,
+  thinking = false,
+  model,
+  onModelChange,
+  reasoning,
+  onReasoningChange,
   onSend,
   detailOpen,
   onToggleDetail,
@@ -180,9 +212,63 @@ export function ChatPane({
   const [reactions, setReactions] = useState<Record<string, string>>({});
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const [multiline, setMultiline] = useState(false);
+
+  // Click anywhere outside the reaction picker (or Escape) dismisses it. The
+  // opener buttons stopPropagation, so this never races the toggle.
+  useEffect(() => {
+    if (pickerFor === null) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || event.target.closest(".reaction-picker") === null) {
+        setPickerFor(null);
+      }
+    };
+    // globalThis: bare KeyboardEvent is React's type, shadowed by the import.
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPickerFor(null);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [pickerFor]);
+  const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
+  /** Replies that arrived while the user was scrolled up; drives the pill. */
+  const [unseenCount, setUnseenCount] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  /** Whether the view is close enough to the bottom to auto-follow. */
+  const nearBottomRef = useRef(true);
+  const prevMessageCount = useRef(messages.length);
+  /** True while a programmatic smooth scroll is in flight; its intermediate
+      scroll events must not be mistaken for the user scrolling up. */
+  const autoScrollRef = useRef(false);
   const flipRects = useRef(new Map<string, DOMRect>());
+
+  // Messages already on screen when this conversation opened. Anything newer
+  // is "fresh" and pops in with the jelly animation — exactly once.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot messages only when the conversation switches
+  const initialIds = useMemo(() => new Set(messages.map((entry) => entry.id)), [agent.id]);
+
+  // The header model picker needs the downloaded models; refresh on mount so
+  // a model pulled while the app is open shows up on the next conversation.
+  useEffect(() => {
+    let cancelled = false;
+    void listOllamaModels().then((models) => {
+      if (!cancelled) {
+        setAvailableModels(models);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Fresh conversation, fresh composer: clear the draft, reply chip and
   // reaction picker when switching Blobs so state never leaks across.
@@ -194,7 +280,43 @@ export function ChatPane({
     setPickerFor(null);
     setMultiline(false);
     setReactions({});
+    setUnseenCount(0);
+    nearBottomRef.current = true;
   }, [agent.id]);
+
+  const scrollToLatest = (behavior: ScrollBehavior = "smooth") => {
+    const el = scrollRef.current;
+    if (el !== null) {
+      autoScrollRef.current = behavior === "smooth";
+      nearBottomRef.current = true;
+      el.scrollTo({ top: el.scrollHeight, behavior });
+    }
+    setUnseenCount(0);
+  };
+
+  // Follow the conversation: sending your own message glides down to it (even
+  // from scrolled-up), streaming growth sticks instantly while already at the
+  // bottom, and anything arriving while scrolled up feeds the "new message"
+  // pill instead.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(scrollToLatest): stable helper
+  useLayoutEffect(() => {
+    const arrived = messages.length - prevMessageCount.current;
+    prevMessageCount.current = messages.length;
+    if (scrollRef.current === null) {
+      return;
+    }
+    if (arrived > 0 && messages.at(-1)?.author === "user") {
+      scrollToLatest("smooth");
+      return;
+    }
+    if (nearBottomRef.current) {
+      scrollToLatest("instant");
+      return;
+    }
+    if (arrived > 0) {
+      setUnseenCount((count) => count + arrived);
+    }
+  }, [messages]);
 
   // Auto-grow the textarea toward the cap, animating between the measured
   // heights. The transient `auto` never paints, so the height transition runs
@@ -348,21 +470,65 @@ export function ChatPane({
           <BlobAvatar tone={agent.tone} shape={agent.shape} size={24} />
           <h1 className="chat-title">{agent.name}</h1>
         </button>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={detailOpen ? "Hide details panel" : "Show details panel"}
-          aria-pressed={detailOpen}
-          onClick={onToggleDetail}
-        >
-          <Monitor size={17} strokeWidth={1.8} aria-hidden="true" />
-        </button>
+        <div className="chat-header-controls">
+          <PillSelect
+            id="header-thinking"
+            label="Thinking"
+            value={reasoning ? "on" : "off"}
+            onChange={(value) => onReasoningChange(value === "on")}
+          >
+            <option value="off">Thinking off</option>
+            <option value="on">Thinking on</option>
+          </PillSelect>
+          <PillSelect id="header-model" label="Model" value={model} onChange={onModelChange}>
+            <option value="">Choose a model</option>
+            {model !== "" && !availableModels.some((entry) => entry.name === model) ? (
+              <option value={model}>{model}</option>
+            ) : null}
+            {availableModels.map((entry) => (
+              <option key={entry.name} value={entry.name}>
+                {entry.name}
+              </option>
+            ))}
+          </PillSelect>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={detailOpen ? "Hide details panel" : "Show details panel"}
+            aria-pressed={detailOpen}
+            onClick={onToggleDetail}
+          >
+            <Monitor size={17} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        </div>
       </header>
 
-      <div className="message-scroll" role="log" aria-label="Messages">
+      <div
+        className="message-scroll"
+        role="log"
+        aria-label="Messages"
+        ref={scrollRef}
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          // A glide we started passes through "scrolled up" positions; ignore
+          // those until it lands so it isn't mistaken for user intent.
+          if (autoScrollRef.current) {
+            if (nearBottom) {
+              autoScrollRef.current = false;
+            }
+            return;
+          }
+          nearBottomRef.current = nearBottom;
+          if (nearBottom) {
+            setUnseenCount(0);
+          }
+        }}
+      >
         <p className="timestamp-divider">9:41 AM</p>
         {messages.map((message) => (
           <MessageRow
+            fresh={!initialIds.has(message.id)}
             key={message.id}
             message={message}
             reaction={reactions[message.id]}
@@ -372,7 +538,34 @@ export function ChatPane({
             onReply={() => startReply(message)}
           />
         ))}
+        {/* Always mounted: reserves its space (nothing overlaps or jumps) and
+            lets the blob fade in/out instead of popping with the DOM. */}
+        <div
+          className={thinking ? "thinking-row thinking-row-visible" : "thinking-row"}
+          role="status"
+          aria-hidden={!thinking}
+          aria-label={thinking ? `${agent.name} is thinking` : undefined}
+        >
+          <BlobAvatar tone={agent.tone} shape={agent.shape} size={30} variant="thinking" />
+        </div>
       </div>
+
+      {unseenCount > 0 ? (
+        <div className="new-messages-pill" role="status">
+          <button type="button" className="new-messages-jump" onClick={() => scrollToLatest()}>
+            <ArrowDown size={15} strokeWidth={2} aria-hidden="true" />
+            {unseenCount === 1 ? "1 new message" : `${unseenCount} new messages`}
+          </button>
+          <button
+            type="button"
+            className="new-messages-dismiss"
+            aria-label="Dismiss new message notice"
+            onClick={() => setUnseenCount(0)}
+          >
+            <X size={14} strokeWidth={2} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
 
       <form
         ref={composerRef}

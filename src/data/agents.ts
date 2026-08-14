@@ -27,11 +27,20 @@ export type AgentShape =
 export interface Agent {
   id: string;
   name: string;
+  /** Legacy display string; superseded by lastActivityAt when present. */
   time: string;
+  /** Epoch ms of the newest message, drives the sidebar timestamp. */
+  lastActivityAt?: number;
   snippet: string;
   tone: AvatarTone;
   shape: AgentShape;
   unread?: boolean;
+  /** Pinned Blobs sort to the top of the sidebar. */
+  pinned?: boolean;
+  /** Hidden Blobs stay in the roster but are not listed in the sidebar. */
+  hidden?: boolean;
+  /** Lasting facts the Blob saved via its remember tool. */
+  memories?: import("@/lib/blob-tools").BlobMemory[];
   /** Short role line, e.g. "Handles my inbox". */
   title?: string;
   /** Longer free-form purpose notes. */
@@ -54,6 +63,8 @@ export type Message =
       segments: TextSegment[];
       /** Preview of the message this one replies to, shown quoted in the bubble. */
       replyTo?: string;
+      /** Epoch ms when the message was created. Absent on legacy entries. */
+      timestampMs?: number;
     }
   | {
       id: string;
@@ -61,6 +72,7 @@ export type Message =
       author: "agent";
       fileName: string;
       meta: string;
+      timestampMs?: number;
     };
 
 export interface Routine {
@@ -81,18 +93,23 @@ export const agents: Agent[] = [];
 
 export const transcripts: Record<string, Message[]> = {};
 
+/** Greeting shown in a fresh conversation (and as the initial snippet). */
+export const GREETING = "What do you need me to do?";
+
 /** Fallback transcript for agents without a seeded conversation. */
 export function transcriptFor(agent: Agent): Message[] {
   const seeded = transcripts[agent.id];
   if (seeded !== undefined) {
     return seeded;
   }
+  // Fixed text, not agent.snippet: the snippet follows the latest activity,
+  // and the greeting must not echo it.
   return [
     {
       id: `${agent.id}-status`,
       kind: "text",
       author: "agent",
-      segments: [{ text: agent.snippet }],
+      segments: [{ text: GREETING }],
     },
   ];
 }

@@ -140,10 +140,17 @@ interface BlobAvatarProps {
   tone: AvatarTone;
   shape?: AgentShape;
   size?: number;
+  /** "thinking" swaps the idle glance for a busy squish-and-look-up loop. */
+  variant?: "idle" | "thinking";
 }
 
 /** Glossy gradient blob used as each agent's identity mark. Decorative only. */
-export function BlobAvatar({ tone, shape = "sphere", size = 38 }: BlobAvatarProps) {
+export function BlobAvatar({
+  tone,
+  shape = "sphere",
+  size = 38,
+  variant = "idle",
+}: BlobAvatarProps) {
   const [light, dark] = GRADIENTS[tone];
   // The same tone can render more than once (sidebar row + chat header), so
   // gradient/clip ids must be per-instance to stay unique in the document.
@@ -162,7 +169,7 @@ export function BlobAvatar({ tone, shape = "sphere", size = 38 }: BlobAvatarProp
   } as CSSProperties;
   return (
     <svg
-      className="blob-avatar"
+      className={variant === "thinking" ? "blob-avatar blob-avatar-thinking" : "blob-avatar"}
       width={size}
       height={size}
       viewBox="-88 -88 176 176"

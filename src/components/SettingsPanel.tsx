@@ -1,9 +1,13 @@
 import { ChevronLeft, ChevronsRight } from "lucide-react";
+import { useLayoutEffect, useRef } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
 import { type Agent, MAX_BLOB_NAME_LENGTH } from "@/data/agents";
+import { blobSystemPrompt, type UserContext } from "@/lib/ai";
 
 interface SettingsPanelProps {
   agent: Agent;
+  /** Name + timezone from app settings; completes the prompt preview. */
+  user: UserContext;
   onUpdate: (patch: Partial<Agent>) => void;
   /** Back to the info (screen + routines) view. */
   onBack: () => void;
@@ -11,8 +15,21 @@ interface SettingsPanelProps {
 }
 
 /** Per-Blob settings: identity fields and notification preference. */
-export function SettingsPanel({ agent, onUpdate, onBack, onClose }: SettingsPanelProps) {
+export function SettingsPanel({ agent, user, onUpdate, onBack, onClose }: SettingsPanelProps) {
   const notifications = agent.notifications ?? true;
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow the description so long text is fully visible, never clipped.
+  // Re-runs on description change: the Blob can rewrite its own description
+  // via configure_blob while this panel is open.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(agent.description): height tracks the value, not the effect body
+  useLayoutEffect(() => {
+    const el = descriptionRef.current;
+    if (el !== null) {
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    }
+  }, [agent.description]);
   return (
     <aside className="detail-panel" aria-label={`${agent.name} settings`}>
       <header className="detail-header" data-tauri-drag-region>
@@ -64,13 +81,24 @@ export function SettingsPanel({ agent, onUpdate, onBack, onClose }: SettingsPane
           </label>
           <textarea
             id="settings-description"
+            ref={descriptionRef}
             className="settings-input settings-textarea"
             placeholder="What this agent is for"
             rows={4}
             value={agent.description ?? ""}
-            onChange={(event) => onUpdate({ description: event.currentTarget.value })}
+            onChange={(event) => {
+              onUpdate({ description: event.currentTarget.value });
+              // Keep height tracking the content while typing.
+              event.currentTarget.style.height = "auto";
+              event.currentTarget.style.height = `${event.currentTarget.scrollHeight}px`;
+            }}
           />
         </div>
+
+        <details className="settings-field prompt-preview">
+          <summary className="settings-label prompt-preview-summary">System prompt</summary>
+          <pre className="prompt-preview-body">{blobSystemPrompt(agent, user)}</pre>
+        </details>
 
         <div className="settings-card">
           <span className="settings-card-text">

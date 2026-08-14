@@ -19,6 +19,9 @@
   --accent-blue: #0a84ff;
   --accent-green: #1d9b53;
 
+  --status-warn: #c98a00;
+  --status-err: #d13c3c;
+
   --border-hairline: rgba(0, 0, 0, 0.09);
   --border-strong: rgba(0, 0, 0, 0.3);
   --hover-overlay: rgba(0, 0, 0, 0.06);
@@ -68,6 +71,9 @@
   --accent-blue: #409cff;
   --accent-green: #30c860;
 
+  --status-warn: #ffb340;
+  --status-err: #ff6b6b;
+
   --border-hairline: rgba(255, 255, 255, 0.1);
   --border-strong: rgba(255, 255, 255, 0.32);
   --hover-overlay: rgba(255, 255, 255, 0.07);
@@ -90,7 +96,8 @@ body {
   overscroll-behavior: none;
 }
 
-/* Every scroll container: no spring/bounce chaining past its own edges. */
+/* Every scroll container: no spring/bounce at its edges, and no chaining.
+   `none` (not `contain`) also suppresses WebKit's rubber-band effect. */
 .message-scroll,
 .agent-list,
 .detail-panel,
@@ -99,7 +106,7 @@ body {
 .plugins-body,
 .trigger-menu,
 .composer-input {
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
   scroll-behavior: smooth;
 }
 
@@ -113,10 +120,16 @@ button {
   cursor: pointer;
 }
 
-:is(button, input, a):focus-visible {
+:is(button, input, a, select):focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 6px;
+}
+
+/* WebKit draws its own ring on selects for plain mouse focus; the rule above
+   already covers keyboard focus, so suppress the default entirely. */
+select:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .visually-hidden {
@@ -418,6 +431,79 @@ button {
   animation: shine-idle var(--face-duration, 8s) ease-in-out var(--face-delay, 0s) infinite;
 }
 
+/* Thinking: the whole blob squishes and bounces like it's mulling something
+   over, while the eyes dart up as if reading its own thoughts. Replaces the
+   slow idle glance entirely. */
+@keyframes blob-think {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+
+  30% {
+    transform: scale(1.08, 0.9) translateY(3px);
+  }
+
+  55% {
+    transform: scale(0.94, 1.08) translateY(-4px);
+  }
+
+  75% {
+    transform: scale(1.03, 0.97) translateY(1px);
+  }
+}
+
+@keyframes face-think {
+  0%,
+  100% {
+    transform: translate(0, -4px);
+  }
+
+  35% {
+    transform: translate(-6px, -6px);
+  }
+
+  /* Quick blink while pondering. */
+  48% {
+    transform: translate(-6px, -6px) scaleY(0.15);
+  }
+
+  70% {
+    transform: translate(6px, -6px);
+  }
+}
+
+.blob-avatar-thinking {
+  transform-box: view-box;
+  transform-origin: 50% 100%;
+  animation: blob-think 1.5s ease-in-out infinite;
+}
+
+.blob-avatar-thinking .blob-face {
+  animation: face-think 1.5s ease-in-out infinite;
+}
+
+.blob-avatar-thinking .blob-shine {
+  animation: none;
+}
+
+.thinking-row {
+  display: flex;
+  justify-content: flex-start;
+  padding: 10px 4px 2px;
+  opacity: 0;
+  transition: opacity 200ms var(--ease-standard);
+}
+
+.thinking-row-visible {
+  opacity: 1;
+}
+
+/* Don't burn compositor time animating an invisible blob. */
+.thinking-row:not(.thinking-row-visible) :is(.blob-avatar-thinking, .blob-face) {
+  animation-play-state: paused;
+}
+
 .agent-row-text {
   flex: 1;
   min-width: 0;
@@ -533,6 +619,127 @@ button {
   /* Opens upward from the account row, so it enters rising and exits sinking. */
   animation: pop-up-in 160ms var(--ease-standard);
   z-index: 30;
+}
+
+/* Transparent full-screen scrim: catches click-away for the context menu
+   without dimming the app, and guarantees item clicks are never raced by a
+   global dismiss listener. */
+.context-menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+/* Right-click menu for sidebar Blobs; fixed at the cursor. */
+.context-menu {
+  position: fixed;
+  min-width: 224px;
+  padding: 6px;
+  border-radius: 13px;
+  background: var(--surface-chat);
+  border: 1px solid var(--border-hairline);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
+  animation: menu-pop-in 140ms var(--ease-standard);
+  z-index: 40;
+}
+
+@keyframes menu-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  inline-size: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13.5px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.context-menu-item:hover {
+  background: var(--hover-overlay);
+}
+
+.context-menu-danger {
+  color: var(--status-err);
+}
+
+.context-menu-separator {
+  block-size: 1px;
+  margin: 5px 8px;
+  border: none;
+  background: var(--border-hairline);
+}
+
+/* Read-only view of the exact prompt the Blob runs with. */
+.prompt-preview-summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.prompt-preview-body {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-selected);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* Destructive-action confirmation (window.confirm never shows in the webview). */
+.confirm-dialog {
+  min-width: 360px;
+  max-width: 440px;
+  padding: 20px;
+  border-radius: 14px;
+  background: var(--surface-chat);
+  border: 1px solid var(--border-hairline);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+  animation: menu-pop-in 140ms var(--ease-standard);
+}
+
+.confirm-title {
+  margin: 0 0 8px;
+  font-size: 15.5px;
+  font-weight: 650;
+}
+
+.confirm-body {
+  margin: 0 0 16px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Double class outranks the later-defined .modal-button base/hover rules. */
+.modal-button.confirm-danger {
+  background: var(--status-err);
+  color: #ffffff;
+}
+
+.modal-button.confirm-danger:hover {
+  background: var(--status-err);
+  filter: brightness(1.1);
 }
 
 @keyframes pop-up-in {
@@ -1256,6 +1463,20 @@ button {
   white-space: nowrap;
 }
 
+.chat-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Header pills are tighter than settings rows and truncate long model tags. */
+.chat-header-controls .pill-select select {
+  max-width: 180px;
+  padding-block: 5px;
+  font-size: 12.5px;
+}
+
 .pill-select-chevron {
   position: absolute;
   inset-block-start: 50%;
@@ -1277,6 +1498,39 @@ button {
 
 .modal-button:hover {
   background: var(--surface-selected);
+}
+
+/* ------------------------------------------------- settings: model tab */
+.ollama-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ollama-dot {
+  flex-shrink: 0;
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+}
+
+.ollama-dot-ok {
+  background: var(--accent-green);
+}
+
+.ollama-dot-warn {
+  background: var(--status-warn);
+}
+
+.ollama-dot-err {
+  background: var(--status-err);
+}
+
+/* An anchor styled as .modal-button keeps the button's text color. */
+a.modal-button {
+  color: var(--text-primary);
+  text-decoration: none;
 }
 
 /* --------------------------------------------------------- plugins modal */
@@ -1596,6 +1850,7 @@ button {
 
 /* ------------------------------------------------------------- chat pane */
 .chat-pane {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -1604,10 +1859,59 @@ button {
   animation: pane-fade-in 160ms var(--ease-standard);
 }
 
+/* "N new messages" pill floating above the composer while scrolled up. */
+.new-messages-pill {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 96px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.new-messages-pill > button {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: var(--accent-blue);
+  color: #ffffff;
+  cursor: pointer;
+  font-family: inherit;
+  transition: filter var(--duration-fast) var(--ease-standard);
+}
+
+.new-messages-jump {
+  padding: 9px 8px 9px 16px;
+  border-radius: 999px 0 0 999px;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.new-messages-dismiss {
+  padding: 9px 14px 9px 8px;
+  border-radius: 0 999px 999px 0;
+}
+
+.new-messages-dismiss svg {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.new-messages-dismiss:hover svg {
+  transform: scale(1.18);
+}
+
+.new-messages-pill > button:hover {
+  filter: brightness(1.08);
+}
+
 .chat-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   box-sizing: border-box;
   height: 48px;
   padding: 0 16px;
@@ -1651,6 +1955,36 @@ button {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+/* New messages pop in place: a fast jelly squash-and-settle, no sliding. */
+@keyframes message-jelly {
+  0% {
+    transform: scale(0.8, 0.86);
+    opacity: 0;
+  }
+
+  55% {
+    transform: scale(1.04, 0.97);
+    opacity: 1;
+  }
+
+  80% {
+    transform: scale(0.99, 1.01);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.message-fresh {
+  animation: message-jelly 240ms var(--ease-standard);
+  transform-origin: 15% 100%;
+}
+
+.message-row-user.message-fresh {
+  transform-origin: 85% 100%;
 }
 
 .message-row-agent {
@@ -2175,95 +2509,6 @@ button {
   gap: 2px;
 }
 
-.screen-frame {
-  margin: 8px 20px 0;
-  padding: 12px 12px 8px;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #dcdce0, #c9c9cf);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
-}
-
-.screen-display {
-  border-radius: 8px;
-  overflow: hidden;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
-}
-
-.screen-chrome {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 8px;
-  background: #f1f1f3;
-  border-bottom: 1px solid var(--border-hairline);
-}
-
-.screen-chrome-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #c7c7cc;
-}
-
-.screen-chrome-bar {
-  flex: 1;
-  height: 6px;
-  margin-inline: 6px;
-  border-radius: 3px;
-  background: #e4e4e8;
-}
-
-.screen-calendar {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  grid-template-rows: repeat(5, 1fr);
-  gap: 4px;
-  height: 132px;
-  padding: 8px;
-}
-
-.cal-block {
-  border-radius: 3px;
-}
-
-.cal-blue {
-  background: #2f9be4;
-}
-
-.cal-teal {
-  background: #35c2b0;
-}
-
-.cal-green {
-  background: #43ba62;
-}
-
-.cal-red {
-  background: #ee7d70;
-}
-
-.screen-dock {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  padding-top: 7px;
-}
-
-.screen-dock-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #9a9aa2;
-}
-
-.screen-caption {
-  margin: 11px 20px 0;
-  text-align: center;
-  font-size: 12.5px;
-  color: var(--text-secondary);
-}
-
 .routines {
   flex: 1;
   display: flex;
@@ -2370,13 +2615,6 @@ button {
 /* ------------------------------------------------------ routine editor */
 .detail-header-spacer {
   width: 28px;
-}
-
-.screen-frame-blank {
-  margin: 8px 20px 0;
-  height: 150px;
-  border-radius: 12px;
-  background: var(--surface-control);
 }
 
 .routine-toolbar {
@@ -2533,32 +2771,6 @@ button {
   color: #cfcfcf;
 }
 
-:root[data-theme="dark"] .screen-frame {
-  background: #282828;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-:root[data-theme="dark"] .screen-display {
-  background: #1a1a1a;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-}
-
-:root[data-theme="dark"] .screen-chrome {
-  background: #232323;
-}
-
-:root[data-theme="dark"] .screen-chrome-dot {
-  background: #4a4a4a;
-}
-
-:root[data-theme="dark"] .screen-chrome-bar {
-  background: #2e2e2e;
-}
-
-:root[data-theme="dark"] .screen-dock-dot {
-  background: #5a5a5a;
-}
-
 /* ------------------------------------------------------------ responsive */
 @media (max-width: 1000px) {
   :root {
@@ -2618,8 +2830,15 @@ button {
   .composer-reply,
   .composer-reply-closing,
   .blob-face,
-  .blob-shine {
+  .blob-shine,
+  .blob-avatar-thinking,
+  .blob-avatar-thinking .blob-face,
+  .message-fresh {
     animation: none;
+  }
+
+  .thinking-row {
+    transition: none;
   }
 
   .tone-swatch:hover {

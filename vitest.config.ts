@@ -5,11 +5,23 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
-    },
+    alias: [
+      { find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) },
+      // Mirror vite.config.ts: jsdom trips the OpenAI SDK's browser guard too.
+      {
+        find: /^openai$/,
+        replacement: fileURLToPath(new URL("./src/lib/openai-browser.ts", import.meta.url)),
+      },
+    ],
   },
   test: {
+    // gg-ai must go through the Vite pipeline (not Node's resolver) so the
+    // "openai" alias above rewrites its import, matching app builds.
+    server: {
+      deps: {
+        inline: ["@kenkaiiii/gg-ai", "@kenkaiiii/gg-agent"],
+      },
+    },
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],

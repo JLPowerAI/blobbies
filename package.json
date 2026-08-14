@@ -29,12 +29,17 @@
     "prepare": "lefthook install"
   },
   "dependencies": {
+    "@kenkaiiii/gg-agent": "^5.44.0",
+    "@kenkaiiii/gg-ai": "^5.43.0",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "lucide-react": "^1.31.0",
+    "openai": "^6.49.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "simple-icons": "^16.28.0"
+    "simple-icons": "^16.28.0",
+    "zod": "^4.4.3"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

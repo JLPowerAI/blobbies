@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import type { Message as AiMessage } from "@kenkaiiii/gg-ai";
+import { useEffect, useRef, useState } from "react";
 import { ChatPane } from "@/components/ChatPane";
 import { ComposePane } from "@/components/ComposePane";
 import { CreatorPane } from "@/components/CreatorPane";
@@ -17,12 +18,14 @@ import {
   type Agent,
   type AgentShape,
   type AvatarTone,
+  GREETING,
   MAX_BLOB_NAME_LENGTH,
   type Message,
   type Routine,
   agents as seedAgents,
   transcriptFor,
 } from "@/data/agents";
+import { blobSystemPrompt, streamBlobTurn } from "@/lib/ai";
 import { readPreference, writePreference } from "@/lib/preferences";
 import * as store from "@/lib/store";
 import "./App.css";
@@ -47,6 +50,9 @@ function newBlobId(): string {
 
 export function App() {
   const [agents, setAgents] = useState<Agent[]>(seedAgents);
+  /** Latest roster for async callbacks (tool executes outlive a render). */
+  const agentsRef = useRef<Agent[]>(agents);
+  agentsRef.current = agents;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>({ kind: "chat" });
   // Details stay hidden until explicitly opened from the chat header.
@@ -58,6 +64,8 @@ export function App() {
   const [sentByAgent, setSentByAgent] = useState<Record<string, Message[]>>({});
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Blob currently generating a reply; drives the thinking indicator. */
+  const [thinkingFor, setThinkingFor] = useState<string | null>(null);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [installedPlugins, setInstalledPlugins] = useState<string[]>(() => {
     try {
@@ -77,6 +85,12 @@ export function App() {
     return isTheme(stored) ? stored : "system";
   });
   const [timezone, setTimezone] = useState(() => readPreference("pref:timezone", "auto"));
+  // Ollama model tag (e.g. "llama3.2:latest"); empty until one is chosen.
+  const [model, setModel] = useState(() => readPreference("pref:model", ""));
+  // Chain-of-thought toggle; off by default because it multiplies reply time.
+  const [reasoning, setReasoning] = useState(
+    () => readPreference("pref:reasoning", "off") === "on",
+  );
 
   // Hydrate persisted state (roster, settings) once on startup. Legacy
   // localStorage prefs remain the synchronous initial values above; the disk
@@ -100,6 +114,9 @@ export function App() {
         }
         if (typeof settings.timezone === "string") {
           setTimezone(settings.timezone);
+        }
+        if (typeof settings.model === "string") {
+          setModel(settings.model);
         }
         if (Array.isArray(settings.plugins)) {
           setInstalledPlugins(
@@ -134,8 +151,8 @@ export function App() {
 
   // Persist settings whenever any part changes (debounced in the store).
   useEffect(() => {
-    store.saveSettings({ userName, theme, timezone, plugins: installedPlugins });
-  }, [userName, theme, timezone, installedPlugins]);
+    store.saveSettings({ userName, theme, timezone, model, plugins: installedPlugins });
+  }, [userName, theme, timezone, model, installedPlugins]);
 
   const changeUserName = (name: string) => {
     const capped = name.slice(0, MAX_USER_NAME_LENGTH);
@@ -151,6 +168,16 @@ export function App() {
   const changeTimezone = (next: string) => {
     setTimezone(next);
     writePreference("pref:timezone", next);
+  };
+
+  const changeReasoning = (on: boolean) => {
+    setReasoning(on);
+    writePreference("pref:reasoning", on ? "on" : "off");
+  };
+
+  const changeModel = (next: string) => {
+    setModel(next);
+    writePreference("pref:model", next);
   };
 
   const setPluginInstalled = (id: string, isInstalled: boolean) => {
@@ -169,6 +196,54 @@ export function App() {
     setSelectedId(id);
     setMode({ kind: "chat" });
     setDetailView({ kind: "info" });
+  };
+
+  const duplicateBlob = (id: string) => {
+    const source = agents.find((candidate) => candidate.id === id);
+    if (source === undefined) {
+      return;
+    }
+    const copy: Agent = {
+      ...source,
+      id: newBlobId(),
+      name: `${source.name} copy`.slice(0, MAX_BLOB_NAME_LENGTH),
+      time: "Now",
+      lastActivityAt: Date.now(),
+      snippet: GREETING,
+      unread: false,
+      pinned: false,
+      hidden: false,
+    };
+    setAgents((previous) => {
+      const next = [copy, ...previous];
+      void store.flushRoster(next);
+      return next;
+    });
+    store.saveBlobConfig(copy.id, copy);
+    openConversation(copy.id);
+  };
+
+  const deleteBlob = (id: string) => {
+    setAgents((previous) => {
+      const next = previous.filter((candidate) => candidate.id !== id);
+      void store.flushRoster(next);
+      if (selectedId === id) {
+        const fallback = next.find((candidate) => candidate.hidden !== true);
+        setSelectedId(fallback === undefined ? null : fallback.id);
+        setMode(fallback === undefined ? { kind: "creator", initialName: "" } : { kind: "chat" });
+      }
+      return next;
+    });
+    setSentByAgent(({ [id]: _dropped, ...rest }) => rest);
+    setRoutinesByAgent(({ [id]: _dropped, ...rest }) => rest);
+    void store.deleteBlobData(id);
+  };
+
+  /** Open a Blob's profile (name/title/description) in the details panel. */
+  const editBlobProfile = (id: string) => {
+    openConversation(id);
+    setDetailView({ kind: "settings" });
+    setDetailOpen(true);
   };
 
   const openSettings = () => {
@@ -261,7 +336,8 @@ export function App() {
       // Defense in depth: the creator already caps input length.
       name: name.slice(0, MAX_BLOB_NAME_LENGTH),
       time: "Now",
-      snippet: "New Blob. Say hello",
+      lastActivityAt: Date.now(),
+      snippet: GREETING,
       tone,
       shape,
     };
@@ -276,6 +352,107 @@ export function App() {
     openConversation(blob.id);
   };
 
+  const appendMessage = (agentId: string, message: Message) => {
+    setSentByAgent((previous) => {
+      const next = [...(previous[agentId] ?? []), message];
+      store.saveBlobTranscript(agentId, next);
+      return { ...previous, [agentId]: next };
+    });
+  };
+
+  /** Reflect the newest message in the sidebar (timestamp + snippet). */
+  const touchActivity = (agentId: string, snippet: string) => {
+    updateBlob(agentId, {
+      lastActivityAt: Date.now(),
+      snippet: snippet.slice(0, 80),
+    });
+  };
+
+  /** Stream the Blob's reply from the local model into the transcript. */
+  const requestReply = async (target: Agent, history: Message[]) => {
+    const replyId = `agent-${Date.now()}`;
+    if (model === "") {
+      const text =
+        "I don't have a model to think with yet \u2014 pick one in Settings \u2192 Model.";
+      appendMessage(target.id, {
+        id: replyId,
+        kind: "text",
+        author: "agent",
+        segments: [{ text }],
+        timestampMs: Date.now(),
+      });
+      touchActivity(target.id, text);
+      return;
+    }
+    const aiMessages: AiMessage[] = [
+      // Rebuilt per turn: carries the current time, so it must never be cached.
+      { role: "system", content: blobSystemPrompt(target, { userName, timezone }) },
+      ...history
+        .filter((entry): entry is Extract<Message, { kind: "text" }> => entry.kind === "text")
+        .map((entry): AiMessage => {
+          const role = entry.author === "user" ? ("user" as const) : ("assistant" as const);
+          return { role, content: entry.segments.map((segment) => segment.text).join("") };
+        }),
+    ];
+    let text = "";
+    const patchReply = (content: string) => {
+      setSentByAgent((previous) => {
+        const current = previous[target.id] ?? [];
+        const reply: Message = {
+          id: replyId,
+          kind: "text",
+          author: "agent",
+          segments: [{ text: content }],
+          timestampMs: Date.now(),
+        };
+        const next = current.some((entry) => entry.id === replyId)
+          ? current.map((entry) => (entry.id === replyId ? reply : entry))
+          : [...current, reply];
+        return { ...previous, [target.id]: next };
+      });
+    };
+    setThinkingFor(target.id);
+    try {
+      text = await streamBlobTurn({
+        model,
+        messages: aiMessages,
+        thinking: reasoning,
+        forceConfigure: (target.title ?? "") === "" && (target.description ?? "") === "",
+        memory: {
+          // Read through the ref so mid-turn saves see the latest list.
+          list: () =>
+            agentsRef.current.find((candidate) => candidate.id === target.id)?.memories ?? [],
+          save: (memories) => updateBlob(target.id, { memories }),
+        },
+        onText: (fullText) => {
+          text = fullText;
+          patchReply(fullText);
+        },
+        // The Blob configures itself: the same patch path the settings panel
+        // uses, so title/description show up there immediately.
+        onConfigure: (patch) => updateBlob(target.id, patch),
+      });
+      if (text === "") {
+        text = "(no response from the model)";
+        patchReply(text);
+      }
+    } catch {
+      text =
+        text === ""
+          ? "I couldn't reach the local model. Check that Ollama is running in Settings \u2192 Model."
+          : `${text}\u2026 (the model stopped responding)`;
+      patchReply(text);
+    } finally {
+      setThinkingFor(null);
+    }
+    touchActivity(target.id, text);
+    // Persist once the reply settled; per-delta saves would thrash the store.
+    setSentByAgent((previous) => {
+      store.saveBlobTranscript(target.id, previous[target.id] ?? []);
+      return previous;
+    });
+  };
+
   const sendMessage = (text: string, replyTo?: string) => {
     if (agent === undefined) {
       return;
@@ -285,13 +462,13 @@ export function App() {
       kind: "text",
       author: "user",
       segments: [{ text }],
+      timestampMs: Date.now(),
       ...(replyTo === undefined ? {} : { replyTo }),
     };
-    setSentByAgent((previous) => {
-      const next = [...(previous[agent.id] ?? []), message];
-      store.saveBlobTranscript(agent.id, next);
-      return { ...previous, [agent.id]: next };
-    });
+    appendMessage(agent.id, message);
+    touchActivity(agent.id, text);
+    const history = [...transcriptFor(agent), ...(sentByAgent[agent.id] ?? []), message];
+    void requestReply(agent, history);
   };
 
   const composing = activeMode.kind !== "chat";
@@ -307,6 +484,10 @@ export function App() {
         onStartCompose={() => setMode({ kind: "palette" })}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenPlugins={() => setPluginsOpen(true)}
+        onUpdateBlob={updateBlob}
+        onEditProfile={editBlobProfile}
+        onDuplicate={duplicateBlob}
+        onDelete={deleteBlob}
       />
       {activeMode.kind === "creator" ? (
         <CreatorPane
@@ -331,6 +512,11 @@ export function App() {
           // when agent.id changes.
           agent={agent}
           messages={[...transcriptFor(agent), ...(sentByAgent[agent.id] ?? [])]}
+          thinking={thinkingFor === agent.id}
+          model={model}
+          onModelChange={changeModel}
+          reasoning={reasoning}
+          onReasoningChange={changeReasoning}
           onSend={sendMessage}
           detailOpen={detailOpen}
           onToggleDetail={() => setDetailOpen((open) => !open)}
@@ -344,6 +530,7 @@ export function App() {
               return (
                 <SettingsPanel
                   agent={agent}
+                  user={{ userName, timezone }}
                   onUpdate={(patch) => updateBlob(agent.id, patch)}
                   onBack={() => setDetailView({ kind: "info" })}
                   onClose={() => setDetailOpen(false)}
@@ -395,6 +582,8 @@ export function App() {
           onThemeChange={changeTheme}
           timezone={timezone}
           onTimezoneChange={changeTimezone}
+          model={model}
+          onModelChange={changeModel}
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}

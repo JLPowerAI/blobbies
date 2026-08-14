@@ -1,6 +1,20 @@
-import { Plug, Plus, Search, Settings } from "lucide-react";
+import {
+  Bell,
+  Copy,
+  EyeOff,
+  Link,
+  Pencil,
+  Pin,
+  PinOff,
+  Plug,
+  Plus,
+  Search,
+  Settings,
+  Trash2,
+} from "lucide-react";
 import {
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   useEffect,
   useRef,
@@ -10,6 +24,7 @@ import { BlobAvatar } from "@/components/BlobAvatar";
 import type { Agent } from "@/data/agents";
 import { readPreference, writePreference } from "@/lib/preferences";
 import { isTauri } from "@/lib/tauri";
+import { formatAgentTime } from "@/lib/time";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 /** Resize limits: the rail collapses below MIN, and can't grow past MAX. */
@@ -52,7 +67,22 @@ interface SidebarProps {
   onStartCompose: () => void;
   onOpenSettings: () => void;
   onOpenPlugins: () => void;
+  onUpdateBlob: (id: string, patch: Partial<Agent>) => void;
+  onEditProfile: (id: string) => void;
+  onDuplicate: (id: string) => void;
+  onDelete: (id: string) => void;
 }
+
+/** Right-click context menu target: which Blob, and where to render. */
+interface MenuTarget {
+  agentId: string;
+  x: number;
+  y: number;
+}
+
+/** Keep the fixed-position menu inside the viewport. */
+const MENU_WIDTH = 224;
+const MENU_HEIGHT = 316;
 
 function initialsOf(name: string): string {
   const letters = name
@@ -73,8 +103,44 @@ export function Sidebar({
   onStartCompose,
   onOpenSettings,
   onOpenPlugins,
+  onUpdateBlob,
+  onEditProfile,
+  onDuplicate,
+  onDelete,
 }: SidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<MenuTarget | null>(null);
+  /** Blob awaiting delete confirmation (window.confirm is a no-op in wry). */
+  const [confirmDelete, setConfirmDelete] = useState<Agent | null>(null);
+
+  // Escape dismisses the context menu; clicks are handled by its backdrop.
+  useEffect(() => {
+    if (contextMenu === null) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [contextMenu]);
+
+  const openContextMenu = (event: ReactMouseEvent, agentId: string) => {
+    event.preventDefault();
+    setContextMenu({
+      agentId,
+      x: Math.min(event.clientX, window.innerWidth - MENU_WIDTH - 8),
+      y: Math.min(event.clientY, window.innerHeight - MENU_HEIGHT - 8),
+    });
+  };
+  // Re-render every 30s so relative timestamps ("Now" → "14:32") stay honest.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
   const accountRef = useRef<HTMLDivElement>(null);
   const { closing, requestClose, finishClose } = useExitAnimation(() => setMenuOpen(false));
 
@@ -272,35 +338,183 @@ export function Sidebar({
             No Blobs yet
           </li>
         ) : null}
-        {agents.map((agent) => {
-          const selected = agent.id === selectedId;
+        {[...agents]
+          .filter((candidate) => candidate.hidden !== true)
+          // Stable sort: pinned rise to the top, everything else keeps order.
+          .sort((a, b) => (b.pinned === true ? 1 : 0) - (a.pinned === true ? 1 : 0))
+          .map((agent) => {
+            const selected = agent.id === selectedId;
+            return (
+              <li key={agent.id}>
+                <button
+                  type="button"
+                  className={selected ? "agent-row agent-row-selected" : "agent-row"}
+                  aria-current={selected ? "true" : undefined}
+                  title={collapsed ? agent.name : undefined}
+                  onClick={() => onSelect(agent.id)}
+                  onContextMenu={(event) => openContextMenu(event, agent.id)}
+                >
+                  <BlobAvatar tone={agent.tone} shape={agent.shape} />
+                  <span className="agent-row-text">
+                    <span className="agent-row-top">
+                      <span className="agent-name">{agent.name}</span>
+                      <span className="agent-time">
+                        {agent.lastActivityAt === undefined
+                          ? agent.time
+                          : formatAgentTime(agent.lastActivityAt, now)}
+                      </span>
+                    </span>
+                    <span className="agent-row-bottom">
+                      <span className="agent-snippet">{agent.snippet}</span>
+                      {agent.unread === true ? (
+                        <span className="unread-dot" role="status" aria-label="Unread messages" />
+                      ) : null}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+      </ul>
+
+      {contextMenu !== null &&
+        (() => {
+          const target = agents.find((candidate) => candidate.id === contextMenu.agentId);
+          if (target === undefined) {
+            return null;
+          }
+          const item = (
+            label: string,
+            icon: React.ReactNode,
+            action: () => void,
+            danger = false,
+          ) => (
+            <button
+              type="button"
+              className={danger ? "context-menu-item context-menu-danger" : "context-menu-item"}
+              role="menuitem"
+              onClick={() => {
+                setContextMenu(null);
+                action();
+              }}
+            >
+              {icon}
+              {label}
+            </button>
+          );
           return (
-            <li key={agent.id}>
+            // biome-ignore lint/a11y/noStaticElementInteractions: transparent scrim; click-away mirrors Escape
+            // biome-ignore lint/a11y/useKeyWithClickEvents: Escape is handled by the window listener
+            <div
+              className="context-menu-scrim"
+              onClick={() => setContextMenu(null)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setContextMenu(null);
+              }}
+            >
+              {/* Containment: keep item clicks from reaching the scrim's dismiss.
+                  Items are real buttons, so no key handler is needed here. */}
+              {/* biome-ignore lint/a11y/useKeyWithClickEvents: items are real buttons */}
+              <div
+                className="context-menu"
+                role="menu"
+                aria-label={`Actions for ${target.name}`}
+                style={{ left: contextMenu.x, top: contextMenu.y }}
+                onClick={(event) => event.stopPropagation()}
+              >
+                {target.pinned === true
+                  ? item("Unpin", <PinOff size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
+                      onUpdateBlob(target.id, { pinned: false }),
+                    )
+                  : item("Pin", <Pin size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
+                      onUpdateBlob(target.id, { pinned: true }),
+                    )}
+                {item(
+                  "Mark as Unread",
+                  <Bell size={15} strokeWidth={1.8} aria-hidden="true" />,
+                  () => onUpdateBlob(target.id, { unread: true }),
+                )}
+                <hr className="context-menu-separator" />
+                {item(
+                  "Edit Profile",
+                  <Pencil size={15} strokeWidth={1.8} aria-hidden="true" />,
+                  () => onEditProfile(target.id),
+                )}
+                {item("Duplicate", <Copy size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
+                  onDuplicate(target.id),
+                )}
+                <hr className="context-menu-separator" />
+                {item(
+                  "Copy conversation ID",
+                  <Link size={15} strokeWidth={1.8} aria-hidden="true" />,
+                  () => void navigator.clipboard?.writeText(target.id),
+                )}
+                <hr className="context-menu-separator" />
+                {item(
+                  "Hide from sidebar",
+                  <EyeOff size={15} strokeWidth={1.8} aria-hidden="true" />,
+                  () => onUpdateBlob(target.id, { hidden: true }),
+                )}
+                {item(
+                  "Delete",
+                  <Trash2 size={15} strokeWidth={1.8} aria-hidden="true" />,
+                  // Styled dialog: window.confirm never shows in the webview.
+                  () => setConfirmDelete(target),
+                  true,
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+      {confirmDelete !== null ? (
+        // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-to-dismiss mirrors Escape
+        // biome-ignore lint/a11y/useKeyWithClickEvents: Escape is handled on the dialog
+        <div
+          className="modal-backdrop"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setConfirmDelete(null);
+            }
+          }}
+        >
+          <div
+            className="confirm-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={`Delete ${confirmDelete.name}`}
+            tabIndex={-1}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setConfirmDelete(null);
+              }
+            }}
+          >
+            <h2 className="confirm-title">{`Delete \u201c${confirmDelete.name}\u201d`}</h2>
+            <p className="confirm-body">
+              This permanently deletes the agent and its chat history. This can't be undone.
+            </p>
+            <div className="confirm-actions">
+              <button type="button" className="modal-button" onClick={() => setConfirmDelete(null)}>
+                Cancel
+              </button>
               <button
                 type="button"
-                className={selected ? "agent-row agent-row-selected" : "agent-row"}
-                aria-current={selected ? "true" : undefined}
-                title={collapsed ? agent.name : undefined}
-                onClick={() => onSelect(agent.id)}
+                className="modal-button confirm-danger"
+                // biome-ignore lint/a11y/noAutofocus: destructive dialogs focus their primary action
+                autoFocus
+                onClick={() => {
+                  onDelete(confirmDelete.id);
+                  setConfirmDelete(null);
+                }}
               >
-                <BlobAvatar tone={agent.tone} shape={agent.shape} />
-                <span className="agent-row-text">
-                  <span className="agent-row-top">
-                    <span className="agent-name">{agent.name}</span>
-                    <span className="agent-time">{agent.time}</span>
-                  </span>
-                  <span className="agent-row-bottom">
-                    <span className="agent-snippet">{agent.snippet}</span>
-                    {agent.unread === true ? (
-                      <span className="unread-dot" role="status" aria-label="Unread messages" />
-                    ) : null}
-                  </span>
-                </span>
+                Delete
               </button>
-            </li>
-          );
-        })}
-      </ul>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="sidebar-footer">
         {/* Collapsed rail: + moves down here, above the account avatar. Only

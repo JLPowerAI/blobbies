@@ -1,5 +1,14 @@
-import { ChevronDown, CircleArrowDown, Settings, X } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { CircleArrowDown, Cpu, Settings, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ExternalLink } from "@/components/ExternalLink";
+import { PillSelect } from "@/components/PillSelect";
+import {
+  getOllamaVersion,
+  isOllamaInstalled,
+  listOllamaModels,
+  type OllamaModel,
+  startOllama,
+} from "@/lib/ollama";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 export const MAX_USER_NAME_LENGTH = 32;
@@ -15,38 +24,73 @@ interface SettingsModalProps {
   onThemeChange: (theme: ThemePreference) => void;
   timezone: string;
   onTimezoneChange: (timezone: string) => void;
+  model: string;
+  onModelChange: (model: string) => void;
   onClose: () => void;
 }
 
-function PillSelect({
-  id,
-  label,
-  value,
-  onChange,
-  children,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  children: ReactNode;
-}) {
-  return (
-    <span className="pill-select">
-      <select
-        id={id}
-        aria-label={label}
-        value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
-      >
-        {children}
-      </select>
-      <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className="pill-select-chevron" />
-    </span>
-  );
+/** What the Model tab knows about the local Ollama install right now. */
+type OllamaStatus =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "not-installed" }
+  | { kind: "stopped" }
+  | { kind: "starting" }
+  | { kind: "start-failed" }
+  | { kind: "running"; version: string; models: OllamaModel[] };
+
+/** Status-dot tone per Ollama state. */
+const OLLAMA_DOT_TONE: Record<OllamaStatus["kind"], "wait" | "err" | "warn" | "ok"> = {
+  idle: "wait",
+  checking: "wait",
+  "not-installed": "err",
+  stopped: "warn",
+  starting: "wait",
+  "start-failed": "err",
+  running: "ok",
+};
+
+function ollamaBlurb(status: OllamaStatus): string {
+  switch (status.kind) {
+    case "idle":
+    case "checking":
+      return "Checking your local Ollama\u2026";
+    case "not-installed":
+      return "Not found on this machine. Blobbies runs models locally through Ollama, so nothing ever leaves your device.";
+    case "stopped":
+      return "Installed, but not running.";
+    case "starting":
+      return "Starting Ollama\u2026";
+    case "start-failed":
+      return "Couldn't start Ollama. Try opening the Ollama app yourself, then re-check.";
+    case "running": {
+      const count = status.models.length;
+      return `Running v${status.version} \u00b7 ${count} ${count === 1 ? "model" : "models"} downloaded`;
+    }
+  }
 }
 
-/** Settings dialog: General (account, appearance, agent) and Updates tabs. */
+function modelBlurb(status: OllamaStatus): string {
+  if (status.kind === "running") {
+    return status.models.length === 0
+      ? "No models downloaded yet. Run `ollama pull gemma3`, then re-check."
+      : "Your Blobs think with this model. Everything stays on your device.";
+  }
+  return "Available once Ollama is installed and running.";
+}
+
+/** Probe the local Ollama install/server and report the result. */
+async function probeOllama(setStatus: (status: OllamaStatus) => void): Promise<void> {
+  setStatus({ kind: "checking" });
+  const version = await getOllamaVersion();
+  if (version !== null) {
+    setStatus({ kind: "running", version, models: await listOllamaModels() });
+    return;
+  }
+  setStatus((await isOllamaInstalled()) ? { kind: "stopped" } : { kind: "not-installed" });
+}
+
+/** Settings dialog: General (account, appearance, agent), Model, and Updates tabs. */
 export function SettingsModal({
   userName,
   onUserNameChange,
@@ -54,13 +98,34 @@ export function SettingsModal({
   onThemeChange,
   timezone,
   onTimezoneChange,
+  model,
+  onModelChange,
   onClose,
 }: SettingsModalProps) {
-  const [tab, setTab] = useState<"general" | "updates">("general");
+  const [tab, setTab] = useState<"general" | "model" | "updates">("general");
   const [updateStatus, setUpdateStatus] = useState("You're up to date");
   const [track, setTrack] = useState("stable");
+  const [ollama, setOllama] = useState<OllamaStatus>({ kind: "idle" });
   const dialogRef = useRef<HTMLDivElement>(null);
   const { closing, requestClose, finishClose } = useExitAnimation(onClose);
+
+  // Probe lazily: only once the Model tab is first opened.
+  useEffect(() => {
+    if (tab === "model" && ollama.kind === "idle") {
+      void probeOllama(setOllama);
+    }
+  }, [tab, ollama.kind]);
+
+  const availableModels = ollama.kind === "running" ? ollama.models : [];
+
+  const turnOnOllama = async () => {
+    setOllama({ kind: "starting" });
+    if (await startOllama()) {
+      await probeOllama(setOllama);
+      return;
+    }
+    setOllama({ kind: "start-failed" });
+  };
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -128,6 +193,15 @@ export function SettingsModal({
           >
             <Settings size={15} strokeWidth={1.8} aria-hidden="true" />
             General
+          </button>
+          <button
+            type="button"
+            className={tab === "model" ? "rail-item rail-item-active" : "rail-item"}
+            aria-current={tab === "model" ? "true" : undefined}
+            onClick={() => setTab("model")}
+          >
+            <Cpu size={15} strokeWidth={1.8} aria-hidden="true" />
+            Model
           </button>
           <button
             type="button"
@@ -225,7 +299,86 @@ export function SettingsModal({
                 </div>
               </div>
             </>
-          ) : (
+          ) : null}
+
+          {tab === "model" ? (
+            <>
+              <h2 className="modal-title">Model</h2>
+
+              <p className="modal-section-label">Ollama</p>
+              <div className="modal-card">
+                <div className="modal-row modal-row-multiline">
+                  <span className="modal-row-text">
+                    <span className="modal-row-title ollama-title">
+                      <span
+                        className={`ollama-dot ollama-dot-${OLLAMA_DOT_TONE[ollama.kind]}`}
+                        aria-hidden="true"
+                      />
+                      Ollama
+                    </span>
+                    <span className="modal-row-blurb" aria-live="polite">
+                      {ollamaBlurb(ollama)}
+                    </span>
+                  </span>
+                  {ollama.kind === "not-installed" ? (
+                    <ExternalLink href="https://ollama.com/download" className="modal-button">
+                      Get Ollama
+                    </ExternalLink>
+                  ) : ollama.kind === "stopped" ||
+                    ollama.kind === "start-failed" ||
+                    ollama.kind === "starting" ? (
+                    <button
+                      type="button"
+                      className="modal-button"
+                      disabled={ollama.kind === "starting"}
+                      onClick={() => void turnOnOllama()}
+                    >
+                      {ollama.kind === "starting" ? "Starting\u2026" : "Turn On"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="modal-button"
+                      disabled={ollama.kind !== "running"}
+                      onClick={() => void probeOllama(setOllama)}
+                    >
+                      Re-check
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <p className="modal-section-label">Model</p>
+              <div className="modal-card">
+                <div className="modal-row modal-row-multiline">
+                  <span className="modal-row-text">
+                    <label className="modal-row-title" htmlFor="model-select">
+                      Chat model
+                    </label>
+                    <span className="modal-row-blurb">{modelBlurb(ollama)}</span>
+                  </span>
+                  <PillSelect
+                    id="model-select"
+                    label="Chat model"
+                    value={model}
+                    onChange={onModelChange}
+                  >
+                    <option value="">Choose a model</option>
+                    {model !== "" && !availableModels.some((entry) => entry.name === model) ? (
+                      <option value={model}>{`${model} (not downloaded)`}</option>
+                    ) : null}
+                    {availableModels.map((entry) => (
+                      <option key={entry.name} value={entry.name}>
+                        {entry.name}
+                      </option>
+                    ))}
+                  </PillSelect>
+                </div>
+              </div>
+            </>
+          ) : null}
+
+          {tab === "updates" ? (
             <>
               <h2 className="modal-title">Updates</h2>
 
@@ -269,7 +422,7 @@ export function SettingsModal({
                 </div>
               </div>
             </>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

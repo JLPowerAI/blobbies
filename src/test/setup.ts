@@ -3,6 +3,19 @@ import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { clearFallbackBackend } from "@/lib/store";
 
+// jsdom implements scrollTop but not Element.scrollTo; map one to the other
+// so scroll-follow logic runs (jsdom heights are 0, so it lands instantly).
+if (typeof Element.prototype.scrollTo !== "function") {
+  Element.prototype.scrollTo = function scrollTo(
+    this: Element,
+    options?: ScrollToOptions | number,
+  ) {
+    if (typeof options === "object" && options !== null && typeof options.top === "number") {
+      this.scrollTop = options.top;
+    }
+  } as Element["scrollTo"];
+}
+
 afterEach(() => {
   cleanup();
   // The store's in-memory fallback survives module reuse between tests;

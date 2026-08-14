@@ -13,9 +13,27 @@ export default defineConfig({
   plugins: [react()],
 
   resolve: {
-    alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
-    },
+    alias: [
+      { find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) },
+      // gg-ai's OpenAI client refuses to construct in a webview; the shim
+      // forces `dangerouslyAllowBrowser` (safe: localhost Ollama, no real key).
+      {
+        find: /^openai$/,
+        replacement: fileURLToPath(new URL("./src/lib/openai-browser.ts", import.meta.url)),
+      },
+    ],
+  },
+
+  // Keep gg-ai in the plugin pipeline so the "openai" alias above applies to
+  // its imports during dev pre-bundling as well.
+  optimizeDeps: {
+    exclude: ["@kenkaiiii/gg-ai", "@kenkaiiii/gg-agent"],
+  },
+
+  // gg-ai's dist reads `process.env.*` at module scope, which throws in a
+  // browser/webview (no `process`). Rewrite the expression to an empty object.
+  define: {
+    "process.env": "{}",
   },
 
   // Tauri ships its own webview: target it directly instead of legacy browsers.
