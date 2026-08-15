@@ -58,7 +58,7 @@ describe("live tools", () => {
     async () => {
       const result = await toolset().call("web_fetch", { url: "https://example.com/" });
       console.log(`   web_fetch -> ${result.replace(/\s+/g, " ").slice(0, 160)}`);
-      expect(result).toContain("Untrusted page content");
+      expect(result).toContain("EXTERNAL_UNTRUSTED_CONTENT");
       expect(result.toLowerCase()).toContain("example domain");
     },
     TIMEOUT_MS,
