@@ -20,6 +20,7 @@ import {
   useState,
 } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
+import { MarkdownContent } from "@/components/MarkdownContent";
 import { PillSelect } from "@/components/PillSelect";
 import type { Agent, Message } from "@/data/agents";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
@@ -64,14 +65,19 @@ function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }
       {message.replyTo === undefined ? null : (
         <span className="bubble-quote">{message.replyTo}</span>
       )}
-      {message.segments.map((segment) =>
-        segment.accent === true ? (
-          <span key={segment.text} className="bubble-accent">
-            {segment.text}
-          </span>
-        ) : (
-          <span key={segment.text}>{segment.text}</span>
-        ),
+      {message.author === "user" ? (
+        // The user's own words render verbatim; only the agent speaks markdown.
+        message.segments.map((segment) =>
+          segment.accent === true ? (
+            <span key={segment.text} className="bubble-accent">
+              {segment.text}
+            </span>
+          ) : (
+            <span key={segment.text}>{segment.text}</span>
+          ),
+        )
+      ) : (
+        <MarkdownContent text={message.segments.map((segment) => segment.text).join("")} />
       )}
     </div>
   );
