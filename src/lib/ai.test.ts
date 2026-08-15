@@ -137,6 +137,43 @@ describe("streamBlobTurn", () => {
     expect(text).toBe("Here are the three latest models, in full.");
   });
 
+  it("discards preamble said before a tool call, keeping only the answer", async () => {
+    let call = 0;
+    fetchHandler = async () => {
+      call++;
+      const body =
+        call === 1
+          ? // "Let me search for that." then a tool call: preamble, not an answer.
+            `${sseChunk({ role: "assistant", content: "Let me search for that." })}${sseChunk(
+              {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "c1",
+                    type: "function",
+                    function: { name: "web_search", arguments: '{"query":"x"}' },
+                  },
+                ],
+              },
+              "tool_calls",
+            )}data: [DONE]\n\n`
+          : `${sseChunk({ role: "assistant", content: "The answer is 42." })}${sseChunk(
+              {},
+              "stop",
+            )}data: [DONE]\n\n`;
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "what is it?" }],
+      memory: { list: () => [], save: () => {} },
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    // Previously these concatenated into "Let me search for that.The answer..."
+    expect(text).toBe("The answer is 42.");
+  });
+
   it("clips an oversized description at a sentence boundary, never mid-word", async () => {
     const longDescription = `${"I help with drafts. ".repeat(80)}And this trailing sentence runs far past the display cap without a break`;
     fetchHandler = async (input) => {

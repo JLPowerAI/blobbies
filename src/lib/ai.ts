@@ -636,6 +636,9 @@ export async function streamBlobTurn(options: {
   }
   if (needsAnswer) {
     try {
+      // Cleared first: this round has no tools, so it cannot hit the budget,
+      // and a stale flag would make every later turn pay for a rescue round.
+      cutShort = false;
       const finished = await runLoop("none");
       // Keep the fragment only if the retry somehow produced nothing at all.
       text = finished.trim() === "" ? text : finished;
