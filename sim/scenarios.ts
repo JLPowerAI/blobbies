@@ -311,4 +311,17 @@ export const scenarios: Scenario[] = [
       },
     ],
   },
+  {
+    // The mirror of restraint: web tools are gated behind the router's
+    // needs_web verdict, so this proves the gate opens — a misrouted `false`
+    // here would silently amputate search from every Blob.
+    name: "web: an explicit search request still reaches the web",
+    start: { ...newBlob("Ken"), title: "Assistant", description: "Helps Ken." },
+    turns: [
+      {
+        say: "Search the web for the latest Ollama release and tell me what's new.",
+        expect: [replied, calledTool("web_search")],
+      },
+    ],
+  },
 ];

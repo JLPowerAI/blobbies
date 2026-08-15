@@ -334,8 +334,10 @@ function makeWebSearchTool() {
   const tool: AgentTool<typeof parameters> = {
     name: "web_search",
     description:
-      "Search the web and return the top results (title, URL, snippet). " +
-      "Follow up with web_fetch to read a result.",
+      "Search the public web for news, documentation and facts about the " +
+      "world. Returns the top results (title, URL, snippet); follow up with " +
+      "web_fetch to read one. Useless for anything about the user — their " +
+      "facts are in your memory, not on the web.",
     parameters,
     execute: async (args, context) => {
       // Engines rate-limit and serve bot challenges, so try each in turn and
@@ -727,9 +729,13 @@ export function renderMemories(memories: BlobMemory[]): string {
     return "";
   }
   // Titled section so it reads as data, matching blobSystemPrompt's layout.
+  // No tool instructions here: the chat loop has no memory tools (writes go
+  // through the intent router), and "never search the web for these" is the
+  // priming that stops a small model googling the user's own facts — the sim
+  // caught it searching "Ken Kai training schedule" instead of reading [1].
   return (
     "\n\n## What you remember about the user\n" +
-    "Each fact is numbered. To delete one, call forget with its number; to " +
-    `correct one, call update_memory with its number.\n${lines.join("\n")}`
+    "These numbered facts are things the user already told you. Answer " +
+    `questions about them directly from this list; never search the web for them.\n${lines.join("\n")}`
   );
 }

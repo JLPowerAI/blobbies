@@ -1,6 +1,7 @@
 import type { Message } from "@kenkaiiii/gg-ai";
 import { type BlobMemory, renderMemories } from "@/lib/blob-tools";
 import { OLLAMA_URL } from "@/lib/ollama";
+import { OLLAMA_KEEP_ALIVE, OLLAMA_NUM_CTX } from "@/lib/ollama-native";
 
 /**
  * Intent routing: decide what a user's message asks of the Blob using
@@ -23,11 +24,24 @@ import { OLLAMA_URL } from "@/lib/ollama";
  */
 
 /** What the router decided the user's last message calls for. */
-export type Intent =
+export type Intent = (
   | { action: "none" }
   | { action: "save_fact"; fact: string }
   | { action: "delete_fact"; memoryNumber: number }
-  | { action: "change_job" };
+  | { action: "change_job" }
+) & {
+  /**
+   * Whether answering needs the public internet. Decides if the chat loop
+   * gets the web tools at all: offered unconditionally, qwen3.5:2b googled
+   * "Ken Kai training schedule" instead of reading its own memory in 4/8
+   * runs — sampling tweaks moved that between 38% and 63%, never to 100%.
+   * The same model answering a required boolean under a grammar is the
+   * mechanism this file exists for. True on any router failure: wrongly
+   * offered tools are the old behaviour, wrongly withheld ones are a
+   * capability silently gone.
+   */
+  needsWeb: boolean;
+};
 
 /**
  * Hard ceiling on the router call. It runs before every reply, so a stalled
@@ -52,14 +66,34 @@ const ROUTER_MAX_TOKENS = 256;
  */
 const ROUTER_TEMPERATURE = 0;
 
+/**
+ * Options for every router/reconcile call. `num_ctx` MUST match the chat
+ * turns: Ollama reloads the whole model whenever a request's runner options
+ * differ from the loaded runner's (sched.go `needsReload` deep-equals them),
+ * so an intent call without it would swap the runner — and dump its KV cache
+ * — twice on every single message: once for this call, once for the reply.
+ */
+const ROUTER_OPTIONS = {
+  temperature: ROUTER_TEMPERATURE,
+  num_predict: ROUTER_MAX_TOKENS,
+  num_ctx: OLLAMA_NUM_CTX,
+} as const;
+
 /** Grammar the model must fill; `action` is a closed enum, so it cannot stray. */
 const INTENT_SCHEMA = {
   type: "object",
-  required: ["action"],
+  // Every field the mapping reads is required: an optional field is exactly
+  // what a small model omits. Measured on qwen3.5:2b at temperature 0 — with
+  // memory_number optional it emitted `delete_fact` WITHOUT the number on
+  // every run (the mapping then had to discard the delete), with it required
+  // the same model filled it correctly 3/3. Fields that don't apply to the
+  // chosen action are emitted anyway and ignored (0 / '' by convention).
+  required: ["action", "needs_web", "memory_number", "fact"],
   properties: {
     action: { type: "string", enum: ["none", "save_fact", "delete_fact", "change_job"] },
     fact: { type: "string" },
     memory_number: { type: "integer" },
+    needs_web: { type: "boolean" },
   },
 } as const;
 
@@ -72,26 +106,43 @@ const ROUTER_PROMPT =
   "You classify the user's last message for a personal assistant.\n\n" +
   "save_fact -> the user states something lasting about themselves (schedule, " +
   "preferences, name, situation), or tells you to remember it. Copy it into " +
-  "`fact` as a short sentence about the user.\n" +
+  "`fact` as a short sentence about the user. `fact` restates what the user " +
+  "JUST SAID in this message — NEVER copy a sentence from the saved " +
+  "memories list; those are already saved.\n" +
   "delete_fact -> the user asks you to forget, delete or drop something you " +
-  "saved. Put that memory's number in `memory_number`.\n" +
+  "saved. Put that memory's number in `memory_number`. For every other " +
+  "action set `memory_number` to 0, and for every action except save_fact " +
+  "set `fact` to ''.\n" +
   "change_job -> the user wants you to work as a different KIND of assistant " +
   "from now on (a new role or profession for you). Choose this ONLY when what " +
   "YOU do changes. If the change is about the USER's own life or about a fact " +
   "you saved, it is save_fact, never change_job.\n" +
   "none -> questions, greetings, thanks, or a request to do a task.\n\n" +
+  "Separately, set `needs_web`: true when answering could use PUBLIC " +
+  "information — news, weather, prices, documentation, books, people, facts " +
+  "about the world — or the user asks to search or read a page. false when " +
+  "the answer is about the user or the conversation itself: their own " +
+  "schedule, preferences, memories, or what was said earlier. The web does " +
+  "not know the user.\n\n" +
   "Examples:\n" +
-  "'Remember I train Mondays' -> save_fact, fact='the user trains on Mondays'\n" +
-  "'I moved training to Tuesdays' -> save_fact, fact='the user trains on Tuesdays'\n" +
+  "'Remember I train Mondays' -> save_fact, fact='the user trains on Mondays', needs_web=false\n" +
+  "'I moved training to Tuesdays' -> save_fact, fact='the user trains on Tuesdays', needs_web=false\n" +
   "'Actually I train Fridays now. Update what you remember.' -> save_fact, " +
-  "fact='the user trains on Fridays'\n" +
-  "'My sister is called Mia' -> save_fact, fact=\"the user's sister is called Mia\"\n" +
-  "'Delete what you saved about my address' -> delete_fact\n" +
-  "'Be my writing coach instead' -> change_job\n" +
-  "'Stop being my coach, help me with recipes now' -> change_job\n" +
-  "'What day do I train?' -> none\n" +
-  "'Can you help me plan the week?' -> none\n" +
-  "'thanks' -> none\n\n" +
+  "fact='the user trains on Fridays', needs_web=false\n" +
+  "'My sister is called Mia' -> save_fact, fact=\"the user's sister is called Mia\", needs_web=false\n" +
+  "'Rough week, Mia and I broke up' (saved: [1] the user's girlfriend is " +
+  "called Mia) -> save_fact, fact='the user and Mia broke up', needs_web=false\n" +
+  "'Delete what you saved about my address' (saved: [2] the user's address...) " +
+  "-> delete_fact, memory_number=2, needs_web=false\n" +
+  "'Be my writing coach instead' -> change_job, needs_web=false\n" +
+  "'What day do I train?' -> none, needs_web=false\n" +
+  "'What's the weather in Lisbon tomorrow?' -> none, needs_web=true\n" +
+  "'Who wrote that book?' -> none, needs_web=true\n" +
+  "'Search for the latest Node.js release notes' -> none, needs_web=true\n" +
+  "'I moved to Lisbon — what's the weather there?' -> save_fact, " +
+  "fact='the user lives in Lisbon', needs_web=true\n" +
+  "'Can you help me plan the week?' -> none, needs_web=false\n" +
+  "'thanks' -> none, needs_web=false\n\n" +
   "A message ending in '?' is almost always none.";
 
 /**
@@ -158,24 +209,29 @@ export async function reconcileMemories(options: {
         model: options.model,
         stream: false,
         think: false,
+        keep_alive: OLLAMA_KEEP_ALIVE,
         format: RECONCILE_SCHEMA,
-        options: { temperature: ROUTER_TEMPERATURE, num_predict: ROUTER_MAX_TOKENS },
+        options: ROUTER_OPTIONS,
         messages: [
           {
             role: "system",
             content:
               "You keep a person's saved facts up to date.\n\n" +
+              "Every fact — new and saved — is about the SAME one person, whether " +
+              "it calls them 'the user', a name, or anything else. Never treat a " +
+              "different wording of the subject as a different person.\n\n" +
               "Given a NEW fact, list the numbers of saved facts that are now " +
               "WRONG or OUT OF DATE because of it. A saved fact is obsolete when " +
               "the new fact replaces it or contradicts it \u2014 people change jobs, " +
               "partners, cities and schedules, and the old version is no longer " +
               "true. Facts that can BOTH be true at once are not obsolete.\n\n" +
               "Examples:\n" +
-              "new: 'Ken and Sarah broke up' / saved: '1. Ken's girlfriend is " +
-              "called Sarah' -> obsolete [1]\n" +
-              "new: 'Ken works at Beta Corp' / saved: '1. Ken works at Acme' -> obsolete [1]\n" +
-              "new: 'Ken is allergic to shellfish' / saved: '1. Ken is allergic " +
-              "to peanuts' -> obsolete [] (both are true)\n" +
+              "new: 'the user and Sarah broke up' / saved: '1. Ken's girlfriend is " +
+              "called Sarah' -> obsolete [1] (same person, relationship over)\n" +
+              "new: 'the user works at Beta Corp' / saved: '1. Ken works at Acme' -> obsolete [1]\n" +
+              "new: 'the user is allergic to shellfish' / saved: '1. Ken is allergic " +
+              "to peanuts' -> obsolete [] (same person, but two allergies can " +
+              "BOTH be true — adding is not replacing)\n" +
               "new: 'Ken trains on Fridays' / saved: '1. Ken trains on Mondays', " +
               "'2. Ken has a sister' -> obsolete [1]",
           },
@@ -234,7 +290,7 @@ export async function routeIntent(options: {
 }): Promise<Intent> {
   const text = lastUserText(options.messages);
   if (text.trim() === "") {
-    return { action: "none" };
+    return { action: "none", needsWeb: true };
   }
   // Chain the caller's abort with our own deadline, so cancelling the turn
   // cancels the router too and neither can outlive the other.
@@ -257,8 +313,9 @@ export async function routeIntent(options: {
         model: options.model,
         stream: false,
         think: false,
+        keep_alive: OLLAMA_KEEP_ALIVE,
         format: INTENT_SCHEMA,
-        options: { temperature: ROUTER_TEMPERATURE, num_predict: ROUTER_MAX_TOKENS },
+        options: ROUTER_OPTIONS,
         messages: [
           {
             role: "system",
@@ -278,36 +335,40 @@ export async function routeIntent(options: {
       }),
     });
     if (!response.ok) {
-      return { action: "none" };
+      return { action: "none", needsWeb: true };
     }
     const payload = (await response.json()) as { message?: { content?: string } };
     const parsed: unknown = JSON.parse(payload.message?.content ?? "{}");
     if (parsed === null || typeof parsed !== "object") {
-      return { action: "none" };
+      return { action: "none", needsWeb: true };
     }
     const record = parsed as Record<string, unknown>;
+    // Fail open: anything but an explicit false keeps the web tools.
+    const needsWeb = record.needs_web !== false;
     switch (record.action) {
       case "save_fact": {
         const fact = typeof record.fact === "string" ? record.fact.trim() : "";
-        return fact === "" ? { action: "none" } : { action: "save_fact", fact };
+        return fact === "" ? { action: "none", needsWeb } : { action: "save_fact", fact, needsWeb };
       }
       case "delete_fact": {
         const number = record.memory_number;
         return typeof number === "number" && Number.isInteger(number) && number >= 1
-          ? { action: "delete_fact", memoryNumber: number }
-          : { action: "none" };
+          ? { action: "delete_fact", memoryNumber: number, needsWeb }
+          : { action: "none", needsWeb };
       }
       case "change_job":
         // Belt and braces: a memory-flavoured message is never a job change,
         // whatever the classifier says.
-        return MEMORY_WORDS.test(text) ? { action: "none" } : { action: "change_job" };
+        return MEMORY_WORDS.test(text)
+          ? { action: "none", needsWeb }
+          : { action: "change_job", needsWeb };
       default:
-        return { action: "none" };
+        return { action: "none", needsWeb };
     }
   } catch {
     // Timeout, abort, offline server, malformed JSON: the turn continues with
     // the tools, which is exactly the behaviour before the router existed.
-    return { action: "none" };
+    return { action: "none", needsWeb: true };
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", onParentAbort);

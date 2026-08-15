@@ -15,7 +15,7 @@ describe("routeIntent", () => {
       "fetch",
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         body = JSON.parse(String(init?.body));
-        return reply({ action: "save_fact", fact: "the user trains on Mondays" });
+        return reply({ action: "save_fact", fact: "the user trains on Mondays", needs_web: false });
       }),
     );
     try {
@@ -23,11 +23,19 @@ describe("routeIntent", () => {
         ...base,
         messages: [{ role: "user", content: "Remember I train Mondays" }],
       });
-      expect(intent).toEqual({ action: "save_fact", fact: "the user trains on Mondays" });
+      expect(intent).toEqual({
+        action: "save_fact",
+        fact: "the user trains on Mondays",
+        needsWeb: false,
+      });
       // A classifier must be reproducible and must not ramble.
       const options = body.options as Record<string, unknown>;
       expect(options.temperature).toBe(0);
       expect(options.num_predict).toBe(256);
+      // Must match the chat turns' window: a differing num_ctx makes Ollama
+      // reload the model (and dump its KV cache) twice per message.
+      expect(options.num_ctx).toBe(16384);
+      expect(body.keep_alive).toBe("30m");
       expect(body.format).toBeDefined();
     } finally {
       vi.unstubAllGlobals();
@@ -46,7 +54,8 @@ describe("routeIntent", () => {
         ...base,
         messages: [{ role: "user", content: "Forget my allergies" }],
       });
-      expect(intent).toEqual({ action: "none" });
+      // needsWeb fails open: a router failure must never remove a capability.
+      expect(intent).toEqual({ action: "none", needsWeb: true });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -70,7 +79,7 @@ describe("routeIntent", () => {
         signal: controller.signal,
       });
       controller.abort();
-      await expect(pending).resolves.toEqual({ action: "none" });
+      await expect(pending).resolves.toEqual({ action: "none", needsWeb: true });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -94,7 +103,7 @@ describe("routeIntent", () => {
         messages: [{ role: "user", content: "hello" }],
       });
       await vi.advanceTimersByTimeAsync(5_000);
-      await expect(pending).resolves.toEqual({ action: "none" });
+      await expect(pending).resolves.toEqual({ action: "none", needsWeb: true });
     } finally {
       vi.unstubAllGlobals();
       vi.useRealTimers();
@@ -104,14 +113,14 @@ describe("routeIntent", () => {
   it("rejects a malformed delete without a usable memory number", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => reply({ action: "delete_fact" })),
+      vi.fn(async () => reply({ action: "delete_fact", needs_web: false })),
     );
     try {
       const intent = await routeIntent({
         ...base,
         messages: [{ role: "user", content: "forget that" }],
       });
-      expect(intent).toEqual({ action: "none" });
+      expect(intent).toEqual({ action: "none", needsWeb: false });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -120,14 +129,14 @@ describe("routeIntent", () => {
   it("never treats a message about memory as a job change", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => reply({ action: "change_job" })),
+      vi.fn(async () => reply({ action: "change_job", needs_web: false })),
     );
     try {
       const intent = await routeIntent({
         ...base,
         messages: [{ role: "user", content: "Update what you remember about my training" }],
       });
-      expect(intent).toEqual({ action: "none" });
+      expect(intent).toEqual({ action: "none", needsWeb: false });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -141,9 +150,13 @@ describe("reconcileMemories", () => {
   ];
 
   it("returns the positions the model marks obsolete", async () => {
+    let body = "";
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => reply({ obsolete: [1] })),
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        body = String(init?.body);
+        return reply({ obsolete: [1] });
+      }),
     );
     try {
       const stale = await reconcileMemories({
@@ -152,6 +165,9 @@ describe("reconcileMemories", () => {
         existing,
       });
       expect(stale).toEqual([1]);
+      // Load-bearing prompt line: without it qwen3.5:9b treats 'the user' and
+      // a name as two people and refuses to supersede stale facts (sim: 0/3).
+      expect(body).toContain("SAME one person");
     } finally {
       vi.unstubAllGlobals();
     }

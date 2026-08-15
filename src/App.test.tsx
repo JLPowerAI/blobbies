@@ -308,11 +308,12 @@ describe("App", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("lists downloaded Ollama models in the settings Model tab", async () => {
-    // Deterministic local server: version probe succeeds, one model pulled.
+  it("lists downloaded Ollama models and frees the outgoing one on switch", async () => {
+    // Deterministic local server: version probe succeeds, two models pulled.
+    const unloads: unknown[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url.endsWith("/api/version")) {
           return new Response(JSON.stringify({ version: "0.5.0" }));
@@ -326,9 +327,19 @@ describe("App", () => {
                   size: 2_000_000_000,
                   details: { parameter_size: "3.2B" },
                 },
+                {
+                  name: "qwen3.5:9b",
+                  size: 6_600_000_000,
+                  details: { parameter_size: "9B" },
+                },
               ],
             }),
           );
+        }
+        if (url.endsWith("/api/chat")) {
+          // The only /api/chat traffic settings may produce is the unload.
+          unloads.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ done: true }));
         }
         throw new Error(`unexpected fetch: ${url}`);
       }),
@@ -349,8 +360,23 @@ describe("App", () => {
       const select = within(dialog).getByLabelText("Chat model");
       await user.selectOptions(select, "llama3.2:latest");
       expect(select).toHaveValue("llama3.2:latest");
+      // First pick came from "no model": nothing to free yet.
+      expect(unloads).toEqual([]);
+
+      // Switching models must release the outgoing one immediately —
+      // keep_alive: 0 — or it idles in RAM beside the new model for 30m.
+      await user.selectOptions(select, "qwen3.5:9b");
+      expect(unloads).toEqual([{ model: "llama3.2:latest", messages: [], keep_alive: 0 }]);
     } finally {
       vi.unstubAllGlobals();
+      // This test persists a model choice; later tests assume none is set.
+      // (When jsdom lacks localStorage, writePreference already no-oped and
+      // there is nothing to clean.)
+      try {
+        window.localStorage.removeItem("pref:model");
+      } catch {
+        // Storage unavailable: the preference never stuck.
+      }
     }
   });
 

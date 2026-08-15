@@ -76,6 +76,30 @@ export async function startOllama(): Promise<boolean> {
   return false;
 }
 
+/**
+ * Ask the server to release a model's memory now instead of waiting out its
+ * keep_alive timer. An empty-messages chat with `keep_alive: 0` is Ollama's
+ * documented unload; used when the user switches models so the old one
+ * (gigabytes of weights + KV cache) doesn't sit resident beside the new one
+ * for the rest of its 30-minute timer. Best-effort: on any failure the timer
+ * frees it eventually.
+ */
+export async function unloadOllamaModel(model: string): Promise<void> {
+  if (model === "") {
+    return;
+  }
+  try {
+    await fetch(`${OLLAMA_URL}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, messages: [], keep_alive: 0 }),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+  } catch {
+    // Server down or model already gone — nothing to free.
+  }
+}
+
 /** Models already pulled locally, via GET /api/tags. Empty when unreachable. */
 export async function listOllamaModels(): Promise<OllamaModel[]> {
   try {

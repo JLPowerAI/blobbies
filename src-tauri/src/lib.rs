@@ -31,6 +31,13 @@ pub fn run() {
             store::startup_maintenance(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Release the model's memory (weights + KV-cache snapshots, gigabytes)
+            // as soon as the app closes, instead of waiting out keep_alive.
+            if matches!(event, tauri::RunEvent::Exit) {
+                commands::ollama_unload_on_exit(app);
+            }
+        });
 }

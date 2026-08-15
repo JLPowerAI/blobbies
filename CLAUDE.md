@@ -1,0 +1,40 @@
+<!-- gg:init:start -->
+# Blobbies (repo: unshackled-bot)
+
+Tauri 2 desktop app: local AI agents ("Blobs") with persistent memories, personalities, and tools, running entirely against a local Ollama model.
+
+**Core product constraint — local-only is the whole point.** Blobbies competes with cloud assistants by keeping user data (emails, documents, memories, transcripts) on-device: local models only, nothing sent to any AI provider. Never wire in a cloud LLM API, remote telemetry, or any feature that ships user content off the device — that isn't a missing feature, it's the differentiator. Treat any outbound data flow of user content as a design bug.
+
+## Parts
+
+- `src/` — all business logic lives in the React frontend: prompt assembly, agent turn loop (`src/lib/ai.ts` → `streamBlobTurn()`), tool routing, memory reconciliation (`src/lib/intent.ts`).
+- `src-tauri/` — thin Rust shell: sandboxed JSON storage (`store.rs`), Ollama discovery/launch, OS integration. Not a lib crate; binary is capital-B `Blobbies` so the macOS dock name is right.
+- `sim/` — tuning harness (`*.sim.ts`): real `streamBlobTurn()` against live Ollama. Slow, non-deterministic, never gates commits/CI. Run via `pnpm sim` / `sim:caps` / `sim:tools` (needs Ollama running; `SIM_MODEL` env picks the model).
+
+## Gotchas / invariants
+
+- **Storage slice names are allowlisted in Rust.** `store.rs` only accepts root slices `settings|ui-layout|roster` and per-blob slices `config|routines|transcript` (UUID-validated blob ids). Adding a new persisted slice on the TS side without extending these arrays fails with `InvalidSliceKey`.
+- **The `openai` import is aliased in three places.** `vite.config.ts`, `vitest.config.ts`, and `vitest.sim.config.ts` each alias bare `openai` → `src/lib/openai-browser.ts` (forces `dangerouslyAllowBrowser`; the SDK refuses to construct in a webview/jsdom otherwise) and inline `@kenkaiiii/gg-ai`/`gg-agent` so the alias applies to *their* imports too. Both `define: { "process.env": "{}" }` entries exist because gg-ai reads `process.env` at module scope. Any new vitest/vite config must replicate all three pieces or gg-ai breaks at import time.
+- **tsconfig reference order matters.** `tsconfig.node.json` must stay before `tsconfig.app.json` in root `tsconfig.json` — TS7 build mode leaks `paths` between sibling projects and the wrong order breaks the `@/*` alias.
+- **Dev port 1421 is a cross-file contract.** `DEV_PORT` in `vite.config.ts` must equal `build.devUrl` in `src-tauri/tauri.conf.json`; `strictPort` makes Tauri fail fast if taken.
+- **Local-model tuning constants are load-bearing** (each has a test asserting it):
+  - Thinking is forced off unless explicitly opted in (`think: false` on the native path) — reasoning models otherwise burn ~20s of hidden tokens before the first visible word.
+  - Native `/api/chat` (not `/v1`) with `num_ctx: 16384` — the OpenAI-compat endpoint can't set `num_ctx`, so Ollama's 4096 default truncates long conversations mid-reply.
+  - Intent classifier uses `temperature: 0` — sim measured a small model calling `remember` 0/8 times at non-zero temp. Chat temperature is deliberately left at model default: a sweep measured restraint at 38–63% across 0.1/0.3/default — noise, not a lever.
+  - **The chat loop never gets memory or config tools.** All Blob-state writes go through the intent router (`routeIntent` → `applyIntent` / forced-configure); the loop's catalog is web-only, gated by the router's required `needs_web` boolean (fails open to true). Offered unconditionally, qwen3.5:2b googled the user's own facts in 4/8 runs and once deleted the memory it was asked about; gated, restraint and web-access both measure 8/8.
+  - Every field the intent mapping reads is `required` in the schema — optional `memory_number` was omitted by the model on every delete (grammar-legal, mapping discarded it, forgets went 0/3). Unused fields are emitted as 0 and ignored.
+  - Structured-output schemas must never carry `maxLength` — a grammar cap truncates the model mid-word; enforce length in the prompt.
+  - **Every** Ollama call (chat, router, reconcile, forced-configure) pins the same `num_ctx: 16384` — Ollama's scheduler deep-equals runner options and reloads the whole model (dumping the KV cache) on any mismatch, so one call without it thrashes the runner twice per message.
+  - Every call sends `keep_alive: "30m"` — the 5-minute server default unloads an idle model, costing a cold reload plus a from-scratch prefill on the user's next message. The other half of the deal: `ollama_unload_on_exit` in `commands.rs` runs `ollama stop <model>` on `RunEvent::Exit`, and `changeModel` in `App.tsx` calls `unloadOllamaModel` on the outgoing model when the user switches in the dropdown — otherwise Ollama keeps both resident side by side. Change any of the three only with the others in mind.
+  - No clock in the system prompt — prefix caching is exact-match, so a minute-level timestamp there re-prefills the entire transcript every turn. The clock is appended to the newest user message via `timeNote()`; history is capped by `trimHistory()` in block trims (not a sliding window) so the cached prefix stays byte-stable between trims.
+- **`capabilities/default.json` denies private ranges one glob per octet** — Tauri URL globs can't express ranges, so Docker 172.16–172.31 and CGNAT 100.64–100.127 are enumerated entry-by-entry under `http:default`. Removing one silently reopens SSRF-ish access from web tools.
+- **Sim tests are intentionally serial** (`fileParallelism: false`, `maxConcurrency: 1`): parallel runs fight over Ollama KV-cache slots and distort the timing report.
+- **Rust pinning is deliberate**: `rust-toolchain.toml` 1.90.0, `Cargo.toml` `rust-version = "1.90"`, edition 2024 — kept in sync so the MSRV-aware resolver doesn't hold back security patches. CI installs cargo-audit with `--locked` because unlocked install broke on the pinned rustc.
+
+## Workflow notes
+
+- `pnpm tauri:dev` for the full app (spawns `pnpm dev` itself); plain `pnpm dev` is frontend-only in a browser.
+- `pnpm build` chains `typecheck && vite build`; `tauri:build` reads `TAURI_ENV_PLATFORM`/`TAURI_ENV_DEBUG` to pick build target/minify.
+- Lefthook pre-push runs typecheck + test + clippy; pre-commit auto-fixes biome + rustfmt on staged files. `pnpm check` is the local equivalent of CI.
+- Rust checks live behind pnpm wrappers (`rs:fmt`, `rs:lint`, `rs:test`) — clippy runs with `-D warnings`.
+<!-- gg:init:end -->

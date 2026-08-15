@@ -77,6 +77,9 @@ describe("blob tools", () => {
     expect(block).toContain("[2] Dislikes mornings");
     // The opaque id is never shown: the sim caught models inventing them.
     expect(block).not.toContain("abc123");
+    // No tool instructions: the chat loop has no memory tools, and naming
+    // them here primed a small model to reach for tools instead of answering.
+    expect(block).not.toMatch(/forget|update_memory/);
     expect(renderMemories([])).toBe("");
   });
 

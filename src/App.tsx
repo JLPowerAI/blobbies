@@ -25,8 +25,9 @@ import {
   agents as seedAgents,
   transcriptFor,
 } from "@/data/agents";
-import { blobSystemPrompt, streamBlobTurn } from "@/lib/ai";
+import { blobSystemPrompt, streamBlobTurn, timeNote, trimHistory } from "@/lib/ai";
 import { reconcileMemories } from "@/lib/intent";
+import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
 import * as store from "@/lib/store";
 import "./App.css";
@@ -177,6 +178,14 @@ export function App() {
   };
 
   const changeModel = (next: string) => {
+    // Free the outgoing model's memory right away: Ollama keeps multiple
+    // models resident, so without this the old one idles in RAM beside the
+    // new one for the rest of its 30-minute keep_alive. Fire-and-forget —
+    // an in-flight reply on the old model still completes first (the
+    // scheduler queues the unload), and any failure just leaves the timer.
+    if (model !== "" && model !== next) {
+      void unloadOllamaModel(model);
+    }
     setModel(next);
     writePreference("pref:model", next);
   };
@@ -395,15 +404,25 @@ export function App() {
       return;
     }
     const aiMessages: AiMessage[] = [
-      // Rebuilt per turn: carries the current time, so it must never be cached.
+      // Byte-stable across turns (no clock inside): the system prompt plus the
+      // untrimmed history form the request prefix, and Ollama's KV cache only
+      // hits while that prefix is identical to the previous turn's.
       { role: "system", content: blobSystemPrompt(target, { userName, timezone }) },
-      ...history
-        .filter((entry): entry is Extract<Message, { kind: "text" }> => entry.kind === "text")
-        .map((entry): AiMessage => {
-          const role = entry.author === "user" ? ("user" as const) : ("assistant" as const);
-          return { role, content: entry.segments.map((segment) => segment.text).join("") };
-        }),
+      ...trimHistory(
+        history
+          .filter((entry): entry is Extract<Message, { kind: "text" }> => entry.kind === "text")
+          .map((entry): AiMessage => {
+            const role = entry.author === "user" ? ("user" as const) : ("assistant" as const);
+            return { role, content: entry.segments.map((segment) => segment.text).join("") };
+          }),
+      ),
     ];
+    // The clock changes every minute, so it rides on the newest user message
+    // — after everything cached — never in the system prompt (see timeNote).
+    const newest = aiMessages[aiMessages.length - 1];
+    if (newest !== undefined && newest.role === "user" && typeof newest.content === "string") {
+      newest.content = `${newest.content}\n\n${timeNote({ userName, timezone })}`;
+    }
     let text = "";
     const patchReply = (content: string) => {
       setSentByAgent((previous) => {

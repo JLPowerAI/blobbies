@@ -122,6 +122,59 @@ pub(crate) fn ollama_start() -> Result<()> {
         .map_err(|e| Error::Io(e.to_string()))
 }
 
+/// Free the model's memory when the app closes.
+///
+/// `keep_alive: "30m"` is right while the app runs — heavy chatters keep the
+/// model warm because every request resets the timer — but once the app is
+/// gone nothing will ever hit Ollama again, so holding gigabytes of weights
+/// and KV-cache snapshots for the rest of the timer is pure waste. Tying
+/// unload to app exit serves both usage patterns without a settings knob.
+///
+/// Best-effort by design: the model name comes from our own settings slice,
+/// `ollama stop` is spawned detached so exit is never delayed, and any
+/// failure (no settings, no binary, server already gone) just means memory
+/// is freed by the `keep_alive` timer instead.
+pub(crate) fn ollama_unload_on_exit(app: &tauri::AppHandle) {
+    use std::process::{Command, Stdio};
+
+    let Ok(root) = crate::store::data_root(app) else {
+        return;
+    };
+    let Ok(raw) = std::fs::read_to_string(root.join("settings.json")) else {
+        return;
+    };
+    let Ok(slice) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return;
+    };
+    let Some(model) = slice
+        .get("value")
+        .and_then(|value| value.get("model"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return;
+    };
+    // The name is one argv entry (no shell), but it still comes from a file
+    // the webview writes: allow only characters Ollama model names use.
+    if model.is_empty()
+        || model.len() > 200
+        || !model
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-/".contains(&byte))
+    {
+        return;
+    }
+    let Some(binary) = find_ollama_binary() else {
+        return;
+    };
+    // Detached: the child outlives us and the unload completes after exit.
+    let _ = Command::new(binary)
+        .args(["stop", model])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
 /// True when `ip` is on the public internet rather than this machine or the
 /// local network.
 ///

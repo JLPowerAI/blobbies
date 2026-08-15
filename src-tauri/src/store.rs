@@ -187,7 +187,7 @@ fn list_blob_ids(data_root: &Path) -> Vec<String> {
     ids
 }
 
-fn data_root(app: &tauri::AppHandle) -> Result<PathBuf> {
+pub(crate) fn data_root(app: &tauri::AppHandle) -> Result<PathBuf> {
     use tauri::Manager;
     app.path()
         .app_data_dir()
