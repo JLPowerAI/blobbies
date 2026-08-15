@@ -7,6 +7,9 @@ import { streamBlobTurn, streamLocalChat } from "@/lib/ai";
 let fetchHandler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => fetchHandler(input, init));
 
+/** Mirrors MAX_TOOL_ROUNDS in ai.ts: the budget a turn may spend on tools. */
+const MAX_ROUNDS = 25;
+
 const sseChunk = (delta: object, finish: string | null = null) =>
   `data: ${JSON.stringify({
     id: "1",
@@ -92,6 +95,46 @@ describe("streamBlobTurn", () => {
     });
     expect(configured).toEqual([{ title: "Therapist", description: "Listens first." }]);
     expect(text).toBe("All set.");
+  });
+
+  it("finishes a reply that was cut off by the tool-round budget", async () => {
+    // Reproduces the real failure: the model starts answering, calls another
+    // tool, and the loop hits maxTurns — leaving "From your search, here".
+    let call = 0;
+    fetchHandler = async () => {
+      call++;
+      // Every round but the last keeps requesting a tool, exhausting the
+      // budget. The final tool-free round is the one that must produce text.
+      const body =
+        call <= MAX_ROUNDS
+          ? `${sseChunk({ role: "assistant", content: "From your search, here" })}${sseChunk(
+              {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: `c${call}`,
+                    type: "function",
+                    function: { name: "web_search", arguments: '{"query":"x"}' },
+                  },
+                ],
+              },
+              "tool_calls",
+            )}data: [DONE]\n\n`
+          : `${sseChunk({
+              role: "assistant",
+              content: "Here are the three latest models, in full.",
+            })}${sseChunk({}, "stop")}data: [DONE]\n\n`;
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "latest models?" }],
+      memory: { list: () => [], save: () => {} },
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    // The user must never be left with the fragment.
+    expect(text).toBe("Here are the three latest models, in full.");
   });
 
   it("clips an oversized description at a sentence boundary, never mid-word", async () => {

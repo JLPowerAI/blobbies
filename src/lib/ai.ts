@@ -220,8 +220,13 @@ export function blobSystemPrompt(
     "- web_search and web_fetch: only for public information you do not have \u2014 " +
       "news, documentation, facts about the world. NEVER search for anything " +
       "about the user themselves: what you know about them is below, and the " +
-      "web does not know them. Search first, then fetch a result to read it, " +
-      "and always finish by answering in your own words.\n" +
+      "web does not know them.\n" +
+      "  Search results are only titles and snippets, which rarely contain the " +
+      "answer. After searching, ALWAYS call web_fetch on the most relevant " +
+      "result and answer from the page text. If the snippets are all homepages " +
+      "or look unrelated, search again with more specific words before giving " +
+      "up. Never tell the user you found nothing without fetching at least one " +
+      "result.\n" +
       "- remember, update_memory, forget: only when the user tells you " +
       "something NEW about themselves, or asks you to change what you know. " +
       "Answering a question from what you already remember needs no tool.\n" +
@@ -254,8 +259,17 @@ export function blobSystemPrompt(
   return `${identity}${role}${capabilities}${skills}${mcp}${memories}${context}`;
 }
 
-/** How many tool round-trips one user message may trigger. */
-const MAX_TOOL_ROUNDS = 3;
+/**
+ * How many tool round-trips one user message may trigger.
+ *
+ * Real research is iterative — search, read, search again, cross-check — and a
+ * tight budget truncates the answer mid-sentence rather than producing a
+ * shorter one (the "From your search, here" bug came from a budget of 3, which
+ * a single search-fetch-answer already consumes). This is a ceiling to stop a
+ * runaway loop, not a target: the model stops when it has what it needs, and a
+ * turn that does hit the ceiling still gets a forced tool-free round to speak.
+ */
+const MAX_TOOL_ROUNDS = 25;
 
 /**
  * Carry out a routed intent using the same memory tools the model would have
@@ -491,6 +505,9 @@ export async function streamBlobTurn(options: {
     }
   }
 
+  /** Set when the last loop stopped on its turn budget, mid-task. */
+  let cutShort = false;
+
   /**
    * Tools available this turn.
    *
@@ -531,6 +548,14 @@ export async function streamBlobTurn(options: {
         options.onText(text);
       }
       if (event.type === "tool_call_start") {
+        // Anything said before a tool call is preamble ("Let me search for
+        // that."), not the answer. Dropping it means a turn that used tools
+        // shows only the reply written from the results — previously these
+        // fragments concatenated, or a cut-off one became the whole reply.
+        if (text !== "") {
+          text = "";
+          options.onText(text);
+        }
         pending.set(event.toolCallId, { name: event.name, args: event.args });
       }
       if (event.type === "tool_call_end") {
@@ -544,6 +569,12 @@ export async function streamBlobTurn(options: {
         };
         gathered.push(record);
         options.onToolCall?.(record);
+      }
+      if (event.type === "max_turns") {
+        // The model wanted another tool call but ran out of budget, so whatever
+        // it had said so far is a fragment ("From your search, here"). Never
+        // cleared inside this helper: the rescue round must still see it.
+        cutShort = true;
       }
       if (event.type === "error") {
         // Preserve any streamed text: partial reply beats a retry from zero.
@@ -581,11 +612,13 @@ export async function streamBlobTurn(options: {
     text = await runLoop("none");
   }
 
-  // A small model can spend every tool round searching and never actually
-  // answer — which is what surfaced as "(no response from the model)". Hand it
-  // back what the tools found and ask again with no tools available, so the
-  // only thing left to do is reply.
-  if (text.trim() === "" && gathered.length > 0) {
+  // Two ways a turn ends without a usable answer: the model spends every round
+  // on tools and never speaks (surfaced as "(no response from the model)"), or
+  // it starts speaking, calls another tool, and hits the budget mid-sentence
+  // ("From your search, here"). Both are fixed the same way: hand back what the
+  // tools found and ask again with no tools, so the only move left is to reply.
+  const needsAnswer = text.trim() === "" || cutShort;
+  if (needsAnswer && gathered.length > 0) {
     // Budgeted: a fetch result is up to 3k chars, and several of them replayed
     // whole would push the earlier conversation out of a small context window
     // — losing the very question this round exists to answer.
@@ -601,9 +634,11 @@ export async function streamBlobTurn(options: {
       },
     ];
   }
-  if (text.trim() === "") {
+  if (needsAnswer) {
     try {
-      text = await runLoop("none");
+      const finished = await runLoop("none");
+      // Keep the fragment only if the retry somehow produced nothing at all.
+      text = finished.trim() === "" ? text : finished;
     } catch (error) {
       if (isAbortError(error)) {
         throw error;
