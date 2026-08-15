@@ -264,27 +264,13 @@ export const scenarios: Scenario[] = [
     turns: [
       { say: "I'm planning a trip to Lisbon in October.", expect: [replied] },
       {
-        // No noun repeated: only the previous turn says where and when, so a
-        // reply that reflects either proves the context carried. Weather words
-        // count — packing advice for an autumn trip is the context in use, even
-        // when the place is not named again.
+        // "it" is the only reference to the trip: the reply must name the
+        // place or the month, which appear nowhere in this turn. Generic
+        // packing words (layers, jacket, rain) are deliberately NOT accepted —
+        // any model answers that way with no memory of the conversation at
+        // all, so they would make this scenario pass while proving nothing.
         say: "What should I pack for it?",
-        expect: [
-          replied,
-          replyMentions(
-            "lisbon",
-            "portugal",
-            "october",
-            "autumn",
-            "fall",
-            "layer",
-            "jacket",
-            "mild",
-            "warm",
-            "cool",
-            "rain",
-          ),
-        ],
+        expect: [replied, replyMentions("lisbon", "portugal", "october", "autumn", "fall")],
       },
     ],
   },
