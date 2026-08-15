@@ -37,6 +37,16 @@ describe("routeIntent", () => {
       expect(options.num_ctx).toBe(16384);
       expect(body.keep_alive).toBe("30m");
       expect(body.format).toBeDefined();
+      // Every field the intent mapping reads must be grammar-required: an
+      // optional field is exactly what a small model omits (measured —
+      // optional memory_number zeroed deletes; see CLAUDE.md).
+      const format = body.format as { required?: string[] };
+      expect([...(format.required ?? [])].sort()).toEqual([
+        "action",
+        "fact",
+        "memory_number",
+        "needs_web",
+      ]);
     } finally {
       vi.unstubAllGlobals();
     }
