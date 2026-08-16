@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { streamBlobTurn, streamLocalChat } from "@/lib/ai";
+import type { PendingAsk } from "@/lib/blob-tools";
+import { memoryHome } from "@/lib/home";
 
 // Stub `fetch` once with a stable dispatcher and swap the handler per test,
 // so nothing can capture a stale per-test mock across tests.
@@ -223,24 +225,43 @@ describe("streamBlobTurn", () => {
     expect(text).toBe("Here are the three latest models, in full.");
   });
 
-  it("discards preamble said before a tool call, keeping only the answer", async () => {
-    let call = 0;
-    fetchHandler = async () => {
-      call++;
-      return call === 1
+  it("keeps preamble said before a tool call as its own paragraph", async () => {
+    let round = 0;
+    fetchHandler = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      // The grammar-constrained router runs first; only loop rounds count.
+      if (request.format !== undefined) {
+        return new Response(
+          JSON.stringify({
+            message: {
+              content: JSON.stringify({
+                action: "none",
+                needs_web: true,
+                memory_number: 0,
+                fact: "",
+              }),
+            },
+          }),
+        );
+      }
+      round++;
+      return round === 1
         ? // "Let me search for that." then a tool call: preamble, not an answer.
           ndjson(toolCallChunks("web_search", { query: "x" }, "Let me search for that."))
         : ndjson(textChunks("The answer is 42."));
     };
+    const streamed: string[] = [];
     const text = await streamBlobTurn({
       model: "llama3.2:latest",
       messages: [{ role: "user", content: "what is it?" }],
       memory: { list: () => [], save: () => {} },
-      onText: () => {},
+      onText: (full) => streamed.push(full),
       onConfigure: () => {},
     });
-    // Previously these concatenated into "Let me search for that.The answer..."
-    expect(text).toBe("The answer is 42.");
+    // Blank line between them; never run together ("that.The answer is 42.").
+    expect(text).toBe("Let me search for that.\n\nThe answer is 42.");
+    // Nothing the user already read is pulled back off the screen.
+    expect(streamed.every((full) => full.startsWith("Let me search for that."))).toBe(true);
   });
 
   it("clips an oversized description at a sentence boundary, never mid-word", async () => {
@@ -269,5 +290,117 @@ describe("streamBlobTurn", () => {
     expect(description.length).toBeLessThanOrEqual(1200);
     // Ends exactly at a sentence boundary — not mid-word like the disk bug.
     expect(description.endsWith("drafts.")).toBe(true);
+  });
+});
+
+describe("streamBlobTurn routine scope", () => {
+  it("skips the intent router and offers the autonomous catalog", async () => {
+    // A routine turn has no fresh user message to classify and no human to
+    // fill gaps: no router call, and the catalog grows files + ask + helper.
+    let sawRouter = false;
+    let offeredTools: string[] = [];
+    fetchHandler = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (request.format !== undefined) {
+        sawRouter = true;
+        return new Response(JSON.stringify({ message: { content: '{"action":"none"}' } }));
+      }
+      offeredTools = ((request.tools ?? []) as { function: { name: string } }[]).map(
+        (tool) => tool.function.name,
+      );
+      return ndjson(textChunks("Checked."));
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "Check the news and save a summary" }],
+      scope: "routine",
+      home: memoryHome(),
+      memory: { list: () => [], save: () => {} },
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    expect(text).toBe("Checked.");
+    expect(sawRouter).toBe(false);
+    expect([...offeredTools].sort()).toEqual([
+      "ask_user",
+      "delete_file",
+      "list_files",
+      "read_file",
+      "run_subagent",
+      "web_fetch",
+      "web_search",
+      "write_file",
+    ]);
+  });
+
+  it("chat scope keeps the tuned web-only catalog even when a home is passed", async () => {
+    // The interactive path is sim-tuned: new tools must never leak into it.
+    let offeredTools: string[] = [];
+    fetchHandler = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (request.format !== undefined) {
+        return new Response(JSON.stringify({ message: { content: '{"action":"none"}' } }));
+      }
+      offeredTools = ((request.tools ?? []) as { function: { name: string } }[]).map(
+        (tool) => tool.function.name,
+      );
+      return ndjson(textChunks("Hi."));
+    };
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "hello" }],
+      home: memoryHome(),
+      memory: { list: () => [], save: () => {} },
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    expect([...offeredTools].sort()).toEqual(["web_fetch", "web_search"]);
+  });
+
+  it("ask_user ends the turn with the question as the reply", async () => {
+    let call = 0;
+    fetchHandler = async () => {
+      call++;
+      return call === 1
+        ? ndjson(toolCallChunks("ask_user", { question: "Which city?", kind: "question" }))
+        : ndjson(textChunks("I should never be generated."));
+    };
+    const asks: PendingAsk[] = [];
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "book a trip" }],
+      scope: "routine",
+      home: memoryHome(),
+      memory: { list: () => [], save: () => {} },
+      onAsk: (ask) => asks.push(ask),
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    expect(asks).toEqual([{ question: "Which city?", kind: "question" }]);
+    expect(text).toBe("Which city?");
+    // The loop stopped at the ask: no follow-up generation round ran.
+    expect(call).toBe(1);
+  });
+
+  it("a routine turn can write a file end-to-end", async () => {
+    const home = memoryHome();
+    let call = 0;
+    fetchHandler = async () => {
+      call++;
+      return call === 1
+        ? ndjson(toolCallChunks("write_file", { path: "news.md", content: "# Headlines" }))
+        : ndjson(textChunks("Saved the summary."));
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "save the news" }],
+      scope: "routine",
+      home,
+      memory: { list: () => [], save: () => {} },
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    expect(text).toBe("Saved the summary.");
+    expect(await home.read("news.md")).toBe("# Headlines");
   });
 });

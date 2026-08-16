@@ -2222,6 +2222,66 @@ a.modal-button {
   color: var(--text-on-dark);
 }
 
+/* Dark theme: the user's bubble is a mid grey against the near-black chat,
+   not the near-white of --bubble-user — a white slab reads as a highlight and
+   outshouts the agent's reply. Overridden here rather than on the token,
+   which also fills the primary button and the composer circle. */
+:root[data-theme="dark"] .bubble-user {
+  background: #5a5a5a;
+  color: #ffffff;
+}
+
+/* Mid-task question from the Blob: visibly different from a normal reply. */
+.bubble-ask {
+  border: 1.5px solid var(--accent-blue);
+}
+
+/* "Do this yourself" ask: amber — the task is blocked on a human action. */
+.bubble-ask-action {
+  border-color: #d99a2b;
+}
+
+/* System status line in the transcript (routine fired, run interrupted). */
+.transcript-event {
+  font-style: italic;
+}
+
+/* Bar under the transcript while an "action" ask waits on the user. */
+.ask-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0;
+  padding: 8px 12px;
+  border: 1.5px solid #d99a2b;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+/* Files section: routine-row plus a trailing delete button. The row rule
+   itself lives next to .routine-row so specificity stays in source order. */
+.file-row-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.file-preview {
+  margin-top: 8px;
+}
+
+.file-preview-text {
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bubble-agent);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .bubble-quote {
   display: block;
   margin-bottom: 4px;
@@ -2564,10 +2624,28 @@ a.modal-button {
   border-radius: 50%;
   background: var(--bubble-user);
   color: var(--text-on-dark);
+  transition:
+    background var(--duration-compose) var(--ease-standard),
+    color var(--duration-compose) var(--ease-standard);
 }
 
 :root[data-theme="dark"] .composer-mic {
   background: #fbfbfb;
+  color: #070707;
+}
+
+/* Stop: the same circle in the destructive red, so the control that
+   interrupts a reply reads as the one that undoes something. The dark rule is
+   spelled out because the theme override above outranks a bare attribute
+   selector (the circle would stay white), and because dark's lighter red
+   needs a dark glyph — white on it is 2.8:1, under the 3:1 icon floor. */
+.composer-mic[data-stop="true"] {
+  background: var(--status-err);
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .composer-mic[data-stop="true"] {
+  background: var(--status-err);
   color: #070707;
 }
 
@@ -2826,6 +2904,12 @@ a.modal-button {
   background: var(--hover-overlay);
 }
 
+/* A file row reuses .routine-row but shares its line with a delete button. */
+.file-row-item .routine-row {
+  flex: 1;
+  min-width: 0;
+}
+
 .routine-glyph {
   display: inline-flex;
   margin-top: 2px;
@@ -3028,6 +3112,7 @@ a.modal-button {
   .icon-button,
   .agent-row,
   .footer-row,
+  .composer-mic,
   .composer-mic-glyph,
   .composer-mic-plain,
   .composer-input,

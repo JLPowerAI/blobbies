@@ -1,6 +1,7 @@
 import type { AgentTool } from "@kenkaiiii/gg-agent";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { z } from "zod";
+import type { HomeBackend } from "@/lib/home";
 import { hostIsPublic, isTauri } from "@/lib/tauri";
 
 /**
@@ -694,6 +695,163 @@ function makeMemoryTools(access: MemoryAccess) {
 /** The full tool catalog for one Blob's chat turn. */
 export function makeBlobTools(memory: MemoryAccess): AgentTool[] {
   return [makeWebFetchTool(), makeWebSearchTool(), ...makeMemoryTools(memory)];
+}
+
+/** Cap file content echoed into the prompt, same budget logic as web_fetch. */
+const FILE_TEXT_LIMIT = 6_000;
+
+/** Rust rejections arrive as short user-safe strings; surface them verbatim. */
+function toolError(error: unknown): string {
+  return typeof error === "string"
+    ? error
+    : error instanceof Error
+      ? error.message
+      : "The file operation failed.";
+}
+
+/**
+ * File tools over one Blob's sandboxed home folder, split read-only vs
+ * mutating so callers can hand subagents the read half only. All path
+ * validation lives in Rust (`home.rs`); these never throw — a bad path from
+ * the model comes back as a result string it can react to.
+ */
+export function makeFsTools(home: HomeBackend): {
+  readOnly: AgentTool[];
+  mutating: AgentTool[];
+} {
+  const listParams = z.object({
+    dir: z
+      .string()
+      .optional()
+      .describe("Folder to list, relative to your home. Omit for the top level."),
+  });
+  const readParams = z.object({
+    path: z.string().describe('File to read, relative to your home, e.g. "notes/plan.md"'),
+  });
+  const writeParams = z.object({
+    path: z.string().describe('File to write, relative to your home, e.g. "notes/plan.md"'),
+    content: z.string().describe("The full new content of the file"),
+  });
+  const deleteParams = z.object({
+    path: z.string().describe("File or folder to delete, relative to your home"),
+  });
+  const list: AgentTool<typeof listParams> = {
+    name: "list_files",
+    description:
+      "List the files in your home folder — your private workspace on this " +
+      "computer. Files persist between conversations.",
+    parameters: listParams,
+    execute: async (args) => {
+      try {
+        const entries = await home.list(args.dir);
+        if (entries.length === 0) {
+          return args.dir === undefined || args.dir === ""
+            ? "Your home folder is empty."
+            : `${args.dir} is empty or does not exist.`;
+        }
+        return entries
+          .map((entry) => (entry.isDir ? `${entry.name}/` : `${entry.name} (${entry.size} bytes)`))
+          .join("\n");
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  };
+  const read: AgentTool<typeof readParams> = {
+    name: "read_file",
+    description: "Read a text file from your home folder.",
+    parameters: readParams,
+    execute: async (args) => {
+      try {
+        const content = await home.read(args.path);
+        if (content === "") {
+          return "The file is empty.";
+        }
+        return content.length > FILE_TEXT_LIMIT
+          ? `${content.slice(0, FILE_TEXT_LIMIT)}\n[truncated: file is ${content.length} characters]`
+          : content;
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  };
+  const write: AgentTool<typeof writeParams> = {
+    name: "write_file",
+    description:
+      "Write a text file in your home folder, replacing it if it exists. " +
+      "Use this to keep notes, drafts and results between conversations.",
+    parameters: writeParams,
+    executionMode: "sequential",
+    execute: async (args) => {
+      try {
+        await home.write(args.path, args.content);
+        return `Saved ${args.path}.`;
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  };
+  const remove: AgentTool<typeof deleteParams> = {
+    name: "delete_file",
+    description: "Delete a file or folder from your home folder. Permanent.",
+    parameters: deleteParams,
+    executionMode: "sequential",
+    execute: async (args) => {
+      try {
+        await home.remove(args.path);
+        return `Deleted ${args.path}.`;
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  };
+  return { readOnly: [list, read], mutating: [write, remove] };
+}
+
+/** What an ask_user call captured: shown as a card, answered by the next message. */
+export interface PendingAsk {
+  question: string;
+  kind: "question" | "action";
+}
+
+/**
+ * Mid-run escalation to the human. `kind: "action"` doubles as the lightweight
+ * takeover: "log into the site in your browser, then press Done" — the
+ * protected input (password, CAPTCHA, payment) never enters the transcript.
+ * The loop in ai.ts ends the turn when this tool fires; `onAsk` receives the
+ * question so the caller can park the run as waiting_input.
+ */
+export function makeAskTool(onAsk: (ask: PendingAsk) => void): AgentTool {
+  const parameters = z.object({
+    question: z
+      .string()
+      .describe("What you need from the user — one clear question or instruction"),
+    kind: z
+      .enum(["question", "action"])
+      .describe(
+        '"question" when you need information; "action" when the user must do ' +
+          "something themselves (log in, click, paste) that you cannot or should not do",
+      ),
+  });
+  const tool: AgentTool<typeof parameters> = {
+    name: "ask_user",
+    description:
+      "Pause and ask the user for input you are missing, or for an action only " +
+      "they can do (a login, a confirmation, a choice). The task resumes when " +
+      "they answer. Never ask for passwords or codes in chat — use kind " +
+      '"action" so they do it themselves.',
+    parameters,
+    executionMode: "sequential",
+    execute: (args) => {
+      const question = args.question.trim();
+      if (question === "") {
+        return "Nothing to ask: empty question.";
+      }
+      onAsk({ question, kind: args.kind });
+      return "Waiting for the user.";
+    },
+  };
+  return tool;
 }
 
 /**

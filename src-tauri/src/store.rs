@@ -42,7 +42,7 @@ struct TrashMarker {
 const ROOT_SLICES: [&str; 3] = ["settings", "ui-layout", "roster"];
 
 /// Slices that live inside a Blob directory.
-const BLOB_SLICES: [&str; 3] = ["config", "routines", "transcript"];
+const BLOB_SLICES: [&str; 4] = ["config", "routines", "transcript", "runs"];
 
 fn now_ms() -> u128 {
     SystemTime::now()
@@ -265,6 +265,7 @@ mod tests {
         let root = Path::new("/data");
         assert!(resolve_slice_path(root, "roster").is_ok());
         assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/config")).is_ok());
+        assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/runs")).is_ok());
     }
 
     #[test]

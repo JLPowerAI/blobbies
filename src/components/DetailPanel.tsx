@@ -1,5 +1,7 @@
-import { ChevronsRight, Clock, Plus, Settings } from "lucide-react";
+import { ChevronsRight, Clock, FileText, Plus, Settings, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { Agent, Routine } from "@/data/agents";
+import { type HomeEntry, homeFor } from "@/lib/home";
 
 interface DetailPanelProps {
   agent: Agent;
@@ -8,6 +10,104 @@ interface DetailPanelProps {
   onOpenSettings: () => void;
   onCreateRoutine: () => void;
   onOpenRoutine: (id: string) => void;
+}
+
+function fileSize(bytes: number): string {
+  return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`;
+}
+
+/**
+ * The Blob's home folder: files its tools wrote during autonomous turns.
+ * Read-only viewer plus delete — authoring happens through the Blob itself.
+ */
+function FilesSection({ blobId }: { blobId: string }) {
+  const [entries, setEntries] = useState<HomeEntry[]>([]);
+  const [preview, setPreview] = useState<{ name: string; text: string } | null>(null);
+
+  const refresh = () => {
+    homeFor(blobId)
+      .list()
+      .then(setEntries)
+      .catch(() => setEntries([]));
+  };
+  // Refresh on Blob switch; "live while a run writes" is not worth polling.
+  useEffect(refresh, [blobId]);
+
+  const openPreview = (name: string) => {
+    homeFor(blobId)
+      .read(name)
+      .then((text) => setPreview({ name, text: text.slice(0, 4_000) }))
+      .catch(() => setPreview({ name, text: "(not a readable text file)" }));
+  };
+
+  const remove = (name: string) => {
+    homeFor(blobId)
+      .remove(name)
+      .then(() => {
+        setPreview((current) => (current?.name === name ? null : current));
+        refresh();
+      })
+      .catch(refresh);
+  };
+
+  if (entries.length === 0) {
+    return null;
+  }
+  return (
+    <section className="routines" aria-label="Files">
+      <div className="routines-header">
+        <h2 className="routines-title">Files</h2>
+      </div>
+      <ul className="routine-list">
+        {entries.map((entry) => (
+          <li key={entry.name} className="file-row-item">
+            <button
+              type="button"
+              className="routine-row"
+              disabled={entry.isDir}
+              onClick={() => openPreview(entry.name)}
+            >
+              <span className="routine-glyph">
+                <FileText size={16} strokeWidth={1.8} aria-hidden="true" />
+              </span>
+              <span className="routine-text">
+                <span className="routine-name">{entry.name}</span>
+                <span className="routine-schedule">
+                  {entry.isDir ? "folder" : fileSize(entry.size)}
+                </span>
+              </span>
+            </button>
+            {entry.isDir ? null : (
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`Delete ${entry.name}`}
+                onClick={() => remove(entry.name)}
+              >
+                <Trash2 size={15} strokeWidth={1.8} aria-hidden="true" />
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {preview === null ? null : (
+        <div className="file-preview">
+          <div className="routines-header">
+            <h3 className="routines-title">{preview.name}</h3>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Close preview"
+              onClick={() => setPreview(null)}
+            >
+              <ChevronsRight size={15} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+          </div>
+          <pre className="file-preview-text">{preview.text}</pre>
+        </div>
+      )}
+    </section>
+  );
 }
 
 export function DetailPanel({
@@ -95,6 +195,8 @@ export function DetailPanel({
           </>
         )}
       </section>
+
+      <FilesSection blobId={agent.id} />
     </aside>
   );
 }

@@ -13,26 +13,30 @@ import {
 } from "lucide-react";
 import { type ComponentType, useEffect, useRef, useState } from "react";
 import type { Routine } from "@/data/agents";
+import { describeSchedule, type RoutineSchedule } from "@/lib/schedule";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 interface RoutinePanelProps {
   routine: Routine;
   onUpdate: (patch: Partial<Routine>) => void;
   onDelete: () => void;
+  /** Run the routine now, through the same path as a scheduled fire. */
+  onTestRun: () => void;
   /** Back to the routines list (info view). */
   onBack: () => void;
   onClose: () => void;
 }
 
-const SCHEDULE_OPTIONS = [
-  "Every hour",
-  "Every day",
-  "Weekdays",
-  "Every week",
-  "Every month",
-  "Interval",
-  "Custom schedule",
-] as const;
+/**
+ * Preset schedule choices. Each maps to a real `RoutineSchedule` — picking
+ * one arms the scheduler; the label also lands in `triggers` for display.
+ */
+const SCHEDULE_OPTIONS: ReadonlyArray<{ label: string; schedule: RoutineSchedule }> = [
+  { label: "Every hour", schedule: { kind: "interval", minutes: 60 } },
+  { label: "Every day", schedule: { kind: "daily", hour: 9, minute: 0 } },
+  { label: "Every week", schedule: { kind: "weekly", weekday: 1, hour: 9, minute: 0 } },
+  { label: "Every 30 minutes", schedule: { kind: "interval", minutes: 30 } },
+];
 
 interface EventTrigger {
   label: string;
@@ -59,7 +63,14 @@ function triggerIcon(label: string): EventTrigger["icon"] {
 }
 
 /** Per-routine editor: identity, triggers and run history. */
-export function RoutinePanel({ routine, onUpdate, onDelete, onBack, onClose }: RoutinePanelProps) {
+export function RoutinePanel({
+  routine,
+  onUpdate,
+  onDelete,
+  onTestRun,
+  onBack,
+  onClose,
+}: RoutinePanelProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -98,6 +109,16 @@ export function RoutinePanel({ routine, onUpdate, onDelete, onBack, onClose }: R
     requestClose();
   };
 
+  /** A schedule replaces any previous one — one clock per routine. */
+  const setSchedule = (label: string, schedule: RoutineSchedule) => {
+    const scheduleLabels = SCHEDULE_OPTIONS.map((option) => option.label);
+    onUpdate({
+      schedule,
+      triggers: [...routine.triggers.filter((t) => !scheduleLabels.includes(t)), label],
+    });
+    requestClose();
+  };
+
   return (
     <aside className="detail-panel" aria-label="Routine">
       <header className="detail-header" data-tauri-drag-region>
@@ -132,7 +153,8 @@ export function RoutinePanel({ routine, onUpdate, onDelete, onBack, onClose }: R
             <button
               type="button"
               className="modal-button"
-              disabled={routine.name.trim().length === 0}
+              disabled={routine.instruction.trim().length === 0}
+              onClick={onTestRun}
             >
               Test run
             </button>
@@ -228,11 +250,11 @@ export function RoutinePanel({ routine, onUpdate, onDelete, onBack, onClose }: R
                         <button
                           type="button"
                           role="menuitem"
-                          key={option}
+                          key={option.label}
                           className="account-menu-item trigger-schedule-item"
-                          onClick={() => addTrigger(option)}
+                          onClick={() => setSchedule(option.label, option.schedule)}
                         >
-                          {option}
+                          {option.label}
                         </button>
                       ))
                     : EVENT_TRIGGERS.map(({ label, icon: Icon }) => (
@@ -253,9 +275,33 @@ export function RoutinePanel({ routine, onUpdate, onDelete, onBack, onClose }: R
           </div>
         </div>
 
+        {routine.schedule === undefined ? null : (
+          <div className="settings-field">
+            <span className="settings-label">Schedule</span>
+            <p className="routine-empty-note">
+              {describeSchedule(routine.schedule)}
+              {routine.nextRunAt === undefined || !routine.active
+                ? ""
+                : ` \u00b7 next ${new Date(routine.nextRunAt).toLocaleString([], {
+                    weekday: "short",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}`}
+            </p>
+          </div>
+        )}
+
         <div className="settings-field">
           <span className="settings-label">Run history</span>
-          <p className="routine-empty-note">No runs yet</p>
+          <p className="routine-empty-note">
+            {routine.lastRunAt === undefined
+              ? "No runs yet"
+              : `Last run ${new Date(routine.lastRunAt).toLocaleString([], {
+                  weekday: "short",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })} \u00b7 ${routine.lastRunStatus ?? "done"}`}
+          </p>
         </div>
       </div>
     </aside>

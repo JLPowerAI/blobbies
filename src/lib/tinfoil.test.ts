@@ -7,8 +7,10 @@ import {
   type ThinkingLevel,
 } from "@kenkaiiii/gg-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getSecret } from "@/lib/secrets";
 import {
   configureTinfoil,
+  configureTinfoilFromKeychain,
   isTinfoilModel,
   listTinfoilModels,
   registerTinfoilProvider,
@@ -16,6 +18,16 @@ import {
   tinfoilModelId,
   tinfoilStructuredCall,
 } from "@/lib/tinfoil";
+
+// Keychain access is faked: on macOS a real read can prompt for the device
+// password, and configureTinfoilFromKeychain's whole contract is about how
+// OFTEN that read happens.
+vi.mock("@/lib/secrets", () => ({
+  getSecret: vi.fn(async (name: string) =>
+    name === "tinfoil-api-key" ? "sk-test" : "cache-secret",
+  ),
+  setSecret: vi.fn(async () => {}),
+}));
 
 // No test in this file may touch the network: the SecureClient (attestation +
 // encrypted transport) is replaced with a controllable fake.
@@ -173,6 +185,29 @@ describe("tinfoilStructuredCall", () => {
 
   it("returns null (never throws) when no key is configured", async () => {
     expect(await tinfoilStructuredCall(callOptions)).toBeNull();
+  });
+});
+
+describe("configureTinfoilFromKeychain", () => {
+  it("probes the keychain once per session; only force re-reads", async () => {
+    const reads = vi.mocked(getSecret);
+    // Force the baseline probe: the memo is module state, so asserting on an
+    // unforced first call would depend on no earlier test having probed.
+    await configureTinfoilFromKeychain(true);
+    reads.mockClear();
+    await expect(configureTinfoilFromKeychain(true)).resolves.toBe(true);
+    const probeReads = reads.mock.calls.length;
+    expect(probeReads).toBeGreaterThan(0);
+
+    // Memoized: repeat calls (every ChatPane mount) must not touch the
+    // keychain again — each read can cost the user a password prompt.
+    await expect(configureTinfoilFromKeychain()).resolves.toBe(true);
+    await expect(configureTinfoilFromKeychain()).resolves.toBe(true);
+    expect(reads.mock.calls.length).toBe(probeReads);
+
+    // Settings saved/removed a key: force must bypass the cached verdict.
+    await expect(configureTinfoilFromKeychain(true)).resolves.toBe(true);
+    expect(reads.mock.calls.length).toBeGreaterThan(probeReads);
   });
 });
 

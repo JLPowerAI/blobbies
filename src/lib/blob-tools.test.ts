@@ -6,13 +6,17 @@ import {
   MEMORY_LIMIT,
   MEMORY_PROMPT_CHARS,
   MEMORY_TEXT_LIMIT,
+  makeAskTool,
   makeBlobTools,
+  makeFsTools,
+  type PendingAsk,
   parseDdgLite,
   renderMemories,
   resolveMemory,
   unwrapBingRedirect,
   wrapUntrusted,
 } from "@/lib/blob-tools";
+import { memoryHome } from "@/lib/home";
 
 const context = { signal: new AbortController().signal, toolCallId: "t1" };
 
@@ -317,5 +321,69 @@ describe("blob tools", () => {
       <tr><td class="result-snippet">A snippet.</td></tr></table>`;
     const hits = parseDdgLite(html);
     expect(hits).toEqual([{ title: "Example", url: "https://example.com", snippet: "A snippet." }]);
+  });
+});
+
+describe("file tools", () => {
+  it("write, list, read and delete through the tool surface", async () => {
+    const { readOnly, mutating } = makeFsTools(memoryHome());
+    const [list, read] = readOnly;
+    const [write, remove] = mutating;
+
+    expect(await list?.execute({}, context)).toBe("Your home folder is empty.");
+    await write?.execute({ path: "notes/plan.md", content: "step one" }, context);
+    expect(await list?.execute({}, context)).toBe("notes/");
+    expect(await list?.execute({ dir: "notes" }, context)).toBe("plan.md (8 bytes)");
+    expect(await read?.execute({ path: "notes/plan.md" }, context)).toBe("step one");
+    expect(await remove?.execute({ path: "notes/plan.md" }, context)).toBe(
+      "Deleted notes/plan.md.",
+    );
+  });
+
+  it("split is read-only vs mutating, for subagent catalogs", () => {
+    const { readOnly, mutating } = makeFsTools(memoryHome());
+    expect(readOnly.map((tool) => tool.name)).toEqual(["list_files", "read_file"]);
+    expect(mutating.map((tool) => tool.name)).toEqual(["write_file", "delete_file"]);
+  });
+
+  it("backend rejections surface as tool results, never as throws", async () => {
+    // The model reacts to text; an exception would kill the whole turn.
+    const { readOnly, mutating } = makeFsTools(memoryHome());
+    expect(await readOnly[1]?.execute({ path: "../escape" }, context)).toMatch(/outside/);
+    expect(await mutating[0]?.execute({ path: "../escape", content: "x" }, context)).toMatch(
+      /outside/,
+    );
+    expect(await readOnly[1]?.execute({ path: "missing.txt" }, context)).toMatch(/no such file/);
+  });
+
+  it("caps file text echoed into the prompt", async () => {
+    const home = memoryHome();
+    await home.write("big.txt", "x".repeat(10_000));
+    const { readOnly } = makeFsTools(home);
+    const result = String(await readOnly[1]?.execute({ path: "big.txt" }, context));
+    expect(result.length).toBeLessThan(7_000);
+    expect(result).toContain("[truncated: file is 10000 characters]");
+  });
+});
+
+describe("ask_user tool", () => {
+  it("reports the ask and tells the model it is waiting", async () => {
+    const asks: PendingAsk[] = [];
+    const tool = makeAskTool((ask) => asks.push(ask));
+    const result = await tool.execute(
+      { question: "Which account should I use?", kind: "question" },
+      context,
+    );
+    expect(result).toBe("Waiting for the user.");
+    expect(asks).toEqual([{ question: "Which account should I use?", kind: "question" }]);
+  });
+
+  it("ignores an empty question instead of parking the run on nothing", async () => {
+    const asks: PendingAsk[] = [];
+    const tool = makeAskTool((ask) => asks.push(ask));
+    expect(await tool.execute({ question: "   ", kind: "action" }, context)).toBe(
+      "Nothing to ask: empty question.",
+    );
+    expect(asks).toEqual([]);
   });
 });

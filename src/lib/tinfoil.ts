@@ -72,11 +72,32 @@ export function configureTinfoil(options: {
 }
 
 /**
+ * Session cache of the keychain probe. Reading the keychain is not free on
+ * macOS: a dev build carries a fresh ad-hoc code signature on every rebuild,
+ * so Keychain treats it as a new app and prompts for the login password on
+ * every read. One probe per session — invalidated with `force` when Settings
+ * changes the key — keeps that to at most one prompt, and only on paths that
+ * actually need Tinfoil.
+ */
+let keychainProbe: Promise<boolean> | null = null;
+
+/**
  * Load the API key from the OS keychain and configure the provider.
  * Creates the persistent cache secret on first use. Returns false when no
  * key is stored (Tinfoil stays off; only local models work).
+ *
+ * Memoized per session; pass `force` after saving or removing a key.
  */
-export async function configureTinfoilFromKeychain(): Promise<boolean> {
+export function configureTinfoilFromKeychain(force = false): Promise<boolean> {
+  if (!force && keychainProbe !== null) {
+    return keychainProbe;
+  }
+  const probe = probeKeychain();
+  keychainProbe = probe;
+  return probe;
+}
+
+async function probeKeychain(): Promise<boolean> {
   const apiKey = await getSecret("tinfoil-api-key");
   if (apiKey === null || apiKey === "") {
     return false;

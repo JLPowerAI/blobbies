@@ -1,5 +1,6 @@
 mod commands;
 mod error;
+mod home;
 mod secrets;
 mod store;
 
@@ -27,6 +28,10 @@ pub fn run() {
             store::store_write,
             store::store_delete_blob,
             store::store_list_blobs,
+            home::blob_home_list,
+            home::blob_home_read,
+            home::blob_home_write,
+            home::blob_home_delete,
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete

@@ -28,6 +28,21 @@ pub enum Error {
     #[error("no such Blob")]
     BlobNotFound,
 
+    #[error("path is outside the Blob's home folder")]
+    PathOutsideHome,
+
+    #[error("no such file")]
+    FileNotFound,
+
+    #[error("file is too large")]
+    FileTooLarge,
+
+    #[error("file is not text")]
+    NotText,
+
+    #[error("the Blob's home folder is full")]
+    HomeFull,
+
     #[error("storage error: {0}")]
     Io(String),
 }

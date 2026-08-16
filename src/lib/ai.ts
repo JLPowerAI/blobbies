@@ -1,4 +1,4 @@
-import { agentLoop, isAbortError } from "@kenkaiiii/gg-agent";
+import { type AgentTool, agentLoop, isAbortError } from "@kenkaiiii/gg-agent";
 import {
   type Message,
   type Provider,
@@ -11,9 +11,13 @@ import { z } from "zod";
 import {
   type BlobMemory,
   type MemoryAccess,
+  makeAskTool,
   makeBlobTools,
+  makeFsTools,
+  type PendingAsk,
   renderMemories,
 } from "@/lib/blob-tools";
+import type { HomeBackend } from "@/lib/home";
 import { type Intent, routeIntent } from "@/lib/intent";
 import { OLLAMA_URL } from "@/lib/ollama";
 import {
@@ -496,6 +500,119 @@ function toConfigPatch(args: {
   return patch.title === undefined && patch.description === undefined ? null : patch;
 }
 
+/** Ceiling for a subagent: enough for search-fetch-answer, not for drift. */
+const SUBAGENT_MAX_TURNS = 4;
+
+/** Cap on the text a subagent hands back into the parent's context. */
+const SUBAGENT_RESULT_LIMIT = 4_000;
+
+/**
+ * In-turn helper Blob: a nested `agentLoop` with its own short system prompt
+ * and a read-only catalog (web pair + file reads). Never nests — the child
+ * catalog contains no delegation, ask or write tools — and reports its result
+ * as the tool result, so to the parent it is just one tool call.
+ */
+function makeSubagentTool(context: {
+  model: string;
+  blobName: string;
+  thinking: boolean;
+  readOnlyTools: AgentTool[];
+  signal: AbortSignal | undefined;
+  onProgress?: (line: string) => void;
+}): AgentTool {
+  const parameters = z.object({
+    name: z.string().describe('Short helper name, e.g. "researcher"'),
+    task: z.string().describe("The single task the helper must complete"),
+    instructions: z
+      .string()
+      .optional()
+      .describe("Optional extra guidance: sources to prefer, format of the result"),
+  });
+  const tool: AgentTool<typeof parameters> = {
+    name: "run_subagent",
+    description:
+      "Delegate one self-contained research or reading task to a temporary " +
+      "helper and get its findings back. The helper can browse the web and " +
+      "read your files but cannot change anything or talk to the user. Use it " +
+      "for legwork; do the final answer yourself.",
+    parameters,
+    executionMode: "sequential",
+    execute: async (args, toolContext) => {
+      const label = args.name.trim() === "" ? "helper" : args.name.trim().slice(0, 40);
+      context.onProgress?.(`${label}: working on \u201c${args.task.slice(0, 80)}\u201d`);
+      const system =
+        `You are ${label}, a temporary helper working inside ${context.blobName}'s task. ` +
+        "Complete the task below and reply with a concise result the caller can " +
+        "use directly. You cannot talk to the user, spawn further helpers, or " +
+        "change files or memories — research and report only." +
+        (args.instructions === undefined || args.instructions.trim() === ""
+          ? ""
+          : `\n\nExtra instructions:\n${args.instructions.trim()}`);
+      let text = "";
+      let cutShort = false;
+      try {
+        const loop = agentLoop(
+          [
+            { role: "system", content: system },
+            { role: "user", content: args.task },
+          ],
+          {
+            provider: providerFor(context.model),
+            model: context.model,
+            ...(context.thinking ? {} : { thinking: NO_THINKING }),
+            tools: context.readOnlyTools,
+            maxTokens: MAX_REPLY_TOKENS,
+            maxTurns: SUBAGENT_MAX_TURNS,
+            ...(context.signal === undefined ? {} : { signal: context.signal }),
+          },
+        );
+        for await (const event of loop) {
+          if (event.type === "text_delta") {
+            text += event.text;
+          }
+          if (event.type === "tool_call_start") {
+            context.onProgress?.(`${label}: using ${event.name}`);
+            text = "";
+          }
+          if (event.type === "max_turns") {
+            cutShort = true;
+          }
+          if (event.type === "error") {
+            break;
+          }
+          if (toolContext.signal.aborted) {
+            break;
+          }
+        }
+      } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
+        return `The helper failed: ${error instanceof Error ? error.message : "unknown error"}`;
+      }
+      const result = text.trim().slice(0, SUBAGENT_RESULT_LIMIT);
+      if (result === "") {
+        return "The helper returned nothing useful.";
+      }
+      return cutShort
+        ? `${result}\n[The helper ran out of steps; this may be incomplete.]`
+        : result;
+    },
+  };
+  return tool;
+}
+
+/**
+ * Does this text end on a thought the model actually finished? Used to decide
+ * whether what it said before calling a tool is worth keeping on screen: a
+ * closed sentence is, a trailing clause it broke off ("From your search,
+ * here") is not — that one only reads right once the answer follows it, and
+ * the answer arrives in the next round as a fresh sentence.
+ */
+function isCompleteThought(text: string): boolean {
+  return /[.!?:;\u2026)\]"'`]$/.test(text.trim());
+}
+
 /**
  * One conversational turn for a Blob, run on gg-agent's `agentLoop`: it
  * validates tool args, executes configure_blob, and feeds results back until
@@ -515,22 +632,52 @@ export async function streamBlobTurn(options: {
   forceConfigure?: boolean;
   /** Read/write access to the Blob's persistent memories. */
   memory: MemoryAccess;
+  /**
+   * "chat" (default) is the tuned interactive turn: intent router + web pair,
+   * nothing else — its measured behavior must not drift. "routine" is an
+   * autonomous turn fired by the scheduler: no router (routine turns never
+   * write memories), and the catalog adds the Blob's files, ask_user and
+   * run_subagent, because there is no human in the loop to fill gaps.
+   */
+  scope?: "chat" | "routine";
+  /** The Blob's sandboxed home folder; enables file tools on routine turns. */
+  home?: HomeBackend;
+  /** Abort the turn (Stop button). Partial text is kept by the caller. */
+  signal?: AbortSignal;
+  /**
+   * Mid-run user messages (follow-ups), consumed by the loop between tool
+   * rounds and — via the follow-up hook — when it is about to stop.
+   */
+  getSteeringMessages?: () => Message[] | null;
+  /**
+   * The model asked the user something via ask_user: the turn ends after the
+   * current round and the caller parks the run as waiting_input.
+   */
+  onAsk?: (ask: PendingAsk) => void;
+  /** Safe flush point: assistant text + tool results for a turn are complete. */
+  onCheckpoint?: () => void;
   onText: (fullText: string) => void;
   onConfigure: (patch: BlobConfigPatch) => void;
   /** Observes each completed tool call: drives the sim harness and, later, UI. */
   onToolCall?: (call: ToolCallRecord) => void;
 }): Promise<string> {
   let conversation = options.messages;
+  const scope = options.scope ?? "chat";
 
   // Reliability floor for weak models: classify the request with a grammar
   // (which a sub-1B model can satisfy) and act on it. This is the ONLY path
   // that writes memories or config — the chat loop never gets those tools
   // (see runLoop) — and it also decides whether the loop gets the web pair.
-  const intent = await routeIntent({
-    model: options.model,
-    messages: conversation,
-    memories: options.memory.list(),
-  });
+  // Routine turns skip it: there is no fresh user message to classify, the
+  // instruction is the task, and autonomous turns must not write memories.
+  const intent: Intent =
+    scope === "routine"
+      ? { action: "none", needsWeb: true }
+      : await routeIntent({
+          model: options.model,
+          messages: conversation,
+          memories: options.memory.list(),
+        });
   if (intent.action !== "none") {
     const applied = await applyIntent(intent, options.memory);
     if (applied !== null) {
@@ -598,33 +745,82 @@ export async function streamBlobTurn(options: {
    * fact being asked about. A wrongly withheld write costs a retry through
    * the router; a wrongly executed `forget` is silent data loss.
    */
-  const runLoop = async (scope: "web" | "none"): Promise<string> => {
+  /** Set when ask_user fired: the turn must end and wait for the user. */
+  let pendingAsk: PendingAsk | null = null;
+
+  /**
+   * Text the model finished saying before each tool call ("Let me search for
+   * that."). Kept for the whole turn — including across the rescue round — so
+   * nothing the user already read is pulled back off the screen; joined into
+   * the reply as its own paragraph. Only whole segments land here: a fragment
+   * cut off mid-sentence by the round budget is still dropped.
+   */
+  const said: string[] = [];
+
+  const runLoop = async (toolScope: "web" | "none"): Promise<{ text: string; latest: string }> => {
     let text = "";
+    /** Everything shown for this turn: earlier segments plus the live one. */
+    const full = () => [...said, text].filter((segment) => segment.trim() !== "").join("\n\n");
     const memoryTools = new Set(["remember", "update_memory", "forget"]);
-    const tools = makeBlobTools(options.memory).filter((tool) => !memoryTools.has(tool.name));
+    const webTools = makeBlobTools(options.memory).filter((tool) => !memoryTools.has(tool.name));
+    // Routine turns run unattended, so they get the full autonomous catalog;
+    // chat turns keep the tuned web-only pair (see the scope option docs).
+    const fs = options.home === undefined ? null : makeFsTools(options.home);
+    const tools =
+      scope === "routine"
+        ? [
+            ...webTools,
+            ...(fs === null ? [] : [...fs.readOnly, ...fs.mutating]),
+            makeAskTool((ask) => {
+              pendingAsk = ask;
+            }),
+            makeSubagentTool({
+              model: options.model,
+              blobName: "this Blob",
+              thinking: options.thinking === true,
+              readOnlyTools: [...webTools, ...(fs === null ? [] : fs.readOnly)],
+              signal: options.signal,
+            }),
+          ]
+        : webTools;
     const loop = agentLoop(conversation, {
       provider: providerFor(options.model),
       model: options.model,
       ...(options.thinking === true ? {} : { thinking: NO_THINKING }),
-      ...(scope === "none" ? {} : { tools }),
+      ...(toolScope === "none" ? {} : { tools }),
       maxTokens: MAX_REPLY_TOKENS,
       maxTurns: MAX_TOOL_ROUNDS,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.getSteeringMessages === undefined
+        ? {}
+        : {
+            getSteeringMessages: options.getSteeringMessages,
+            // Also drain follow-ups when the loop is about to stop: steering
+            // alone is only polled after tool rounds, missing tool-less turns.
+            getFollowUpMessages: options.getSteeringMessages,
+          }),
     });
     const pending = new Map<string, { name: string; args: Record<string, unknown> }>();
     for await (const event of loop) {
       if (event.type === "text_delta") {
         text += event.text;
-        options.onText(text);
+        options.onText(full());
       }
       if (event.type === "tool_call_start") {
-        // Anything said before a tool call is preamble ("Let me search for
-        // that."), not the answer. Dropping it means a turn that used tools
-        // shows only the reply written from the results — previously these
-        // fragments concatenated, or a cut-off one became the whole reply.
-        if (text !== "") {
-          text = "";
-          options.onText(text);
+        // Anything said before a tool call is preamble, not the answer. A
+        // finished thought ("Let me search for that.") is banked as its own
+        // paragraph so it stays on screen; a sentence the model abandoned
+        // mid-way to call a tool ("From your search, here") is dropped, and
+        // an identical lead-in repeated every round is not stacked.
+        const segment = text.trim();
+        if (isCompleteThought(segment) && said[said.length - 1] !== segment) {
+          said.push(segment);
         }
+        text = "";
+        // Re-emit so the screen matches what the reply will actually contain:
+        // a banked paragraph stays put, a dropped fragment goes now rather
+        // than surviving on screen until the next round's first token.
+        options.onText(full());
         pending.set(event.toolCallId, { name: event.name, args: event.args });
       }
       if (event.type === "tool_call_end") {
@@ -639,6 +835,14 @@ export async function streamBlobTurn(options: {
         gathered.push(record);
         options.onToolCall?.(record);
       }
+      if (event.type === "checkpoint") {
+        options.onCheckpoint?.();
+        // ask_user completed its round: stop generating and hand the turn to
+        // the user. Breaking closes the loop generator cleanly.
+        if (pendingAsk !== null) {
+          break;
+        }
+      }
       if (event.type === "max_turns") {
         // The model wanted another tool call but ran out of budget, so whatever
         // it had said so far is a fragment ("From your search, here"). Never
@@ -648,15 +852,15 @@ export async function streamBlobTurn(options: {
       if (event.type === "error") {
         // Preserve any streamed text: partial reply beats a retry from zero.
         if (text !== "") {
-          return text;
+          return { text: full(), latest: text };
         }
         throw event.error;
       }
     }
-    return text;
+    return { text: full(), latest: text };
   };
 
-  let text: string;
+  let result: { text: string; latest: string };
   // Kept so a turn that spent all its rounds on tools can still answer from
   // what those tools returned, instead of starting over empty-handed.
   const gathered: ToolCallRecord[] = [];
@@ -667,14 +871,24 @@ export async function streamBlobTurn(options: {
     // the verdict gating the catalog, a turn that needs no tools has none
     // to misuse. needsWeb fails open to true, so a router failure only ever
     // restores the old always-offered behaviour.
-    text = await runLoop(intent.needsWeb ? "web" : "none");
+    result = await runLoop(intent.needsWeb ? "web" : "none");
   } catch (error) {
     // simplification: any failure before text retries once without tools —
     // Ollama reports "does not support tools" as a plain 400.
     if (isAbortError(error)) {
       throw error;
     }
-    text = await runLoop("none");
+    result = await runLoop("none");
+  }
+  let text = result.text;
+
+  // The model handed the turn to the user: the question IS the reply, and no
+  // rescue round may run — it would answer on the user's behalf.
+  if (pendingAsk !== null) {
+    const ask: PendingAsk = pendingAsk;
+    options.onAsk?.(ask);
+    options.onText(ask.question);
+    return ask.question;
   }
 
   // Two ways a turn ends without a usable answer: the model spends every round
@@ -682,7 +896,9 @@ export async function streamBlobTurn(options: {
   // it starts speaking, calls another tool, and hits the budget mid-sentence
   // ("From your search, here"). Both are fixed the same way: hand back what the
   // tools found and ask again with no tools, so the only move left is to reply.
-  const needsAnswer = text.trim() === "" || cutShort;
+  // Judged on the newest segment only: banked preamble is not an answer, so a
+  // turn that spoke only before its tool calls still earns a rescue round.
+  const needsAnswer = result.latest.trim() === "" || cutShort;
   if (needsAnswer && gathered.length > 0) {
     // Budgeted: a fetch result is up to 3k chars, and several of them replayed
     // whole would push the earlier conversation out of a small context window
@@ -704,9 +920,13 @@ export async function streamBlobTurn(options: {
       // Cleared first: this round has no tools, so it cannot hit the budget,
       // and a stale flag would make every later turn pay for a rescue round.
       cutShort = false;
+      // The banked lead-ins introduced an answer that never came ("From your
+      // search, here"), so the rescue reply stands alone rather than trailing
+      // a promise the model already broke.
+      said.length = 0;
       const finished = await runLoop("none");
       // Keep the fragment only if the retry somehow produced nothing at all.
-      text = finished.trim() === "" ? text : finished;
+      text = finished.latest.trim() === "" ? text : finished.text;
     } catch (error) {
       if (isAbortError(error)) {
         throw error;

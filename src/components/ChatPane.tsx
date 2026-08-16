@@ -7,6 +7,7 @@ import {
   Monitor,
   Plus,
   Smile,
+  Square,
   X,
 } from "lucide-react";
 import {
@@ -26,6 +27,7 @@ import type { Agent, Message } from "@/data/agents";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
 import {
   configureTinfoilFromKeychain,
+  isTinfoilModel,
   listTinfoilModels,
   TINFOIL_MODEL_PREFIX,
   type TinfoilModel,
@@ -43,6 +45,10 @@ interface ChatPaneProps {
   reasoning: boolean;
   onReasoningChange: (on: boolean) => void;
   onSend: (text: string, replyTo?: string) => void;
+  /** Abort the in-flight reply, keeping any partial text. */
+  onStop?: () => void;
+  /** The Blob paused mid-task and waits on the user (ask_user). */
+  waitingAsk?: "question" | "action" | undefined;
   detailOpen: boolean;
   onToggleDetail: () => void;
   onOpenSettings: () => void;
@@ -66,12 +72,27 @@ function messagePreview(message: Message): string {
   if (message.kind === "file") {
     return message.fileName;
   }
+  if (message.kind === "event") {
+    return message.text;
+  }
   return message.segments.map((segment) => segment.text).join("");
 }
 
 function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }) {
+  // An ask renders as a highlighted card: the Blob paused its task and needs
+  // the user — "action" means "do this yourself" (login, click, paste).
+  const askClass =
+    message.ask === undefined
+      ? ""
+      : message.ask === "action"
+        ? " bubble-ask bubble-ask-action"
+        : " bubble-ask";
   return (
-    <div className={message.author === "user" ? "bubble bubble-user" : "bubble bubble-agent"}>
+    <div
+      className={
+        message.author === "user" ? "bubble bubble-user" : `bubble bubble-agent${askClass}`
+      }
+    >
       {message.replyTo === undefined ? null : (
         <span className="bubble-quote">{message.replyTo}</span>
       )}
@@ -135,6 +156,14 @@ function MessageRow({
   onReact,
   onReply,
 }: MessageRowProps) {
+  // Event lines are status, not speech: no actions, reactions or bubble.
+  if (message.kind === "event") {
+    return (
+      <p className="timestamp-divider transcript-event" role="status">
+        {message.text}
+      </p>
+    );
+  }
   const side = message.kind === "text" && message.author === "user" ? "user" : "agent";
   return (
     <div className={`message-row message-row-${side}${fresh ? " message-fresh" : ""}`}>
@@ -219,6 +248,8 @@ export function ChatPane({
   reasoning,
   onReasoningChange,
   onSend,
+  onStop,
+  waitingAsk,
   detailOpen,
   onToggleDetail,
   onOpenSettings,
@@ -229,6 +260,27 @@ export function ChatPane({
   const [reactions, setReactions] = useState<Record<string, string>>({});
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const [multiline, setMultiline] = useState(false);
+
+  /** A reply is streaming and can be aborted (Escape, or the send circle). */
+  const canStop = thinking && onStop !== undefined;
+
+  // Escape interrupts the reply from anywhere in the app, matching the
+  // circle. Registered only while a turn is in flight, and it yields to
+  // whatever else owns Escape right now — an open modal, palette or picker —
+  // so the key never aborts generation when the user meant "close this".
+  useEffect(() => {
+    if (!canStop || pickerFor !== null) {
+      return;
+    }
+    // globalThis: bare KeyboardEvent is React's type, shadowed by the import.
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape" && document.querySelector("[aria-modal='true']") === null) {
+        onStop?.();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canStop, pickerFor, onStop]);
 
   // Click anywhere outside the reaction picker (or Escape) dismisses it. The
   // opener buttons stopPropagation, so this never races the toggle.
@@ -290,15 +342,25 @@ export function ChatPane({
    */
   const refreshModels = useCallback(() => {
     void listOllamaModels().then(setAvailableModels);
-    // Re-read the keychain instead of trusting in-memory session state: that
-    // state can lag this mount (async startup load) and the keychain is the
-    // source of truth for key removal too. Idempotent and local, so cheap.
+    // The keychain probe is memoized per session (see tinfoil.ts): reading
+    // the keychain can prompt for the device password, so it happens at most
+    // once, and never at mount unless a Tinfoil model is already selected.
     void configureTinfoilFromKeychain().then((hasKey) =>
       hasKey ? listTinfoilModels().then(setTinfoilModels) : setTinfoilModels([]),
     );
   }, []);
 
-  useEffect(refreshModels, [refreshModels]);
+  // On mount, list local models always but only probe the keychain when the
+  // saved model needs it — otherwise wait for the user to open the picker.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(model): mount-only probe; the picker's onOpen re-runs it
+  useEffect(() => {
+    void listOllamaModels().then(setAvailableModels);
+    if (isTinfoilModel(model)) {
+      void configureTinfoilFromKeychain().then((hasKey) =>
+        hasKey ? listTinfoilModels().then(setTinfoilModels) : setTinfoilModels([]),
+      );
+    }
+  }, []);
 
   // Fresh conversation, fresh composer: clear the draft, reply chip and
   // reaction picker when switching Blobs so state never leaks across.
@@ -353,7 +415,8 @@ export function ChatPane({
     if (scrollRef.current === null) {
       return;
     }
-    if (arrived > 0 && messages.at(-1)?.author === "user") {
+    const latest = messages.at(-1);
+    if (arrived > 0 && latest?.kind === "text" && latest.author === "user") {
       scrollToLatest("smooth");
       return;
     }
@@ -392,6 +455,10 @@ export function ChatPane({
   }, [draft]);
 
   const hasDraft = draft.trim().length > 0;
+
+  /** The circle shows Stop only with an empty composer: a draft typed mid-turn
+      is a follow-up that steers the running loop, so Send must stay reachable. */
+  const showStop = canStop && !hasDraft;
 
   // FLIP: whenever a composer control lands somewhere new (layout switch or
   // reply chip appearing), glide it from its old position instead of
@@ -495,11 +562,12 @@ export function ChatPane({
   };
 
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter sends; Shift+Enter inserts a newline; Escape cancels a reply.
+    // Enter sends; Shift+Enter inserts a newline; Escape cancels a reply
+    // (unless a reply is streaming — then the window handler stops it).
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       send();
-    } else if (event.key === "Escape" && replyTo !== null) {
+    } else if (event.key === "Escape" && !canStop && replyTo !== null) {
       closeReply();
     }
   };
@@ -633,6 +701,14 @@ export function ChatPane({
         >
           <BlobAvatar tone={agent.tone} shape={agent.shape} size={30} variant="thinking" />
         </div>
+        {waitingAsk === "action" ? (
+          <div className="ask-action-bar" role="status">
+            <span>{agent.name} needs you to do something above.</span>
+            <button type="button" className="modal-button" onClick={() => onSend("Done.")}>
+              Done
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {unseenCount > 0 ? (
@@ -725,18 +801,25 @@ export function ChatPane({
           >
             <MicFilled size={18} />
           </button>
-          {/* One circle, fixed position: its glyph cross-fades mic↔arrow. */}
+          {/* One circle, fixed position: its glyph cross-fades mic↔arrow↔stop.
+              With an empty composer mid-reply it is the Stop button (Escape
+              does the same), so the control that starts a turn also ends it. */}
           <button
             type={hasDraft ? "submit" : "button"}
             className="composer-mic"
-            aria-label={hasDraft ? "Send message" : "Dictate message"}
+            aria-label={showStop ? "Stop replying" : hasDraft ? "Send message" : "Dictate message"}
             data-flip="mic"
+            data-stop={showStop}
+            onClick={showStop ? onStop : undefined}
           >
-            <span className="composer-mic-glyph" data-visible={!hasDraft}>
+            <span className="composer-mic-glyph" data-visible={!hasDraft && !showStop}>
               <MicFilled size={18} />
             </span>
             <span className="composer-mic-glyph" data-visible={hasDraft}>
               <ArrowUp size={17} strokeWidth={2.4} aria-hidden="true" />
+            </span>
+            <span className="composer-mic-glyph" data-visible={showStop}>
+              <Square size={11} fill="currentColor" strokeWidth={0} aria-hidden="true" />
             </span>
           </button>
         </div>

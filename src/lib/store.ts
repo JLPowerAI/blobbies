@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Agent, Message, Routine } from "@/data/agents";
+import { type ActiveRun, parseRun } from "@/lib/run-state";
 import { isTauri } from "@/lib/tauri";
 
 /**
@@ -8,7 +9,7 @@ import { isTauri } from "@/lib/tauri";
  * under the same keys, so behavior is identical without Tauri.
  */
 
-export type BlobSliceName = "config" | "routines" | "transcript";
+export type BlobSliceName = "config" | "routines" | "transcript" | "runs";
 
 export interface Settings {
   userName: string;
@@ -193,13 +194,25 @@ export function saveBlobConfig(id: string, config: Agent): void {
   queueWrite(`blobs/${id}/config`, config);
 }
 
+export async function loadBlobRun(id: string): Promise<ActiveRun | null> {
+  return parseRun(await rawRead(`blobs/${id}/runs`));
+}
+
+/**
+ * Immediate write, not debounced: the record exists so a crash mid-run is
+ * visible on relaunch, which a 300ms debounce window would defeat.
+ */
+export async function saveBlobRun(id: string, run: ActiveRun): Promise<void> {
+  await flushWrite(`blobs/${id}/runs`, run);
+}
+
 /** Soft-delete: moves the Blob dir to trash (purged after 30 days). */
 export async function deleteBlobData(id: string): Promise<void> {
   if (isTauri()) {
     await invoke("store_delete_blob", { id });
     return;
   }
-  for (const slice of ["config", "routines", "transcript"]) {
+  for (const slice of ["config", "routines", "transcript", "runs"]) {
     backendRemove(`slice:blobs/${id}/${slice}`);
   }
 }

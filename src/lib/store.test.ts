@@ -42,6 +42,23 @@ describe("store (browser fallback)", () => {
     ]);
   });
 
+  it("run records write immediately — no debounce window to lose on a crash", async () => {
+    const run = {
+      id: "run-1",
+      blobId: BLOB_ID,
+      trigger: "routine" as const,
+      prompt: "check the news",
+      startedAt: 1,
+      status: "running" as const,
+    };
+    await store.saveBlobRun(BLOB_ID, run);
+    // Readable with NO flush event: the write must not have been queued.
+    expect(await store.loadBlobRun(BLOB_ID)).toEqual(run);
+    // Corrupt/foreign values parse to null instead of leaking into the app.
+    await store.saveBlobRun(BLOB_ID, { nonsense: true } as never);
+    expect(await store.loadBlobRun(BLOB_ID)).toBeNull();
+  });
+
   it("deleteBlobData removes every per-Blob slice", async () => {
     store.saveBlobConfig(BLOB_ID, ken);
     store.saveBlobTranscript(BLOB_ID, [
@@ -50,9 +67,19 @@ describe("store (browser fallback)", () => {
     window.dispatchEvent(new Event("beforeunload"));
     expect(await store.loadBlobTranscript(BLOB_ID)).not.toBeNull();
 
+    await store.saveBlobRun(BLOB_ID, {
+      id: "run-1",
+      blobId: BLOB_ID,
+      trigger: "user",
+      prompt: "",
+      startedAt: 1,
+      status: "done",
+    });
+
     await store.deleteBlobData(BLOB_ID);
     expect(await store.loadBlobTranscript(BLOB_ID)).toBeNull();
     expect(await store.loadBlobRoutines(BLOB_ID)).toBeNull();
+    expect(await store.loadBlobRun(BLOB_ID)).toBeNull();
   });
 
   it("ignores corrupt stored JSON instead of throwing", async () => {

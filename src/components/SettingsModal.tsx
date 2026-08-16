@@ -119,9 +119,12 @@ function tinfoilBlurb(status: TinfoilStatus): string {
 }
 
 /** Check the keychain for a Tinfoil key and load the model catalog. */
-async function probeTinfoil(setStatus: (status: TinfoilStatus) => void): Promise<void> {
+async function probeTinfoil(
+  setStatus: (status: TinfoilStatus) => void,
+  force = false,
+): Promise<void> {
   setStatus({ kind: "checking" });
-  if (await configureTinfoilFromKeychain()) {
+  if (await configureTinfoilFromKeychain(force)) {
     setStatus({ kind: "configured", models: await listTinfoilModels() });
     return;
   }
@@ -180,11 +183,15 @@ export function SettingsModal({
     }
     await setSecret("tinfoil-api-key", key);
     setTinfoilKeyDraft("");
-    await probeTinfoil(setTinfoil);
+    // Force: the session probe may have cached "no key" before this save.
+    await probeTinfoil(setTinfoil, true);
   };
 
   const removeTinfoilKey = async () => {
     await deleteSecret("tinfoil-api-key");
+    // Refresh the session probe so pickers stop offering Tinfoil models.
+    // Awaited before the clear below: an in-flight probe must not land after.
+    await configureTinfoilFromKeychain(true);
     configureTinfoil({ apiKey: null });
     setTinfoil({ kind: "none" });
     // A selected Tinfoil model is unusable without the key: back to unset.

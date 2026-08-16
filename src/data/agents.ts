@@ -65,6 +65,12 @@ export type Message =
       replyTo?: string;
       /** Epoch ms when the message was created. Absent on legacy entries. */
       timestampMs?: number;
+      /**
+       * Set when this agent message is a mid-run question: "question" renders
+       * a highlighted card, "action" an amber "needs you" card with a Done
+       * button. The next user message answers it.
+       */
+      ask?: "question" | "action";
     }
   | {
       id: string;
@@ -72,6 +78,13 @@ export type Message =
       author: "agent";
       fileName: string;
       meta: string;
+      timestampMs?: number;
+    }
+  | {
+      /** System status line in the transcript, e.g. a routine firing. */
+      id: string;
+      kind: "event";
+      text: string;
       timestampMs?: number;
     };
 
@@ -83,6 +96,13 @@ export interface Routine {
   /** Trigger labels, e.g. "Every hour" or "Slack message". */
   triggers: string[];
   active: boolean;
+  /** When to fire automatically; absent = manual-only routine. */
+  schedule?: import("@/lib/schedule").RoutineSchedule;
+  /** Epoch ms of the next scheduled fire; the scheduler claims it via CAS. */
+  nextRunAt?: number;
+  /** Epoch ms of the last completed fire. */
+  lastRunAt?: number;
+  lastRunStatus?: "done" | "failed" | "cancelled";
 }
 
 /** Hard cap for Blob names so sidebar rows and headers never truncate oddly. */
