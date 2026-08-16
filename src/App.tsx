@@ -171,22 +171,17 @@ export function App() {
    *
    * Assigned every render, so a turn always sees the newest values.
    */
-  const turnSettings = useRef({
+  const currentTurnSettings = {
     model,
     userName,
     timezone,
     reasoning,
     userMemories,
-    mcpServers: [] as McpServerConfig[],
-  });
-  turnSettings.current = {
-    model,
-    userName,
-    timezone,
-    reasoning,
-    userMemories,
+    // Only enabled servers are ever contacted.
     mcpServers: mcpServers.filter((server) => server.enabled),
   };
+  const turnSettings = useRef(currentTurnSettings);
+  turnSettings.current = currentTurnSettings;
 
   // Configure Tinfoil only when the chosen model actually needs it: a
   // keychain read can prompt for the device password (macOS re-verifies the

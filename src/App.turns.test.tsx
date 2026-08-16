@@ -18,7 +18,9 @@ import type { Settings } from "@/lib/store";
  *   - token accounting across an ask, the one place a run spans two turns;
  *   - Settings edits (instructions, memory scope) landing in the next
  *     turn's system prompt;
- *   - two roster writes inside one turn composing instead of clobbering.
+ *   - two roster writes inside one turn composing instead of clobbering;
+ *   - a turn fired by the scheduler rather than by typing, which runs a
+ *     different closure and so can read entirely different values.
  */
 
 type TurnOptions = Parameters<typeof StreamBlobTurn>[0];
@@ -373,6 +375,9 @@ describe("turn wiring", () => {
     await user.click(within(details).getByRole("button", { name: "Share with all Blobs" }));
 
     // Fire through the scheduler's own host, not by typing a message.
+    // Asserted first so a mock that never captured the host fails as
+    // "scheduler never started" rather than as a confusing count mismatch.
+    expect(schedulerHost, "scheduler was never started").not.toBeNull();
     const blobId = (await store.loadRoster())?.[0]?.id ?? "";
     const before = calls.length;
     await schedulerHost?.fire(blobId, {
@@ -383,6 +388,9 @@ describe("turn wiring", () => {
       active: true,
       schedule: { kind: "daily", hour: 8, minute: 0 },
     });
+    // That a turn ran at all is the `model` half of this: a stale closure
+    // holds the mount-time "", so requestReply bails before streamBlobTurn
+    // and scheduled routines never run.
     await waitFor(() => expect(calls.length).toBeGreaterThan(before));
 
     const routineTurn = calls[calls.length - 1];
