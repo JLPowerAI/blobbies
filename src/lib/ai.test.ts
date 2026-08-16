@@ -72,6 +72,18 @@ describe("blobSystemPrompt", () => {
     // Anything that changes each turn re-prefills the whole transcript.
     expect(prompt).not.toMatch(/\d{1,2}:\d{2}/);
   });
+
+  it("tells the truth about where inference runs, per runtime", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const blob = { name: "Ken", title: "Coach", description: "Helps." };
+    // Local (default): on-device, nothing leaves the machine.
+    expect(blobSystemPrompt(blob)).toContain("Nothing you see or store leaves this machine.");
+    // Enclave: encrypted end-to-end into a verified enclave — claiming
+    // "never leaves this machine" here would be a lie the Blob repeats.
+    const enclave = blobSystemPrompt(blob, undefined, { runtime: "enclave" });
+    expect(enclave).toContain("verified private enclave");
+    expect(enclave).not.toContain("leaves this machine");
+  });
 });
 
 describe("timeNote", () => {

@@ -2,6 +2,7 @@ import type { Message } from "@kenkaiiii/gg-ai";
 import { type BlobMemory, renderMemories } from "@/lib/blob-tools";
 import { OLLAMA_URL } from "@/lib/ollama";
 import { OLLAMA_KEEP_ALIVE, OLLAMA_NUM_CTX } from "@/lib/ollama-native";
+import { isTinfoilModel, tinfoilStructuredCall } from "@/lib/tinfoil";
 
 /**
  * Intent routing: decide what a user's message asks of the Blob using
@@ -95,6 +96,8 @@ const INTENT_SCHEMA = {
     memory_number: { type: "integer" },
     needs_web: { type: "boolean" },
   },
+  // Required by OpenAI strict structured outputs (Tinfoil); Ollama ignores it.
+  additionalProperties: false,
 } as const;
 
 /**
@@ -162,6 +165,8 @@ const RECONCILE_SCHEMA = {
   properties: {
     obsolete: { type: "array", items: { type: "integer" } },
   },
+  // Required by OpenAI strict structured outputs (Tinfoil); Ollama ignores it.
+  additionalProperties: false,
 } as const;
 
 /**
@@ -200,50 +205,69 @@ export async function reconcileMemories(options: {
       options.signal.addEventListener("abort", onParentAbort, { once: true });
     }
   }
+  const reconcileMessages = [
+    {
+      role: "system",
+      content:
+        "You keep a person's saved facts up to date.\n\n" +
+        "Every fact — new and saved — is about the SAME one person, whether " +
+        "it calls them 'the user', a name, or anything else. Never treat a " +
+        "different wording of the subject as a different person.\n\n" +
+        "Given a NEW fact, list the numbers of saved facts that are now " +
+        "WRONG or OUT OF DATE because of it. A saved fact is obsolete when " +
+        "the new fact replaces it or contradicts it \u2014 people change jobs, " +
+        "partners, cities and schedules, and the old version is no longer " +
+        "true. Facts that can BOTH be true at once are not obsolete.\n\n" +
+        "Examples:\n" +
+        "new: 'the user and Sarah broke up' / saved: '1. Ken's girlfriend is " +
+        "called Sarah' -> obsolete [1] (same person, relationship over)\n" +
+        "new: 'the user works at Beta Corp' / saved: '1. Ken works at Acme' -> obsolete [1]\n" +
+        "new: 'the user is allergic to shellfish' / saved: '1. Ken is allergic " +
+        "to peanuts' -> obsolete [] (same person, but two allergies can " +
+        "BOTH be true — adding is not replacing)\n" +
+        "new: 'Ken trains on Fridays' / saved: '1. Ken trains on Mondays', " +
+        "'2. Ken has a sister' -> obsolete [1]",
+    },
+    { role: "user", content: `NEW fact:\n${options.fact}\n\nSaved facts:\n${numbered}` },
+  ];
   try {
-    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: deadline.signal,
-      body: JSON.stringify({
+    let content: string;
+    if (isTinfoilModel(options.model)) {
+      const result = await tinfoilStructuredCall({
         model: options.model,
-        stream: false,
-        think: false,
-        keep_alive: OLLAMA_KEEP_ALIVE,
-        format: RECONCILE_SCHEMA,
-        options: ROUTER_OPTIONS,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You keep a person's saved facts up to date.\n\n" +
-              "Every fact — new and saved — is about the SAME one person, whether " +
-              "it calls them 'the user', a name, or anything else. Never treat a " +
-              "different wording of the subject as a different person.\n\n" +
-              "Given a NEW fact, list the numbers of saved facts that are now " +
-              "WRONG or OUT OF DATE because of it. A saved fact is obsolete when " +
-              "the new fact replaces it or contradicts it \u2014 people change jobs, " +
-              "partners, cities and schedules, and the old version is no longer " +
-              "true. Facts that can BOTH be true at once are not obsolete.\n\n" +
-              "Examples:\n" +
-              "new: 'the user and Sarah broke up' / saved: '1. Ken's girlfriend is " +
-              "called Sarah' -> obsolete [1] (same person, relationship over)\n" +
-              "new: 'the user works at Beta Corp' / saved: '1. Ken works at Acme' -> obsolete [1]\n" +
-              "new: 'the user is allergic to shellfish' / saved: '1. Ken is allergic " +
-              "to peanuts' -> obsolete [] (same person, but two allergies can " +
-              "BOTH be true — adding is not replacing)\n" +
-              "new: 'Ken trains on Fridays' / saved: '1. Ken trains on Mondays', " +
-              "'2. Ken has a sister' -> obsolete [1]",
-          },
-          { role: "user", content: `NEW fact:\n${options.fact}\n\nSaved facts:\n${numbered}` },
-        ],
-      }),
-    });
-    if (!response.ok) {
-      return [];
+        messages: reconcileMessages,
+        schema: RECONCILE_SCHEMA,
+        schemaName: "reconcile_memories",
+        temperature: ROUTER_TEMPERATURE,
+        maxTokens: ROUTER_MAX_TOKENS,
+        signal: deadline.signal,
+      });
+      if (result === null) {
+        return [];
+      }
+      content = result;
+    } else {
+      const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: deadline.signal,
+        body: JSON.stringify({
+          model: options.model,
+          stream: false,
+          think: false,
+          keep_alive: OLLAMA_KEEP_ALIVE,
+          format: RECONCILE_SCHEMA,
+          options: ROUTER_OPTIONS,
+          messages: reconcileMessages,
+        }),
+      });
+      if (!response.ok) {
+        return [];
+      }
+      const payload = (await response.json()) as { message?: { content?: string } };
+      content = payload.message?.content ?? "{}";
     }
-    const payload = (await response.json()) as { message?: { content?: string } };
-    const parsed: unknown = JSON.parse(payload.message?.content ?? "{}");
+    const parsed: unknown = JSON.parse(content);
     if (parsed === null || typeof parsed !== "object") {
       return [];
     }
@@ -304,41 +328,60 @@ export async function routeIntent(options: {
       options.signal.addEventListener("abort", onParentAbort, { once: true });
     }
   }
+  const routerMessages = [
+    {
+      role: "system",
+      // The memory list is numbered exactly as the Blob sees it, so
+      // `memory_number` lines up with what the user is referring to.
+      content:
+        `${ROUTER_PROMPT}\n\nYour saved memories:${
+          renderMemories(options.memories) || "\n(none)"
+        }` +
+        (MEMORY_WORDS.test(text)
+          ? "\n\nThis message mentions your memory, so it is about a saved " +
+            "fact: choose save_fact or delete_fact, never change_job."
+          : ""),
+    },
+    { role: "user", content: text },
+  ];
   try {
-    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: deadline.signal,
-      body: JSON.stringify({
+    let content: string;
+    if (isTinfoilModel(options.model)) {
+      const result = await tinfoilStructuredCall({
         model: options.model,
-        stream: false,
-        think: false,
-        keep_alive: OLLAMA_KEEP_ALIVE,
-        format: INTENT_SCHEMA,
-        options: ROUTER_OPTIONS,
-        messages: [
-          {
-            role: "system",
-            // The memory list is numbered exactly as the Blob sees it, so
-            // `memory_number` lines up with what the user is referring to.
-            content:
-              `${ROUTER_PROMPT}\n\nYour saved memories:${
-                renderMemories(options.memories) || "\n(none)"
-              }` +
-              (MEMORY_WORDS.test(text)
-                ? "\n\nThis message mentions your memory, so it is about a saved " +
-                  "fact: choose save_fact or delete_fact, never change_job."
-                : ""),
-          },
-          { role: "user", content: text },
-        ],
-      }),
-    });
-    if (!response.ok) {
-      return { action: "none", needsWeb: true };
+        messages: routerMessages,
+        schema: INTENT_SCHEMA,
+        schemaName: "route_intent",
+        temperature: ROUTER_TEMPERATURE,
+        maxTokens: ROUTER_MAX_TOKENS,
+        signal: deadline.signal,
+      });
+      if (result === null) {
+        return { action: "none", needsWeb: true };
+      }
+      content = result;
+    } else {
+      const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: deadline.signal,
+        body: JSON.stringify({
+          model: options.model,
+          stream: false,
+          think: false,
+          keep_alive: OLLAMA_KEEP_ALIVE,
+          format: INTENT_SCHEMA,
+          options: ROUTER_OPTIONS,
+          messages: routerMessages,
+        }),
+      });
+      if (!response.ok) {
+        return { action: "none", needsWeb: true };
+      }
+      const payload = (await response.json()) as { message?: { content?: string } };
+      content = payload.message?.content ?? "{}";
     }
-    const payload = (await response.json()) as { message?: { content?: string } };
-    const parsed: unknown = JSON.parse(payload.message?.content ?? "{}");
+    const parsed: unknown = JSON.parse(content);
     if (parsed === null || typeof parsed !== "object") {
       return { action: "none", needsWeb: true };
     }

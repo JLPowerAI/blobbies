@@ -1,6 +1,7 @@
 import { agentLoop, isAbortError } from "@kenkaiiii/gg-agent";
 import {
   type Message,
+  type Provider,
   type StreamResult,
   stream,
   type ThinkingLevel,
@@ -20,11 +21,20 @@ import {
   OLLAMA_NUM_CTX,
   registerNativeOllamaProvider,
 } from "@/lib/ollama-native";
+import { isTinfoilModel, registerTinfoilProvider, tinfoilStructuredCall } from "@/lib/tinfoil";
 
 // From here on, "local" streams over native /api/chat so every turn carries
 // a real context window (see ollama-native.ts) — /v1 cannot set one and
 // silently truncates long conversations at Ollama's 4096 default.
 registerNativeOllamaProvider();
+// "tinfoil" routes gg-ai's OpenAI provider through Tinfoil's attested,
+// end-to-end-encrypted enclave transport — see tinfoil.ts for the decision.
+registerTinfoilProvider();
+
+/** Which registered gg-ai provider serves this Settings model choice. */
+function providerFor(model: string): Provider {
+  return (isTinfoilModel(model) ? "tinfoil" : "local") as Provider;
+}
 
 /**
  * Reasoning models (qwen3, deepseek-r1, …) default to emitting thousands of
@@ -42,9 +52,11 @@ const MAX_REPLY_TOKENS = 4096;
 // Tool discipline comes from the router's `needsWeb` verdict instead.
 
 /**
- * Chat streaming through the native Ollama provider registered above. Local
- * models only: no third-party provider is wired up, and none should be added
- * here without an explicit product decision.
+ * Chat streaming through one of the two providers registered above: local
+ * Ollama, or (for `tinfoil:` model ids) Tinfoil's client-attested enclaves —
+ * the one cloud path allowed, by explicit product decision: attestation is
+ * verified on-device and request bodies are encrypted end to end, so the
+ * operator cannot read user content. Nothing else should be added.
  *
  * Usage (dual-nature result):
  *   for await (const event of streamLocalChat({ model, messages })) { ... }
@@ -60,7 +72,7 @@ export function streamLocalChat(options: {
   signal?: AbortSignal;
 }): StreamResult {
   return stream({
-    provider: "local",
+    provider: providerFor(options.model),
     model: options.model,
     messages: options.messages,
     // Thinking on: omit the knob so the model uses its default reasoning depth.
@@ -149,6 +161,12 @@ export interface PromptExtensions {
   skills?: string[];
   /** Connected MCP servers, each a short "name: what it provides" line. */
   mcpServers?: string[];
+  /**
+   * Where inference runs, for the identity line's honesty: "local" (Ollama,
+   * the default) or "enclave" (Tinfoil — encrypted end-to-end into a
+   * client-verified private enclave).
+   */
+  runtime?: "local" | "enclave";
 }
 
 /** Render one titled section, or "" when it has no content. */
@@ -180,11 +198,19 @@ export function blobSystemPrompt(
 ): string {
   const configured = (blob.title ?? "") !== "" || (blob.description ?? "") !== "";
 
-  // 1. Identity: never changes for this Blob.
+  // 1. Identity: never changes for this Blob (per runtime). The privacy
+  // sentence must stay honest: local models run on-device, Tinfoil models
+  // run in a verified private enclave — claiming "never leaves this machine"
+  // there would be a lie the model repeats to the user.
   const identity =
-    `You are ${blob.name}, a personal assistant Blob running entirely on the ` +
-    "user's device. Nothing you see or store leaves this machine. Keep replies " +
-    "short, warm and helpful.";
+    extensions.runtime === "enclave"
+      ? `You are ${blob.name}, a personal assistant Blob. Everything you see ` +
+        "or store is encrypted end-to-end into a verified private enclave: " +
+        "no one — not even the cloud operator — can read it. Keep replies " +
+        "short, warm and helpful."
+      : `You are ${blob.name}, a personal assistant Blob running entirely on the ` +
+        "user's device. Nothing you see or store leaves this machine. Keep replies " +
+        "short, warm and helpful.";
 
   // 2. Role: changes only when the Blob reconfigures itself. No tool is
   // named here — configuration and memory writes happen automatically via
@@ -358,49 +384,69 @@ async function forcedConfigureCall(
   model: string,
   messages: Message[],
 ): Promise<BlobConfigPatch | null> {
+  // No maxLength here: a grammar length cap makes the model truncate
+  // mid-word at the boundary. Length is steered by the prompt instead,
+  // and oversized output is trimmed at whole-sentence level below.
+  // additionalProperties is required by OpenAI strict structured outputs
+  // (Tinfoil); Ollama ignores it.
+  const configureSchema = {
+    type: "object",
+    required: ["title", "description"],
+    properties: {
+      title: { type: "string" },
+      description: { type: "string" },
+    },
+    additionalProperties: false,
+  };
+  const configureMessages = [
+    ...messages
+      .filter((entry) => entry.role !== "system" && typeof entry.content === "string")
+      .map((entry) => ({ role: entry.role, content: entry.content as string })),
+    {
+      role: "system",
+      content:
+        "The user just explained what they need you (their assistant Blob) to do. " +
+        "Write your own configuration: a short `title` for the role (a few words), " +
+        "and a `description` of what you will do for them and how you will behave " +
+        "(2-4 complete sentences).",
+    },
+  ];
   try {
-    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    let content: string;
+    if (isTinfoilModel(model)) {
+      const result = await tinfoilStructuredCall({
         model,
-        stream: false,
-        think: false,
-        keep_alive: OLLAMA_KEEP_ALIVE,
-        // Full conversation goes in; without a real window Ollama's 4096
-        // default truncates it and the model configures from a torn prompt.
-        options: { num_ctx: OLLAMA_NUM_CTX },
-        messages: [
-          ...messages
-            .filter((entry) => entry.role !== "system" && typeof entry.content === "string")
-            .map((entry) => ({ role: entry.role, content: entry.content })),
-          {
-            role: "system",
-            content:
-              "The user just explained what they need you (their assistant Blob) to do. " +
-              "Write your own configuration: a short `title` for the role (a few words), " +
-              "and a `description` of what you will do for them and how you will behave " +
-              "(2-4 complete sentences).",
-          },
-        ],
-        // No maxLength here: a grammar length cap makes the model truncate
-        // mid-word at the boundary. Length is steered by the prompt instead,
-        // and oversized output is trimmed at whole-sentence level below.
-        format: {
-          type: "object",
-          required: ["title", "description"],
-          properties: {
-            title: { type: "string" },
-            description: { type: "string" },
-          },
-        },
-      }),
-    });
-    if (!response.ok) {
-      return null;
+        messages: configureMessages,
+        schema: configureSchema,
+        schemaName: CONFIGURE_TOOL_NAME,
+      });
+      if (result === null) {
+        return null;
+      }
+      content = result;
+    } else {
+      const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model,
+          stream: false,
+          think: false,
+          keep_alive: OLLAMA_KEEP_ALIVE,
+          // Full conversation goes in; without a real window Ollama's 4096
+          // default truncates it and the model configures from a torn prompt.
+          options: { num_ctx: OLLAMA_NUM_CTX },
+          messages: configureMessages,
+          format: configureSchema,
+        }),
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const payload = (await response.json()) as { message?: { content?: string } };
+      content = payload.message?.content ?? "{}";
     }
-    const payload = (await response.json()) as { message?: { content?: string } };
-    const parsed = configArgs.safeParse(JSON.parse(payload.message?.content ?? "{}"));
+    const parsed = configArgs.safeParse(JSON.parse(content));
     if (!parsed.success) {
       return null;
     }
@@ -557,7 +603,7 @@ export async function streamBlobTurn(options: {
     const memoryTools = new Set(["remember", "update_memory", "forget"]);
     const tools = makeBlobTools(options.memory).filter((tool) => !memoryTools.has(tool.name));
     const loop = agentLoop(conversation, {
-      provider: "local",
+      provider: providerFor(options.model),
       model: options.model,
       ...(options.thinking === true ? {} : { thinking: NO_THINKING }),
       ...(scope === "none" ? {} : { tools }),

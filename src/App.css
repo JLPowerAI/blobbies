@@ -29,6 +29,12 @@
   --toggle-track: rgba(0, 0, 0, 0.18);
   --focus-ring: #0a5dc2;
 
+  /* Modal surfaces: same as the app surfaces in light mode, but elevated
+     (lighter, not darker) in dark mode — macOS-style raised dialogs. */
+  --surface-modal: #ffffff;
+  --surface-modal-card: #f4f4f6;
+  --surface-modal-control: #e9e9ec;
+
   --radius-bubble: 18px;
   --radius-control: 10px;
 
@@ -80,6 +86,11 @@
   --soft-overlay: rgba(255, 255, 255, 0.1);
   --toggle-track: rgba(255, 255, 255, 0.22);
   --focus-ring: #6cb2ff;
+
+  /* Elevated dialog grays (approx. macOS secondary/elevated/control). */
+  --surface-modal: #1c1c1e;
+  --surface-modal-card: #29292b;
+  --surface-modal-control: #3a3a3c;
 }
 
 html,
@@ -706,7 +717,7 @@ select:focus:not(:focus-visible) {
   max-width: 440px;
   padding: 20px;
   border-radius: 14px;
-  background: var(--surface-chat);
+  background: var(--surface-modal);
   border: 1px solid var(--border-hairline);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
   animation: menu-pop-in 140ms var(--ease-standard);
@@ -863,7 +874,7 @@ select:focus:not(:focus-visible) {
   max-width: 560px;
   border: 1px solid var(--border-hairline);
   border-radius: 14px;
-  background: var(--surface-chat);
+  background: var(--surface-modal);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
   overflow: hidden;
   animation: palette-in 200ms var(--ease-standard);
@@ -1284,7 +1295,7 @@ select:focus:not(:focus-visible) {
   height: min(640px, 78vh);
   border-radius: 16px;
   overflow: hidden;
-  background: var(--surface-chat);
+  background: var(--surface-modal);
   /* Visible edge around the whole dialog, like the reference. */
   border: 1px solid var(--border-hairline);
   box-shadow: 0 24px 68px rgba(0, 0, 0, 0.3);
@@ -1308,7 +1319,7 @@ select:focus:not(:focus-visible) {
   padding: 14px 10px;
   /* Same surface as the content; only the hairline separates them, like the
      reference. */
-  background: var(--surface-chat);
+  background: var(--surface-modal);
   border-right: 1px solid var(--border-hairline);
 }
 
@@ -1362,7 +1373,7 @@ select:focus:not(:focus-visible) {
 
 .modal-card {
   border-radius: 12px;
-  background: var(--surface-sidebar);
+  background: var(--surface-modal-card);
   padding: 4px 14px;
 }
 
@@ -1407,10 +1418,29 @@ select:focus:not(:focus-visible) {
   line-height: 1.4;
 }
 
+/* Links in blurbs (e.g. "Get a key") take the theme accent, not UA blue. */
+.modal-row-blurb a {
+  color: var(--accent-link);
+}
+
 .modal-name-wrap {
   position: relative;
   flex: 1;
   max-width: 300px;
+}
+
+/* Stacked field: label on top, full-width input row below (settings modal). */
+.modal-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 0;
+}
+
+.modal-field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .modal-name-input {
@@ -1420,7 +1450,7 @@ select:focus:not(:focus-visible) {
   padding: 0 11px;
   border: 1px solid var(--border-hairline);
   border-radius: 9px;
-  background: var(--surface-chat);
+  background: var(--surface-modal);
   font-family: inherit;
   font-size: 13.5px;
   color: var(--text-primary);
@@ -1430,6 +1460,10 @@ select:focus:not(:focus-visible) {
 .modal-name-input:focus {
   outline: none;
   border-color: var(--border-strong);
+}
+
+.modal-field-row .modal-name-input {
+  flex: 1;
 }
 
 .modal-count {
@@ -1468,11 +1502,27 @@ select:focus:not(:focus-visible) {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  /* The icon buttons keep their size; the pills give way first. */
+  flex-shrink: 1;
 }
 
-/* Header pills are tighter than settings rows and truncate long model tags. */
+.chat-header-controls > .icon-button {
+  flex-shrink: 0;
+}
+
+.chat-header-controls .pill-select {
+  /* Unlike settings rows, header pills must give way when the detail panel
+     claims the width — the base class pins flex-shrink: 0. */
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* Header pills are tighter than settings rows and truncate long model tags.
+   min-width lets them shrink (ellipsizing) instead of overflowing the bar. */
 .chat-header-controls .pill-select select {
   max-width: 180px;
+  min-width: 0;
+  width: 100%;
   padding-block: 5px;
   font-size: 12.5px;
 }
@@ -1497,6 +1547,22 @@ select:focus:not(:focus-visible) {
 }
 
 .modal-button:hover {
+  background: var(--surface-selected);
+}
+
+/* Controls sitting on modal surfaces need the elevated control gray — the
+   app-wide --surface-control disappears against the lighter dark-mode card.
+   confirm-danger is excluded: it must keep its red (equal specificity, and
+   this rule is defined later, so it would win otherwise). */
+.settings-modal .modal-button,
+.settings-modal .pill-select select,
+.confirm-dialog .modal-button:not(.confirm-danger) {
+  background: var(--surface-modal-control);
+}
+
+.settings-modal .modal-button:hover,
+.settings-modal .pill-select select:hover,
+.confirm-dialog .modal-button:not(.confirm-danger):hover {
   background: var(--surface-selected);
 }
 
@@ -1592,7 +1658,7 @@ a.modal-button {
 
 .plugins-tab-active,
 .plugins-tab-active:hover {
-  background: var(--surface-control);
+  background: var(--surface-modal-control);
   color: var(--text-primary);
 }
 
@@ -1613,7 +1679,7 @@ a.modal-button {
   min-width: 190px;
   padding: 8px;
   border-radius: 13px;
-  background: var(--surface-chat);
+  background: var(--surface-modal);
   border: 1px solid var(--border-hairline);
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
   animation: palette-in 160ms var(--ease-standard);
@@ -1649,6 +1715,11 @@ a.modal-button {
 .plugins-search {
   position: relative;
   width: 240px;
+}
+
+/* Sidebar search gray vanishes on the elevated modal surface. */
+.plugins-search .search-input {
+  background: var(--surface-modal-control);
 }
 
 .plugins-body {
@@ -1907,6 +1978,39 @@ a.modal-button {
   filter: brightness(1.08);
 }
 
+/* Floating "scroll to bottom" — same slot as the new-messages pill (which
+   takes priority), hidden while already at the bottom. */
+.scroll-bottom-wrap {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 96px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.scroll-bottom-button {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface-composer);
+  color: var(--text-primary);
+  border: 1px solid var(--border-hairline);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  cursor: pointer;
+  animation: pop-up-in 140ms var(--ease-standard);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.scroll-bottom-button:hover {
+  background: var(--surface-control);
+}
+
 .chat-header {
   display: flex;
   align-items: center;
@@ -1923,6 +2027,13 @@ a.modal-button {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Shrinkable in narrow windows: the name truncates, the avatar doesn't. */
+  min-width: 0;
+}
+
+.chat-header-identity > svg,
+.chat-header-identity > span {
+  flex-shrink: 0;
 }
 
 .identity-button {
@@ -1940,6 +2051,10 @@ a.modal-button {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
+  /* Never wrap in the fixed-height titlebar; ellipsize instead. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .message-scroll {

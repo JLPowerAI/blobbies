@@ -1,5 +1,6 @@
 mod commands;
 mod error;
+mod secrets;
 mod store;
 
 pub use error::Error;
@@ -25,7 +26,10 @@ pub fn run() {
             store::store_read,
             store::store_write,
             store::store_delete_blob,
-            store::store_list_blobs
+            store::store_list_blobs,
+            secrets::secret_get,
+            secrets::secret_set,
+            secrets::secret_delete
         ])
         .setup(|app| {
             store::startup_maintenance(app.handle());

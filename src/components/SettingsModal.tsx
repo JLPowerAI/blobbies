@@ -9,6 +9,15 @@ import {
   type OllamaModel,
   startOllama,
 } from "@/lib/ollama";
+import { deleteSecret, setSecret } from "@/lib/secrets";
+import {
+  configureTinfoil,
+  configureTinfoilFromKeychain,
+  isTinfoilModel,
+  listTinfoilModels,
+  TINFOIL_MODEL_PREFIX,
+  type TinfoilModel,
+} from "@/lib/tinfoil";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 export const MAX_USER_NAME_LENGTH = 32;
@@ -70,13 +79,53 @@ function ollamaBlurb(status: OllamaStatus): string {
   }
 }
 
-function modelBlurb(status: OllamaStatus): string {
+function modelBlurb(status: OllamaStatus, tinfoilReady: boolean): string {
   if (status.kind === "running") {
     return status.models.length === 0
       ? "No models downloaded yet. Run `ollama pull gemma3`, then re-check."
       : "Your Blobs think with this model. Everything stays on your device.";
   }
-  return "Available once Ollama is installed and running.";
+  return tinfoilReady
+    ? "Tinfoil models stay available while Ollama is off; local models return once it's running."
+    : "Available once Ollama is installed and running.";
+}
+
+/** What the Model tab knows about the Tinfoil account right now. */
+type TinfoilStatus =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "none" }
+  | { kind: "configured"; models: TinfoilModel[] };
+
+const TINFOIL_DOT_TONE: Record<TinfoilStatus["kind"], "wait" | "err" | "warn" | "ok"> = {
+  idle: "wait",
+  checking: "wait",
+  none: "warn",
+  configured: "ok",
+};
+
+function tinfoilBlurb(status: TinfoilStatus): string {
+  switch (status.kind) {
+    case "idle":
+    case "checking":
+      return "Checking for a saved Tinfoil key…";
+    case "none":
+      return "Private cloud models in secure enclaves — verified by this device.";
+    case "configured": {
+      const count = status.models.length;
+      return `API key saved · ${count} ${count === 1 ? "model" : "models"} available`;
+    }
+  }
+}
+
+/** Check the keychain for a Tinfoil key and load the model catalog. */
+async function probeTinfoil(setStatus: (status: TinfoilStatus) => void): Promise<void> {
+  setStatus({ kind: "checking" });
+  if (await configureTinfoilFromKeychain()) {
+    setStatus({ kind: "configured", models: await listTinfoilModels() });
+    return;
+  }
+  setStatus({ kind: "none" });
 }
 
 /** Probe the local Ollama install/server and report the result. */
@@ -106,6 +155,8 @@ export function SettingsModal({
   const [updateStatus, setUpdateStatus] = useState("You're up to date");
   const [track, setTrack] = useState("stable");
   const [ollama, setOllama] = useState<OllamaStatus>({ kind: "idle" });
+  const [tinfoil, setTinfoil] = useState<TinfoilStatus>({ kind: "idle" });
+  const [tinfoilKeyDraft, setTinfoilKeyDraft] = useState("");
   const dialogRef = useRef<HTMLDivElement>(null);
   const { closing, requestClose, finishClose } = useExitAnimation(onClose);
 
@@ -114,9 +165,33 @@ export function SettingsModal({
     if (tab === "model" && ollama.kind === "idle") {
       void probeOllama(setOllama);
     }
-  }, [tab, ollama.kind]);
+    if (tab === "model" && tinfoil.kind === "idle") {
+      void probeTinfoil(setTinfoil);
+    }
+  }, [tab, ollama.kind, tinfoil.kind]);
 
   const availableModels = ollama.kind === "running" ? ollama.models : [];
+  const tinfoilModels = tinfoil.kind === "configured" ? tinfoil.models : [];
+
+  const saveTinfoilKey = async () => {
+    const key = tinfoilKeyDraft.trim();
+    if (key === "") {
+      return;
+    }
+    await setSecret("tinfoil-api-key", key);
+    setTinfoilKeyDraft("");
+    await probeTinfoil(setTinfoil);
+  };
+
+  const removeTinfoilKey = async () => {
+    await deleteSecret("tinfoil-api-key");
+    configureTinfoil({ apiKey: null });
+    setTinfoil({ kind: "none" });
+    // A selected Tinfoil model is unusable without the key: back to unset.
+    if (isTinfoilModel(model)) {
+      onModelChange("");
+    }
+  };
 
   const turnOnOllama = async () => {
     setOllama({ kind: "starting" });
@@ -348,6 +423,75 @@ export function SettingsModal({
                 </div>
               </div>
 
+              <p className="modal-section-label">Tinfoil</p>
+              <div className="modal-card">
+                <div className="modal-row modal-row-multiline">
+                  <span className="modal-row-text">
+                    <span className="modal-row-title ollama-title">
+                      <span
+                        className={`ollama-dot ollama-dot-${TINFOIL_DOT_TONE[tinfoil.kind]}`}
+                        aria-hidden="true"
+                      />
+                      Tinfoil
+                    </span>
+                    <span className="modal-row-blurb" aria-live="polite">
+                      {tinfoilBlurb(tinfoil)}{" "}
+                      {tinfoil.kind === "none" ? (
+                        <ExternalLink href="https://docs.tinfoil.sh/get-api-key">
+                          Get a key
+                        </ExternalLink>
+                      ) : null}
+                    </span>
+                  </span>
+                  {tinfoil.kind === "configured" ? (
+                    <button
+                      type="button"
+                      className="modal-button"
+                      onClick={() => void removeTinfoilKey()}
+                    >
+                      Remove Key
+                    </button>
+                  ) : null}
+                </div>
+                {tinfoil.kind === "none" ? (
+                  <>
+                    <div className="modal-divider" />
+                    <div className="modal-stack">
+                      <label className="modal-row-title" htmlFor="tinfoil-key">
+                        API key
+                      </label>
+                      <div className="modal-field-row">
+                        <input
+                          id="tinfoil-key"
+                          type="password"
+                          className="modal-name-input"
+                          autoComplete="off"
+                          placeholder="Paste your API key"
+                          value={tinfoilKeyDraft}
+                          onChange={(event) => setTinfoilKeyDraft(event.currentTarget.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              void saveTinfoilKey();
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="modal-button"
+                          disabled={tinfoilKeyDraft.trim() === ""}
+                          onClick={() => void saveTinfoilKey()}
+                        >
+                          Save
+                        </button>
+                      </div>
+                      <span className="modal-row-blurb">
+                        Stored in your OS keychain, never in app files.
+                      </span>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+
               <p className="modal-section-label">Model</p>
               <div className="modal-card">
                 <div className="modal-row modal-row-multiline">
@@ -355,7 +499,9 @@ export function SettingsModal({
                     <label className="modal-row-title" htmlFor="model-select">
                       Chat model
                     </label>
-                    <span className="modal-row-blurb">{modelBlurb(ollama)}</span>
+                    <span className="modal-row-blurb">
+                      {modelBlurb(ollama, tinfoilModels.length > 0)}
+                    </span>
                   </span>
                   <PillSelect
                     id="model-select"
@@ -364,14 +510,29 @@ export function SettingsModal({
                     onChange={onModelChange}
                   >
                     <option value="">Choose a model</option>
-                    {model !== "" && !availableModels.some((entry) => entry.name === model) ? (
+                    {model !== "" &&
+                    !isTinfoilModel(model) &&
+                    !availableModels.some((entry) => entry.name === model) ? (
                       <option value={model}>{`${model} (not downloaded)`}</option>
                     ) : null}
-                    {availableModels.map((entry) => (
-                      <option key={entry.name} value={entry.name}>
-                        {entry.name}
-                      </option>
-                    ))}
+                    {availableModels.length > 0 ? (
+                      <optgroup label="Ollama — local">
+                        {availableModels.map((entry) => (
+                          <option key={entry.name} value={entry.name}>
+                            {entry.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+                    {tinfoilModels.length > 0 ? (
+                      <optgroup label="Tinfoil — private cloud">
+                        {tinfoilModels.map((entry) => (
+                          <option key={entry.id} value={`${TINFOIL_MODEL_PREFIX}${entry.id}`}>
+                            {entry.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
                   </PillSelect>
                 </div>
               </div>

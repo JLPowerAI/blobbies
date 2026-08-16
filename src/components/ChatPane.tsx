@@ -24,6 +24,12 @@ import { MarkdownContent } from "@/components/MarkdownContent";
 import { PillSelect } from "@/components/PillSelect";
 import type { Agent, Message } from "@/data/agents";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
+import {
+  configureTinfoilFromKeychain,
+  listTinfoilModels,
+  TINFOIL_MODEL_PREFIX,
+  type TinfoilModel,
+} from "@/lib/tinfoil";
 
 interface ChatPaneProps {
   agent: Agent;
@@ -41,6 +47,10 @@ interface ChatPaneProps {
   onToggleDetail: () => void;
   onOpenSettings: () => void;
 }
+
+/** Messages rendered initially; scrolling to the top reveals another page.
+    Caps DOM size for long transcripts — markdown bubbles are expensive. */
+const MESSAGE_PAGE_SIZE = 50;
 
 const REACTIONS: ReadonlyArray<{ emoji: string; name: string }> = [
   { emoji: "\u{1F44D}", name: "thumbs up" },
@@ -245,6 +255,14 @@ export function ChatPane({
     };
   }, [pickerFor]);
   const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
+  const [tinfoilModels, setTinfoilModels] = useState<TinfoilModel[]>([]);
+  /** How many trailing messages are rendered; grows as the user scrolls up. */
+  const [visibleCount, setVisibleCount] = useState(MESSAGE_PAGE_SIZE);
+  /** Shows the floating "scroll to bottom" button while scrolled up. */
+  const [showJump, setShowJump] = useState(false);
+  /** Scroll geometry captured just before older messages mount, so the
+      viewport can be re-anchored instead of jumping to the new top. */
+  const loadAnchorRef = useRef<{ height: number; top: number } | null>(null);
   /** Replies that arrived while the user was scrolled up; drives the pill. */
   const [unseenCount, setUnseenCount] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -272,6 +290,12 @@ export function ChatPane({
    */
   const refreshModels = useCallback(() => {
     void listOllamaModels().then(setAvailableModels);
+    // Re-read the keychain instead of trusting in-memory session state: that
+    // state can lag this mount (async startup load) and the keychain is the
+    // source of truth for key removal too. Idempotent and local, so cheap.
+    void configureTinfoilFromKeychain().then((hasKey) =>
+      hasKey ? listTinfoilModels().then(setTinfoilModels) : setTinfoilModels([]),
+    );
   }, []);
 
   useEffect(refreshModels, [refreshModels]);
@@ -287,8 +311,25 @@ export function ChatPane({
     setMultiline(false);
     setReactions({});
     setUnseenCount(0);
+    setVisibleCount(MESSAGE_PAGE_SIZE);
+    setShowJump(false);
+    // A page-load pending at switch time must not survive: its geometry
+    // belongs to the old conversation, and a stale anchor blocks paging.
+    loadAnchorRef.current = null;
     nearBottomRef.current = true;
   }, [agent.id]);
+
+  // Older page mounted above the viewport: keep what the user was looking at
+  // stationary by offsetting the scroll position with the added height.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(visibleCount): re-anchor exactly when the page mounts
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const anchor = loadAnchorRef.current;
+    loadAnchorRef.current = null;
+    if (el !== null && anchor !== null) {
+      el.scrollTop = anchor.top + (el.scrollHeight - anchor.height);
+    }
+  }, [visibleCount]);
 
   const scrollToLatest = (behavior: ScrollBehavior = "smooth") => {
     const el = scrollRef.current;
@@ -298,6 +339,7 @@ export function ChatPane({
       el.scrollTo({ top: el.scrollHeight, behavior });
     }
     setUnseenCount(0);
+    setShowJump(false);
   };
 
   // Follow the conversation: sending your own message glides down to it (even
@@ -496,14 +538,29 @@ export function ChatPane({
             onOpen={refreshModels}
           >
             <option value="">Choose a model</option>
-            {model !== "" && !availableModels.some((entry) => entry.name === model) ? (
+            {model !== "" &&
+            !availableModels.some((entry) => entry.name === model) &&
+            !tinfoilModels.some((entry) => `${TINFOIL_MODEL_PREFIX}${entry.id}` === model) ? (
               <option value={model}>{model}</option>
             ) : null}
-            {availableModels.map((entry) => (
-              <option key={entry.name} value={entry.name}>
-                {entry.name}
-              </option>
-            ))}
+            {availableModels.length > 0 ? (
+              <optgroup label="Ollama — local">
+                {availableModels.map((entry) => (
+                  <option key={entry.name} value={entry.name}>
+                    {entry.name}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            {tinfoilModels.length > 0 ? (
+              <optgroup label="Tinfoil — private cloud">
+                {tinfoilModels.map((entry) => (
+                  <option key={entry.id} value={`${TINFOIL_MODEL_PREFIX}${entry.id}`}>
+                    {entry.name}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
           </PillSelect>
           <button
             type="button"
@@ -525,33 +582,47 @@ export function ChatPane({
         onScroll={(event) => {
           const el = event.currentTarget;
           const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          // Near the top with older messages hidden: reveal another page.
+          // The anchor guard also debounces re-entry while the page mounts.
+          if (
+            el.scrollTop < 200 &&
+            visibleCount < messages.length &&
+            loadAnchorRef.current === null
+          ) {
+            loadAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
+            setVisibleCount((count) => count + MESSAGE_PAGE_SIZE);
+          }
           // A glide we started passes through "scrolled up" positions; ignore
           // those until it lands so it isn't mistaken for user intent.
           if (autoScrollRef.current) {
             if (nearBottom) {
               autoScrollRef.current = false;
+              setShowJump(false);
             }
             return;
           }
           nearBottomRef.current = nearBottom;
+          setShowJump(!nearBottom);
           if (nearBottom) {
             setUnseenCount(0);
           }
         }}
       >
         <p className="timestamp-divider">9:41 AM</p>
-        {messages.map((message) => (
-          <MessageRow
-            fresh={!initialIds.has(message.id)}
-            key={message.id}
-            message={message}
-            reaction={reactions[message.id]}
-            pickerOpen={pickerFor === message.id}
-            onTogglePicker={() => setPickerFor(pickerFor === message.id ? null : message.id)}
-            onReact={(emoji) => toggleReaction(message.id, emoji)}
-            onReply={() => startReply(message)}
-          />
-        ))}
+        {(messages.length > visibleCount ? messages.slice(-visibleCount) : messages).map(
+          (message) => (
+            <MessageRow
+              fresh={!initialIds.has(message.id)}
+              key={message.id}
+              message={message}
+              reaction={reactions[message.id]}
+              pickerOpen={pickerFor === message.id}
+              onTogglePicker={() => setPickerFor(pickerFor === message.id ? null : message.id)}
+              onReact={(emoji) => toggleReaction(message.id, emoji)}
+              onReply={() => startReply(message)}
+            />
+          ),
+        )}
         {/* Always mounted: reserves its space (nothing overlaps or jumps) and
             lets the blob fade in/out instead of popping with the DOM. */}
         <div
@@ -577,6 +648,19 @@ export function ChatPane({
             onClick={() => setUnseenCount(0)}
           >
             <X size={14} strokeWidth={2} aria-hidden="true" />
+          </button>
+        </div>
+      ) : showJump ? (
+        // The "new message" pill above takes priority: both jump to the
+        // bottom, but the pill also says why.
+        <div className="scroll-bottom-wrap">
+          <button
+            type="button"
+            className="scroll-bottom-button"
+            aria-label="Scroll to bottom"
+            onClick={() => scrollToLatest()}
+          >
+            <ArrowDown size={16} strokeWidth={2} aria-hidden="true" />
           </button>
         </div>
       ) : null}

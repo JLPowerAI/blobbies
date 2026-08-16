@@ -8,6 +8,8 @@ interface SettingsPanelProps {
   agent: Agent;
   /** Name + timezone from app settings; completes the prompt preview. */
   user: UserContext;
+  /** Where the selected model runs; keeps the preview's identity line honest. */
+  runtime: "local" | "enclave";
   onUpdate: (patch: Partial<Agent>) => void;
   /** Back to the info (screen + routines) view. */
   onBack: () => void;
@@ -15,7 +17,14 @@ interface SettingsPanelProps {
 }
 
 /** Per-Blob settings: identity fields and notification preference. */
-export function SettingsPanel({ agent, user, onUpdate, onBack, onClose }: SettingsPanelProps) {
+export function SettingsPanel({
+  agent,
+  user,
+  runtime,
+  onUpdate,
+  onBack,
+  onClose,
+}: SettingsPanelProps) {
   const notifications = agent.notifications ?? true;
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
 
@@ -97,7 +106,7 @@ export function SettingsPanel({ agent, user, onUpdate, onBack, onClose }: Settin
 
         <details className="settings-field prompt-preview">
           <summary className="settings-label prompt-preview-summary">System prompt</summary>
-          <pre className="prompt-preview-body">{blobSystemPrompt(agent, user)}</pre>
+          <pre className="prompt-preview-body">{blobSystemPrompt(agent, user, { runtime })}</pre>
         </details>
 
         <div className="settings-card">

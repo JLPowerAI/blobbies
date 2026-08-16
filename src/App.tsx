@@ -30,6 +30,7 @@ import { reconcileMemories } from "@/lib/intent";
 import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
 import * as store from "@/lib/store";
+import { configureTinfoilFromKeychain, isTinfoilModel } from "@/lib/tinfoil";
 import "./App.css";
 
 type Mode = { kind: "chat" } | { kind: "palette" } | { kind: "creator"; initialName: string };
@@ -93,6 +94,12 @@ export function App() {
   const [reasoning, setReasoning] = useState(
     () => readPreference("pref:reasoning", "off") === "on",
   );
+
+  // Load the Tinfoil key (OS keychain) once on startup; without one the
+  // provider stays unconfigured and only local models work.
+  useEffect(() => {
+    void configureTinfoilFromKeychain();
+  }, []);
 
   // Hydrate persisted state (roster, settings) once on startup. Legacy
   // localStorage prefs remain the synchronous initial values above; the disk
@@ -183,7 +190,8 @@ export function App() {
     // new one for the rest of its 30-minute keep_alive. Fire-and-forget —
     // an in-flight reply on the old model still completes first (the
     // scheduler queues the unload), and any failure just leaves the timer.
-    if (model !== "" && model !== next) {
+    // Tinfoil models are not Ollama-resident, so only local ones unload.
+    if (model !== "" && model !== next && !isTinfoilModel(model)) {
       void unloadOllamaModel(model);
     }
     setModel(next);
@@ -407,7 +415,16 @@ export function App() {
       // Byte-stable across turns (no clock inside): the system prompt plus the
       // untrimmed history form the request prefix, and Ollama's KV cache only
       // hits while that prefix is identical to the previous turn's.
-      { role: "system", content: blobSystemPrompt(target, { userName, timezone }) },
+      {
+        role: "system",
+        content: blobSystemPrompt(
+          target,
+          { userName, timezone },
+          {
+            runtime: isTinfoilModel(model) ? "enclave" : "local",
+          },
+        ),
+      },
       ...trimHistory(
         history
           .filter((entry): entry is Extract<Message, { kind: "text" }> => entry.kind === "text")
@@ -473,10 +490,10 @@ export function App() {
       }
     } catch {
       // Whitespace-only counts as nothing said, matching the check above.
-      text =
-        text.trim() === ""
-          ? "I couldn't reach the local model. Check that Ollama is running in Settings \u2192 Model."
-          : `${text}\u2026 (the model stopped responding)`;
+      const unreachable = isTinfoilModel(model)
+        ? "I couldn't reach Tinfoil. Check your connection and API key in Settings \u2192 Model."
+        : "I couldn't reach the local model. Check that Ollama is running in Settings \u2192 Model.";
+      text = text.trim() === "" ? unreachable : `${text}\u2026 (the model stopped responding)`;
       patchReply(text);
     } finally {
       setThinkingFor(null);
@@ -567,6 +584,7 @@ export function App() {
                 <SettingsPanel
                   agent={agent}
                   user={{ userName, timezone }}
+                  runtime={isTinfoilModel(model) ? "enclave" : "local"}
                   onUpdate={(patch) => updateBlob(agent.id, patch)}
                   onBack={() => setDetailView({ kind: "info" })}
                   onClose={() => setDetailOpen(false)}

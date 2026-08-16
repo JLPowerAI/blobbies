@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BlobMemory } from "@/lib/blob-tools";
 import { reconcileMemories, routeIntent } from "@/lib/intent";
+import { tinfoilStructuredCall } from "@/lib/tinfoil";
+
+// Only the structured call is faked: model-ref helpers stay real, so the
+// Ollama-path tests below exercise the exact same branch they always did.
+vi.mock("@/lib/tinfoil", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tinfoil")>()),
+  tinfoilStructuredCall: vi.fn(async () => null),
+}));
 
 const base = { model: "qwen3.5:0.8b", memories: [] };
 
@@ -136,6 +144,50 @@ describe("routeIntent", () => {
     }
   });
 
+  it("routes a tinfoil model through the verified structured call, never Ollama", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.mocked(tinfoilStructuredCall).mockResolvedValueOnce(
+      JSON.stringify({
+        action: "save_fact",
+        fact: "the user trains on Mondays",
+        needs_web: false,
+        memory_number: 0,
+      }),
+    );
+    try {
+      const intent = await routeIntent({
+        model: "tinfoil:gpt-oss-120b",
+        memories: [],
+        messages: [{ role: "user", content: "Remember I train Mondays" }],
+      });
+      expect(intent).toEqual({
+        action: "save_fact",
+        fact: "the user trains on Mondays",
+        needsWeb: false,
+      });
+      // User content must not touch the local Ollama endpoint on this path.
+      expect(fetchSpy).not.toHaveBeenCalled();
+      const call = vi.mocked(tinfoilStructuredCall).mock.calls[0]?.[0];
+      expect(call?.temperature).toBe(0);
+      // OpenAI strict structured outputs require a closed object schema.
+      const schema = (call?.schema ?? {}) as { additionalProperties?: boolean };
+      expect(schema.additionalProperties).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fails closed to `none` when the tinfoil call fails", async () => {
+    vi.mocked(tinfoilStructuredCall).mockResolvedValueOnce(null);
+    const intent = await routeIntent({
+      model: "tinfoil:gpt-oss-120b",
+      memories: [],
+      messages: [{ role: "user", content: "Remember this" }],
+    });
+    expect(intent).toEqual({ action: "none", needsWeb: true });
+  });
+
   it("never treats a message about memory as a job change", async () => {
     vi.stubGlobal(
       "fetch",
@@ -222,6 +274,26 @@ describe("reconcileMemories", () => {
     } finally {
       vi.unstubAllGlobals();
       vi.useRealTimers();
+    }
+  });
+
+  it("reconciles through the verified structured call on a tinfoil model", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.mocked(tinfoilStructuredCall).mockResolvedValueOnce(JSON.stringify({ obsolete: [1] }));
+    try {
+      const stale = await reconcileMemories({
+        model: "tinfoil:gpt-oss-120b",
+        fact: "Ken and Sarah broke up",
+        existing,
+      });
+      expect(stale).toEqual([1]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      // The load-bearing "SAME one person" prompt rides along unchanged.
+      const call = vi.mocked(tinfoilStructuredCall).mock.calls.at(-1)?.[0];
+      expect(JSON.stringify(call?.messages)).toContain("SAME one person");
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 
