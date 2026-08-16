@@ -141,6 +141,9 @@ interface MessageRowProps {
   pickerOpen: boolean;
   /** Arrived after mount: plays the in-place jelly pop exactly once. */
   fresh: boolean;
+  /** The cursor is known to be elsewhere: suppresses a latched :hover. */
+  stale: boolean;
+  onEnter: () => void;
   onTogglePicker: () => void;
   onReact: (emoji: string) => void;
   onReply: () => void;
@@ -152,6 +155,8 @@ function MessageRow({
   reaction,
   pickerOpen,
   fresh,
+  stale,
+  onEnter,
   onTogglePicker,
   onReact,
   onReply,
@@ -166,7 +171,20 @@ function MessageRow({
   }
   const side = message.kind === "text" && message.author === "user" ? "user" : "agent";
   return (
-    <div className={`message-row message-row-${side}${fresh ? " message-fresh" : ""}`}>
+    <div
+      // CSS :hover reveals the action bar; .message-row-stale hides it again
+      // on every row that isn't the one the cursor last entered. Both are
+      // needed: measured in the app's webview, a bar faded in by :hover stays
+      // painted on rows that no longer match it, so sweeping down the
+      // transcript left every bar showing until each was hovered again.
+      className={`message-row message-row-${side}${fresh ? " message-fresh" : ""}${
+        stale ? " message-row-stale" : ""
+      }`}
+      data-message-id={message.id}
+      // pointerover, not pointerenter: it bubbles from the markdown children,
+      // so entering the row anywhere claims it in one delegated listener.
+      onPointerOver={onEnter}
+    >
       <div className="message-actions" role="toolbar" aria-label="Message actions">
         <button type="button" className="icon-button message-action" aria-label="More options">
           <Ellipsis size={15} strokeWidth={1.8} aria-hidden="true" />
@@ -259,6 +277,9 @@ export function ChatPane({
   const [replyClosing, setReplyClosing] = useState(false);
   const [reactions, setReactions] = useState<Record<string, string>>({});
   const [pickerFor, setPickerFor] = useState<string | null>(null);
+  /** Row the cursor is over: id, null for none, undefined until it first
+      moves — see the effect below. */
+  const [hoverId, setHoverId] = useState<string | null | undefined>(undefined);
   const [multiline, setMultiline] = useState(false);
 
   /** A reply is streaming and can be aborted (Escape, or the send circle). */
@@ -281,6 +302,32 @@ export function ChatPane({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [canStop, pickerFor, onStop]);
+
+  // Rows claim the cursor on pointerover (see MessageRow); this is the other
+  // half — anything entered outside a row means no row holds it. pointerover
+  // bubbles all the way up, so moving to the sidebar, composer or header
+  // releases the last row. Deliberately not a leave event: measured in the
+  // app's webview, entering fires reliably on every row and its markdown
+  // children, while the matching leave is what goes missing.
+  useEffect(() => {
+    const clear = (event: Event) => {
+      if (
+        !(event.target instanceof Element) ||
+        event.target.closest("[data-message-id]") === null
+      ) {
+        setHoverId(null);
+      }
+    };
+    const clearAll = () => setHoverId(null);
+    window.addEventListener("pointerover", clear);
+    document.addEventListener("mouseleave", clearAll);
+    window.addEventListener("blur", clearAll);
+    return () => {
+      window.removeEventListener("pointerover", clear);
+      document.removeEventListener("mouseleave", clearAll);
+      window.removeEventListener("blur", clearAll);
+    };
+  }, []);
 
   // Click anywhere outside the reaction picker (or Escape) dismisses it. The
   // opener buttons stopPropagation, so this never races the toggle.
@@ -370,6 +417,7 @@ export function ChatPane({
     setReplyTo(null);
     setReplyClosing(false);
     setPickerFor(null);
+    setHoverId(undefined);
     setMultiline(false);
     setReactions({});
     setUnseenCount(0);
@@ -685,6 +733,8 @@ export function ChatPane({
               message={message}
               reaction={reactions[message.id]}
               pickerOpen={pickerFor === message.id}
+              stale={hoverId !== undefined && hoverId !== message.id}
+              onEnter={() => setHoverId(message.id)}
               onTogglePicker={() => setPickerFor(pickerFor === message.id ? null : message.id)}
               onReact={(emoji) => toggleReaction(message.id, emoji)}
               onReply={() => startReply(message)}

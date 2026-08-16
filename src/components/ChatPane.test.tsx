@@ -1,8 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatPane } from "@/components/ChatPane";
-import type { Agent } from "@/data/agents";
+import type { Agent, Message } from "@/data/agents";
 
 const agent: Agent = {
   id: "61ec34f1-9ba5-4eff-b8e1-7acefb2148ea",
@@ -13,11 +13,16 @@ const agent: Agent = {
   shape: "sphere",
 };
 
+const messages: Message[] = [
+  { id: "m1", kind: "text", author: "user", segments: [{ text: "So what can you do" }] },
+  { id: "m2", kind: "text", author: "agent", segments: [{ text: "Plenty." }] },
+];
+
 /** ChatPane with everything that is not under test held constant. */
-const pane = (thinking: boolean, onStop: () => void) => (
+const pane = (thinking: boolean, onStop: () => void, withMessages = false) => (
   <ChatPane
     agent={agent}
-    messages={[]}
+    messages={withMessages ? messages : []}
     thinking={thinking}
     model=""
     onModelChange={() => {}}
@@ -58,6 +63,40 @@ describe("ChatPane", () => {
     rerender(pane(false, onStop));
     await user.keyboard("{Escape}");
     expect(onStop).toHaveBeenCalledTimes(2);
+  });
+
+  it("suppresses the latched hover on every row the cursor has left", () => {
+    render(pane(false, vi.fn(), true));
+    const [first, second] = screen
+      .getAllByRole("toolbar", { name: "Message actions" })
+      .map((toolbar) => toolbar.parentElement as HTMLElement);
+    const move = (over: HTMLElement) => fireEvent.pointerOver(over, { bubbles: true });
+
+    // Before the cursor has entered anything, nothing is suppressed: plain
+    // :hover still reveals, so this can never subtract the actions entirely.
+    expect(first).not.toHaveClass("message-row-stale");
+    expect(second).not.toHaveClass("message-row-stale");
+
+    move(first as HTMLElement);
+    expect(first).not.toHaveClass("message-row-stale");
+    expect(second).toHaveClass("message-row-stale");
+
+    // Cursor moves on: the row left behind is suppressed even though no leave
+    // event ever fired for it, so two bars can't show at once.
+    move(second as HTMLElement);
+    expect(first).toHaveClass("message-row-stale");
+    expect(second).not.toHaveClass("message-row-stale");
+
+    // Off the rows entirely (another pane fires nothing on the row at all).
+    move(document.body);
+    expect(second).toHaveClass("message-row-stale");
+
+    // Cursor leaves the window — no move event lands anywhere.
+    move(second as HTMLElement);
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    expect(second).toHaveClass("message-row-stale");
   });
 
   it("keeps Send reachable mid-reply, so a follow-up can steer the turn", async () => {

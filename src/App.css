@@ -41,7 +41,14 @@
   --duration-fast: 120ms;
   --duration-compose: 160ms; /* composer growth + FLIP glides, kept in sync */
   --duration-panel: 260ms;
+  /* Hover reveals: in is unhurried so the bar settles, out is quicker so it
+     never trails the cursor. The out duration also gates the visibility flip
+     that ends the fade — see .message-actions. */
+  --duration-hover-in: 180ms;
+  --duration-hover-out: 110ms;
   --ease-standard: cubic-bezier(0.3, 0, 0.2, 1);
+  --ease-entrance: cubic-bezier(0.16, 1, 0.3, 1); /* decelerates into place */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1); /* accelerates away */
 
   --sidebar-width: 292px;
   --detail-width: 322px;
@@ -2115,17 +2122,58 @@ a.modal-button {
   position: relative;
 }
 
-/* Hover/focus actions: hidden until the row is hovered or holds focus. */
+/* Hover/focus actions, hidden until the row is hovered, keyboard-focused, or
+   its reaction picker is open.
+
+   Hiding is opacity + a visibility flip, and the visibility half lives on
+   .message-row-stale (rows ChatPane knows the cursor has left) rather than
+   here: measured in the app's webview, a bar faded OUT by an opacity
+   transition keeps its pixels on screen even though the computed opacity is 0
+   and the row no longer matches :hover — which is why sweeping down the
+   transcript left every bar showing until each row was hovered a second time.
+   Keeping the base rule merely transparent leaves its buttons in the tab
+   order, so keyboard users still reach reply/react (visibility: hidden here
+   would remove them, and nothing else opens those actions).
+
+   :focus-within is also avoided: a mouse click leaves focus on the button,
+   which pinned the bar open after the pointer left. pointer-events stay off
+   while hidden so an invisible bar can't take clicks. */
 .message-actions {
   display: flex;
   gap: 2px;
   opacity: 0;
-  transition: opacity var(--duration-fast) var(--ease-standard);
+  /* Leaving: drifts back toward the bubble as it fades. */
+  translate: 0 2px;
+  pointer-events: none;
+  transition:
+    opacity var(--duration-hover-out) var(--ease-exit),
+    translate var(--duration-hover-out) var(--ease-exit);
 }
 
-.message-row:hover .message-actions,
-.message-row:focus-within .message-actions {
+/* The fade plays, then visibility flips at the end of it (a 0s transition
+   delayed by the fade duration) and the bar leaves painting for good. Keep
+   that delay in step with the fade: shorter cuts the exit off mid-fade,
+   longer re-opens the window the stranded pixels appeared in. */
+.message-row-stale .message-actions {
+  visibility: hidden;
+  transition:
+    opacity var(--duration-hover-out) var(--ease-exit),
+    translate var(--duration-hover-out) var(--ease-exit),
+    visibility 0s linear var(--duration-hover-out);
+}
+
+.message-row:hover:not(.message-row-stale) .message-actions,
+.message-row:has(:focus-visible) .message-actions,
+.message-actions:has([aria-expanded="true"]) {
+  visibility: visible;
   opacity: 1;
+  translate: 0 0;
+  pointer-events: auto;
+  /* Arriving is slower and eased out, so the bar settles instead of snapping. */
+  transition:
+    opacity var(--duration-hover-in) var(--ease-entrance),
+    translate var(--duration-hover-in) var(--ease-entrance),
+    visibility 0s;
 }
 
 .message-action {
@@ -3116,7 +3164,13 @@ a.modal-button {
   .composer-mic-glyph,
   .composer-mic-plain,
   .composer-input,
+  /* Every hover-action rule: each sets its own transition, and killing the
+     base one also drops the delayed visibility flip so the bar hides at once. */
   .message-actions,
+  .message-row-stale .message-actions,
+  .message-row:hover:not(.message-row-stale) .message-actions,
+  .message-row:has(:focus-visible) .message-actions,
+  .message-actions:has([aria-expanded="true"]),
   .reaction-option,
   .compose-slot,
   .identity-button,
