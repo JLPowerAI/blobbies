@@ -45,6 +45,17 @@ export interface Agent {
   title?: string;
   /** Longer free-form purpose notes. */
   description?: string;
+  /**
+   * Hand-written role, used verbatim in place of the generated title +
+   * description section. Set from Settings; nothing writes it automatically.
+   */
+  instructions?: string;
+  /**
+   * Lifetime tokens through the agent loop, accumulated at each run's end.
+   * Local inference has no bill — this exists to explain why replies slow
+   * down as a conversation grows, not to price anything.
+   */
+  usage?: { inputTokens: number; outputTokens: number; runs: number };
   /** Notify when the agent finishes or needs input. Defaults on. */
   notifications?: boolean;
 }

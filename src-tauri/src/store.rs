@@ -38,8 +38,9 @@ struct TrashMarker {
     deleted_at_ms: u128,
 }
 
-/// Slices that live at the data root.
-const ROOT_SLICES: [&str; 3] = ["settings", "ui-layout", "roster"];
+/// Slices that live at the data root. `user` holds memories shared by every
+/// Blob (per-Blob memories live in that Blob's `config`).
+const ROOT_SLICES: [&str; 4] = ["settings", "ui-layout", "roster", "user"];
 
 /// Slices that live inside a Blob directory.
 const BLOB_SLICES: [&str; 4] = ["config", "routines", "transcript", "runs"];
@@ -246,6 +247,102 @@ pub(crate) fn store_list_blobs(app: tauri::AppHandle) -> Result<Vec<String>> {
     Ok(list_blob_ids(&root))
 }
 
+/// Characters allowed in the filename built from a Blob's name.
+///
+/// The name is user-supplied and lands in a path, so it is filtered to an
+/// allowlist rather than checked for the separators we happen to think of.
+fn safe_file_stem(name: &str) -> String {
+    let stem: String = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = stem.trim_matches('-');
+    if trimmed.is_empty() {
+        "blob".to_owned()
+    } else {
+        trimmed.chars().take(40).collect()
+    }
+}
+
+/// Collect every slice a Blob owns into one JSON object.
+///
+/// Home-folder *files* are not included: they are already plain files the
+/// user can see in Finder, and inlining them would turn a readable export
+/// into a base64 blob. Their location is named in the bundle instead.
+///
+/// Split out from the command so it can be tested without an `AppHandle`.
+fn build_export_bundle(root: &Path, id: &str) -> Result<serde_json::Value> {
+    if !is_valid_blob_id(id) {
+        return Err(Error::InvalidSliceKey);
+    }
+    let mut bundle = serde_json::Map::new();
+    bundle.insert("exportedAt".to_owned(), now_ms().to_string().into());
+    bundle.insert("blobId".to_owned(), id.into());
+    bundle.insert(
+        "homeFolder".to_owned(),
+        root.join("blobs")
+            .join(id)
+            .join("home")
+            .to_string_lossy()
+            .into_owned()
+            .into(),
+    );
+    for slice in BLOB_SLICES {
+        let path = resolve_slice_path(root, &format!("blobs/{id}/{slice}"))?;
+        // A slice the Blob never wrote exports as null rather than being
+        // absent, so the shape of the file does not depend on its history.
+        bundle.insert(
+            slice.to_owned(),
+            read_slice_file(&path)?.unwrap_or(serde_json::Value::Null),
+        );
+    }
+    Ok(serde_json::Value::Object(bundle))
+}
+
+/// Where an export lands: a filtered stem plus a fixed suffix, inside
+/// `downloads`. Errors if the result would sit anywhere else.
+fn export_target(downloads: &Path, name: &str) -> Result<PathBuf> {
+    let target = downloads.join(format!(
+        "blobbies-{}-{}.json",
+        safe_file_stem(name),
+        now_ms()
+    ));
+    // Belt and braces: `safe_file_stem` already strips separators, so this
+    // can only fire if that guarantee is ever weakened.
+    if target.parent() != Some(downloads) {
+        return Err(Error::InvalidSliceKey);
+    }
+    Ok(target)
+}
+
+/// Bundle every slice a Blob owns into one JSON file in Downloads.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri commands must take AppHandle by value"
+)]
+pub(crate) fn store_export_blob(app: tauri::AppHandle, id: &str, name: &str) -> Result<PathBuf> {
+    use tauri::Manager;
+
+    let root = data_root(&app)?;
+    let bundle = build_export_bundle(&root, id)?;
+    let downloads = app
+        .path()
+        .download_dir()
+        .map_err(|error| Error::Io(error.to_string()))?;
+    let target = export_target(&downloads, name)?;
+    let serialized =
+        serde_json::to_vec_pretty(&bundle).map_err(|error| Error::Corrupt(error.to_string()))?;
+    fs::write(&target, serialized).map_err(|error| Error::Io(error.to_string()))?;
+    Ok(target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +361,7 @@ mod tests {
     fn resolves_root_and_blob_slices() {
         let root = Path::new("/data");
         assert!(resolve_slice_path(root, "roster").is_ok());
+        assert!(resolve_slice_path(root, "user").is_ok());
         assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/config")).is_ok());
         assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/runs")).is_ok());
     }
@@ -278,11 +376,96 @@ mod tests {
             "blobs/not-a-uuid/config",
             &format!("blobs/{BLOB_ID}/unknown"),
             "unknown",
+            "users",
+            "user/x",
             "",
         ] {
             assert!(
                 matches!(resolve_slice_path(root, key), Err(Error::InvalidSliceKey)),
                 "expected rejection for {key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn export_file_stem_cannot_escape_its_directory() {
+        // The Blob name is user-supplied and ends up in a path.
+        for name in [
+            "../../etc/passwd",
+            "..",
+            "/absolute",
+            "C:\\windows",
+            "a/b\\c",
+            "name\u{0}with-nul",
+        ] {
+            let stem = safe_file_stem(name);
+            let joined = Path::new("/downloads").join(format!("blobbies-{stem}-1.json"));
+            assert_eq!(
+                joined.parent(),
+                Some(Path::new("/downloads")),
+                "escaped for {name:?}"
+            );
+            assert!(!stem.contains(['/', '\\', '.']), "unsafe stem for {name:?}");
+        }
+        assert_eq!(safe_file_stem("Ken's Coach"), "ken-s-coach");
+        // A name with nothing usable still yields a filename.
+        assert_eq!(safe_file_stem("???"), "blob");
+        assert!(safe_file_stem(&"x".repeat(500)).len() <= 40);
+    }
+
+    #[test]
+    fn export_bundle_carries_every_slice_the_blob_owns() {
+        let root = temp_root("export-bundle");
+        let write = |slice: &str, value: serde_json::Value| {
+            let path = resolve_slice_path(&root, &format!("blobs/{BLOB_ID}/{slice}"))
+                .unwrap_or_else(|_| panic!("path"));
+            write_slice_file(&path, value).unwrap_or_else(|_| panic!("write"));
+        };
+        // Two of the four slices written; the export must still describe all
+        // four, so the file's shape does not depend on what the Blob did.
+        write("config", serde_json::json!({ "name": "Ken" }));
+        write(
+            "routines",
+            serde_json::json!([{ "id": "r1", "name": "Morning" }]),
+        );
+
+        let bundle = build_export_bundle(&root, BLOB_ID).unwrap_or_else(|_| panic!("bundle"));
+        let at = |pointer: &str| bundle.pointer(pointer).cloned().unwrap_or_default();
+        assert_eq!(at("/blobId"), serde_json::json!(BLOB_ID));
+        assert_eq!(at("/config/name"), serde_json::json!("Ken"));
+        assert_eq!(at("/routines/0/name"), serde_json::json!("Morning"));
+        // Never written, so exported as null rather than missing.
+        assert_eq!(at("/transcript"), serde_json::Value::Null);
+        assert_eq!(at("/runs"), serde_json::Value::Null);
+        // Files are left on disk; the bundle only points at them.
+        assert!(
+            at("/homeFolder")
+                .as_str()
+                .unwrap_or_default()
+                .ends_with("home")
+        );
+        // Secrets live in the keychain and settings are app-wide: neither is
+        // a per-Blob slice, so neither can ride along in an exported file.
+        assert!(bundle.get("settings").is_none());
+    }
+
+    #[test]
+    fn export_rejects_a_blob_id_that_is_not_a_uuid() {
+        let root = temp_root("export-id");
+        for id in ["../../etc", "not-a-uuid", ""] {
+            assert!(build_export_bundle(&root, id).is_err(), "accepted {id:?}");
+        }
+    }
+
+    #[test]
+    fn export_target_stays_inside_downloads() {
+        let downloads = Path::new("/downloads");
+        for name in ["Ken", "../../etc/passwd", "/absolute", ".."] {
+            let target = export_target(downloads, name).unwrap_or_else(|_| panic!("target"));
+            assert_eq!(target.parent(), Some(downloads), "escaped for {name:?}");
+            assert_eq!(
+                target.extension().and_then(|value| value.to_str()),
+                Some("json")
             );
         }
     }

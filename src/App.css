@@ -2315,6 +2315,26 @@ a.modal-button {
   gap: 4px;
 }
 
+/* Token counter: context pressure, not a bill. */
+.detail-usage {
+  padding: 0 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Inline memory editor: sits in the row the text button occupied. */
+.memory-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13.5px;
+}
+
 .file-preview {
   margin-top: 8px;
 }
@@ -2811,6 +2831,23 @@ a.modal-button {
 .settings-textarea {
   resize: none;
   line-height: 1.4;
+}
+
+/* Secondary action inside a settings field (Add connection). */
+.settings-button {
+  align-self: flex-start;
+  padding: 7px 14px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: inherit;
+}
+
+/* Explains a field whose effect is not visible in the field itself. */
+.settings-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .settings-card {

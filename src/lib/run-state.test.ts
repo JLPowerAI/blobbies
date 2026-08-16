@@ -41,6 +41,13 @@ describe("parseRun", () => {
     expect(parseRun(run)).toEqual(run);
   });
 
+  it("keeps token counts, and loads runs stored before they existed", () => {
+    // `run` above has neither field — records written by an older build must
+    // still load rather than vanish from the sidebar.
+    const counted = { ...run, inputTokens: 1200, outputTokens: 340 };
+    expect(parseRun(counted)).toEqual(counted);
+  });
+
   it("rejects malformed store values", () => {
     for (const value of [
       null,

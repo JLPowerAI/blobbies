@@ -19,6 +19,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::greet,
             commands::ollama_installed,
@@ -28,6 +29,7 @@ pub fn run() {
             store::store_write,
             store::store_delete_blob,
             store::store_list_blobs,
+            store::store_export_blob,
             home::blob_home_list,
             home::blob_home_read,
             home::blob_home_write,

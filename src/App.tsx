@@ -1,6 +1,6 @@
 import { isAbortError } from "@kenkaiiii/gg-agent";
 import type { Message as AiMessage } from "@kenkaiiii/gg-ai";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatPane } from "@/components/ChatPane";
 import { ComposePane } from "@/components/ComposePane";
 import { CreatorPane } from "@/components/CreatorPane";
@@ -27,11 +27,14 @@ import {
   transcriptFor,
 } from "@/data/agents";
 import { blobSystemPrompt, streamBlobTurn, timeNote, trimHistory } from "@/lib/ai";
+import type { BlobMemory, RosterAccess } from "@/lib/blob-tools";
 import { homeFor } from "@/lib/home";
 import { reconcileMemories } from "@/lib/intent";
+import { type McpServerConfig, parseLoopbackUrl } from "@/lib/mcp";
+import { notify, shouldNotify } from "@/lib/notify";
 import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
-import { type ActiveRun, assertTransition, type RunTrigger } from "@/lib/run-state";
+import { type ActiveRun, assertTransition, isTerminal, type RunTrigger } from "@/lib/run-state";
 import { nextFireTime } from "@/lib/schedule";
 import { startScheduler } from "@/lib/scheduler";
 import * as store from "@/lib/store";
@@ -58,9 +61,38 @@ function newBlobId(): string {
 
 export function App() {
   const [agents, setAgents] = useState<Agent[]>(seedAgents);
-  /** Latest roster for async callbacks (tool executes outlive a render). */
+  /**
+   * Latest roster for async callbacks (tool executes outlive a render).
+   *
+   * Only `commitAgents` writes this. It is deliberately NOT re-assigned each
+   * render: a render can be started with stale state and discarded, which
+   * would walk the ref backwards over a write a tool just made.
+   */
   const agentsRef = useRef<Agent[]>(agents);
-  agentsRef.current = agents;
+
+  /**
+   * The one way to mutate the roster: advances the ref and the state together.
+   *
+   * Waiting for the next render to refresh the ref is too late for the agent
+   * loop — tool calls run back-to-back inside one turn, so a second call
+   * would read the roster as it was *before* the first. That silently broke
+   * `spawn_blob`'s duplicate-name refusal, which is the whole idempotency
+   * mechanism: a retried call created a second Blob instead of no-oping.
+   *
+   * Every roster write goes through here, and `setAgents` appears nowhere
+   * else. Mixing the two is what makes this dangerous rather than merely
+   * redundant: a plain `setAgents(fn)` is queued and does not move the ref,
+   * so the next commit would read a stale base and drop it.
+   *
+   * Stable (`useCallback`, no deps): it closes over nothing but the ref and
+   * the setter, so effects may depend on it without re-running every render.
+   */
+  const commitAgents = useCallback((update: (previous: Agent[]) => Agent[]): Agent[] => {
+    const next = update(agentsRef.current);
+    agentsRef.current = next;
+    setAgents(next);
+    return next;
+  }, []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>({ kind: "chat" });
   // Details stay hidden until explicitly opened from the chat header.
@@ -75,6 +107,8 @@ export function App() {
   sentRef.current = sentByAgent;
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Memories shared by every Blob ("All Blobs" scope), from the `user` slice. */
+  const [userMemories, setUserMemories] = useState<BlobMemory[]>([]);
   /** Blob currently generating a reply; drives the thinking indicator. */
   const [thinkingFor, setThinkingFor] = useState<string | null>(null);
   /** Last (or active) run per Blob; drives ask/answer routing and recovery. */
@@ -107,6 +141,8 @@ export function App() {
       return [];
     }
   });
+  /** Local MCP servers; only enabled ones are contacted, on routine turns. */
+  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   const [userName, setUserName] = useState(() =>
     readPreference("pref:userName", "Ken Kai").slice(0, MAX_USER_NAME_LENGTH),
   );
@@ -122,6 +158,36 @@ export function App() {
     () => readPreference("pref:reasoning", "off") === "on",
   );
 
+  /**
+   * Everything a turn reads that is not passed into it — mirrored for turns
+   * that start outside the render cycle.
+   *
+   * The scheduler is built in a mount-once effect, so a routine it fires runs
+   * the *mount-render* closure of `requestReply`. Every value here is either
+   * hydrated from disk after mount or changed later in Settings, so reading
+   * the closure hands a scheduled routine the mount-time value forever: no
+   * model (the turn bails with “pick one in Settings”), no shared memories,
+   * and no MCP servers — which is the only scope that offers those tools.
+   *
+   * Assigned every render, so a turn always sees the newest values.
+   */
+  const turnSettings = useRef({
+    model,
+    userName,
+    timezone,
+    reasoning,
+    userMemories,
+    mcpServers: [] as McpServerConfig[],
+  });
+  turnSettings.current = {
+    model,
+    userName,
+    timezone,
+    reasoning,
+    userMemories,
+    mcpServers: mcpServers.filter((server) => server.enabled),
+  };
+
   // Configure Tinfoil only when the chosen model actually needs it: a
   // keychain read can prompt for the device password (macOS re-verifies the
   // app after every rebuild), so local-only setups must never touch it.
@@ -134,15 +200,23 @@ export function App() {
   // Hydrate persisted state (roster, settings) once on startup. Legacy
   // localStorage prefs remain the synchronous initial values above; the disk
   // slices win when they exist.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(commitAgents): stable (useCallback, no deps)
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [roster, settings] = await Promise.all([store.loadRoster(), store.loadSettings()]);
+      const [roster, settings, shared] = await Promise.all([
+        store.loadRoster(),
+        store.loadSettings(),
+        store.loadUserMemories(),
+      ]);
       if (cancelled) {
         return;
       }
       if (roster !== null && roster.length > 0) {
-        setAgents(roster);
+        commitAgents(() => roster);
+      }
+      if (shared !== null) {
+        setUserMemories(shared);
       }
       if (settings !== null) {
         if (typeof settings.userName === "string") {
@@ -156,6 +230,16 @@ export function App() {
         }
         if (typeof settings.model === "string") {
           setModel(settings.model);
+        }
+        if (Array.isArray(settings.mcpServers)) {
+          // Stored config is re-validated on load: the file is editable, and
+          // an entry that is no longer loopback must never be contacted.
+          setMcpServers(
+            settings.mcpServers.filter(
+              (server): server is McpServerConfig =>
+                typeof server?.url === "string" && !("error" in parseLoopbackUrl(server.url)),
+            ),
+          );
         }
         if (Array.isArray(settings.plugins)) {
           setInstalledPlugins(
@@ -273,8 +357,15 @@ export function App() {
 
   // Persist settings whenever any part changes (debounced in the store).
   useEffect(() => {
-    store.saveSettings({ userName, theme, timezone, model, plugins: installedPlugins });
-  }, [userName, theme, timezone, model, installedPlugins]);
+    store.saveSettings({
+      userName,
+      theme,
+      timezone,
+      model,
+      plugins: installedPlugins,
+      mcpServers,
+    });
+  }, [userName, theme, timezone, model, installedPlugins, mcpServers]);
 
   const changeUserName = (name: string) => {
     const capped = name.slice(0, MAX_USER_NAME_LENGTH);
@@ -345,26 +436,19 @@ export function App() {
       pinned: false,
       hidden: false,
     };
-    setAgents((previous) => {
-      const next = [copy, ...previous];
-      void store.flushRoster(next);
-      return next;
-    });
+    void store.flushRoster(commitAgents((previous) => [copy, ...previous]));
     store.saveBlobConfig(copy.id, copy);
     openConversation(copy.id);
   };
 
   const deleteBlob = (id: string) => {
-    setAgents((previous) => {
-      const next = previous.filter((candidate) => candidate.id !== id);
-      void store.flushRoster(next);
-      if (selectedId === id) {
-        const fallback = next.find((candidate) => candidate.hidden !== true);
-        setSelectedId(fallback === undefined ? null : fallback.id);
-        setMode(fallback === undefined ? { kind: "creator", initialName: "" } : { kind: "chat" });
-      }
-      return next;
-    });
+    const next = commitAgents((previous) => previous.filter((candidate) => candidate.id !== id));
+    void store.flushRoster(next);
+    if (selectedId === id) {
+      const fallback = next.find((candidate) => candidate.hidden !== true);
+      setSelectedId(fallback === undefined ? null : fallback.id);
+      setMode(fallback === undefined ? { kind: "creator", initialName: "" } : { kind: "chat" });
+    }
     setSentByAgent(({ [id]: _dropped, ...rest }) => rest);
     setRoutinesByAgent(({ [id]: _dropped, ...rest }) => rest);
     void store.deleteBlobData(id);
@@ -472,17 +556,14 @@ export function App() {
   };
 
   const updateBlob = (id: string, patch: Partial<Agent>) => {
-    setAgents((previous) => {
-      const next = previous.map((candidate) =>
-        candidate.id === id ? { ...candidate, ...patch } : candidate,
-      );
-      store.saveRoster(next);
-      const updated = next.find((candidate) => candidate.id === id);
-      if (updated !== undefined) {
-        store.saveBlobConfig(id, updated);
-      }
-      return next;
-    });
+    const next = commitAgents((previous) =>
+      previous.map((candidate) => (candidate.id === id ? { ...candidate, ...patch } : candidate)),
+    );
+    store.saveRoster(next);
+    const updated = next.find((candidate) => candidate.id === id);
+    if (updated !== undefined) {
+      store.saveBlobConfig(id, updated);
+    }
   };
 
   const createBlob = (name: string, tone: AvatarTone, shape: AgentShape) => {
@@ -496,15 +577,42 @@ export function App() {
       tone,
       shape,
     };
-    setAgents((previous) => {
-      const next = [blob, ...previous];
-      // Creation is not debounced: the roster and config must exist on disk
-      // before anything else references the new id.
-      void store.flushRoster(next);
-      return next;
-    });
+    // Creation is not debounced: the roster and config must exist on disk
+    // before anything else references the new id.
+    void store.flushRoster(commitAgents((previous) => [blob, ...previous]));
     store.saveBlobConfig(blob.id, blob);
     openConversation(blob.id);
+  };
+
+  /**
+   * The roster as a routine's tools may touch it (spawn_blob / delete_blob).
+   * Reads go through the ref: a tool executes long after its render.
+   *
+   * A spawned Blob does NOT steal the view — the user may be reading another
+   * conversation while a routine runs in the background. Deletion reuses
+   * `deleteBlob`, whose store side is a soft delete to trash with a 30-day
+   * TTL, so a wrong call is recoverable.
+   */
+  const rosterAccess: RosterAccess = {
+    list: () => agentsRef.current.map(({ id, name }) => ({ id, name })),
+    create: ({ name, title, description }) => {
+      const blob: Agent = {
+        id: newBlobId(),
+        name,
+        title,
+        description,
+        time: "Now",
+        lastActivityAt: Date.now(),
+        snippet: GREETING,
+        tone: "gray",
+        shape: "sphere",
+      };
+      const next = commitAgents((previous) => [blob, ...previous]);
+      // Not debounced: the id is referenced the moment the tool returns.
+      void store.flushRoster(next);
+      store.saveBlobConfig(blob.id, blob);
+    },
+    delete: deleteBlob,
   };
 
   const appendMessage = (agentId: string, message: Message) => {
@@ -543,6 +651,9 @@ export function App() {
   ): Promise<"done" | "failed" | "cancelled"> => {
     const trigger = turn?.trigger ?? "user";
     const replyId = `agent-${Date.now()}`;
+    // Read once, from the ref: a scheduled routine runs the mount-render
+    // closure, where every one of these is still its mount-time value.
+    const { model, userName, timezone, reasoning, userMemories, mcpServers } = turnSettings.current;
     if (model === "") {
       const text =
         "I don't have a model to think with yet \u2014 pick one in Settings \u2192 Model.";
@@ -566,6 +677,10 @@ export function App() {
           target,
           { userName, timezone },
           {
+            userMemories,
+            // Named in the prompt for both scopes so the Blob knows what it
+            // has; the tools themselves stay routine-only.
+            mcpServers: mcpServers.map((server) => server.name),
             runtime: isTinfoilModel(model) ? "enclave" : "local",
           },
         ),
@@ -649,6 +764,9 @@ export function App() {
       });
     };
     let outcome: "done" | "failed" | "cancelled" = "done";
+    // Summed, not assigned: a turn can run the loop more than once (the
+    // no-tools retry, the rescue round) and each reports its own total.
+    const spent = { inputTokens: 0, outputTokens: 0 };
     setThinkingFor(target.id);
     try {
       text = await streamBlobTurn({
@@ -659,12 +777,18 @@ export function App() {
           trigger === "user" && (target.title ?? "") === "" && (target.description ?? "") === "",
         scope: trigger === "user" ? "chat" : "routine",
         home: homeFor(target.id),
+        roster: { access: rosterAccess, selfName: target.name },
+        mcpServers,
         signal: abort.signal,
         getSteeringMessages: () => (steering.length === 0 ? null : steering.splice(0)),
         onAsk: (pending) => {
           askBox.value = pending;
         },
         onCheckpoint: flushTranscript,
+        onUsage: (usage) => {
+          spent.inputTokens += usage.inputTokens;
+          spent.outputTokens += usage.outputTokens;
+        },
         memory: {
           // Read through the ref so mid-turn saves see the latest list.
           list: () =>
@@ -685,7 +809,16 @@ export function App() {
       const asked = askBox.value;
       if (asked !== null) {
         // The reply IS the question; the run parks until the user answers.
-        run = patchRun(run, "waiting_input", { question: asked.question, askKind: asked.kind });
+        // Its tokens ride along, so the answer turn resumes from this total
+        // instead of from zero — the settle block below adds to them.
+        run = patchRun(run, "waiting_input", {
+          question: asked.question,
+          askKind: asked.kind,
+          inputTokens: (run.inputTokens ?? 0) + spent.inputTokens,
+          outputTokens: (run.outputTokens ?? 0) + spent.outputTokens,
+        });
+        spent.inputTokens = 0;
+        spent.outputTokens = 0;
       } else if (text.trim() === "") {
         // Every rescue inside streamBlobTurn has already been tried by here.
         text =
@@ -712,10 +845,43 @@ export function App() {
       activeTurn.current = null;
       setThinkingFor(null);
     }
+    // A run parked on a question resumes in a later turn (trigger "answer")
+    // on the SAME run record, so this turn's spend is added to what earlier
+    // legs already cost. Overwriting instead would drop every token spent
+    // before the ask from both the per-run and the lifetime number.
+    const runTotal = {
+      inputTokens: (run.inputTokens ?? 0) + spent.inputTokens,
+      outputTokens: (run.outputTokens ?? 0) + spent.outputTokens,
+    };
     if (run.status === "running") {
-      run = patchRun(run, outcome);
+      run = patchRun(run, outcome, runTotal);
     } else if (run.status === "waiting_input" && outcome === "cancelled") {
-      run = patchRun(run, "cancelled");
+      run = patchRun(run, "cancelled", runTotal);
+    }
+    // Lifetime total, folded in once — at the run's terminal state, counting
+    // every leg. A run still parked on a question is not counted yet.
+    if (isTerminal(run.status) && runTotal.inputTokens + runTotal.outputTokens > 0) {
+      const previous = agentsRef.current.find((candidate) => candidate.id === target.id)?.usage;
+      updateBlob(target.id, {
+        usage: {
+          inputTokens: (previous?.inputTokens ?? 0) + runTotal.inputTokens,
+          outputTokens: (previous?.outputTokens ?? 0) + runTotal.outputTokens,
+          runs: (previous?.runs ?? 0) + 1,
+        },
+      });
+    }
+    // Background work that settled while the user was elsewhere: a routine
+    // that finished or failed, or a question now blocking the run. Focus is
+    // read here, at the moment it settles, not when the turn started.
+    if (
+      shouldNotify({
+        trigger,
+        status: run.status,
+        windowFocused: document.hasFocus(),
+        blobOptedIn: target.notifications,
+      })
+    ) {
+      void notify(target.name, run.status === "waiting_input" ? (run.question ?? text) : text);
     }
     touchActivity(target.id, text);
     // Persist once the reply settled; per-delta saves would thrash the store.
@@ -889,6 +1055,9 @@ export function App() {
                   user={{ userName, timezone }}
                   runtime={isTinfoilModel(model) ? "enclave" : "local"}
                   onUpdate={(patch) => updateBlob(agent.id, patch)}
+                  userMemories={userMemories}
+                  mcpServers={mcpServers}
+                  onChangeMcpServers={setMcpServers}
                   onBack={() => setDetailView({ kind: "info" })}
                   onClose={() => setDetailOpen(false)}
                 />
@@ -916,6 +1085,20 @@ export function App() {
               <DetailPanel
                 agent={agent}
                 routines={agentRoutines}
+                userMemories={userMemories}
+                lastRunTokens={
+                  (runsByBlob[agent.id]?.inputTokens ?? 0) +
+                  (runsByBlob[agent.id]?.outputTokens ?? 0)
+                }
+                onChangeMemories={(next) => {
+                  if (next.blob !== undefined) {
+                    updateBlob(agent.id, { memories: next.blob });
+                  }
+                  if (next.user !== undefined) {
+                    setUserMemories(next.user);
+                    store.saveUserMemories(next.user);
+                  }
+                }}
                 onClose={() => setDetailOpen(false)}
                 onOpenSettings={openSettings}
                 onCreateRoutine={() => createRoutine(agent.id)}

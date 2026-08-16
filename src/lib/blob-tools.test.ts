@@ -3,12 +3,14 @@ import {
   type BlobMemory,
   cleanResults,
   htmlToText,
+  MAX_BLOBS,
   MEMORY_LIMIT,
   MEMORY_PROMPT_CHARS,
   MEMORY_TEXT_LIMIT,
   makeAskTool,
   makeBlobTools,
   makeFsTools,
+  makeRosterTools,
   type PendingAsk,
   parseDdgLite,
   renderMemories,
@@ -385,5 +387,79 @@ describe("ask_user tool", () => {
       "Nothing to ask: empty question.",
     );
     expect(asks).toEqual([]);
+  });
+});
+
+describe("roster tools", () => {
+  /** Fake roster that records the calls a refusal must prevent. */
+  const fakeRoster = (names: string[]) => {
+    const blobs = names.map((name, index) => ({ id: `id-${index}`, name }));
+    const created: string[] = [];
+    const deleted: string[] = [];
+    return {
+      created,
+      deleted,
+      access: {
+        list: () => blobs,
+        create: (blob: { name: string }) => created.push(blob.name),
+        delete: (id: string) => deleted.push(id),
+      },
+    };
+  };
+
+  it("refuses a duplicate name, which is what makes spawn_blob idempotent", async () => {
+    const roster = fakeRoster(["Scout"]);
+    const spawn = makeRosterTools(roster.access, "Ken").find((tool) => tool.name === "spawn_blob");
+    const result = await spawn?.execute({ name: "scout", title: "t", description: "d" }, context);
+    expect(result).toContain("already exists");
+    expect(roster.created).toEqual([]);
+  });
+
+  it("refuses to grow the roster past the cap, so a looping routine cannot flood it", async () => {
+    const roster = fakeRoster(Array.from({ length: MAX_BLOBS }, (_, index) => `Blob${index}`));
+    const spawn = makeRosterTools(roster.access, "Ken").find((tool) => tool.name === "spawn_blob");
+    const result = await spawn?.execute(
+      { name: "One more", title: "t", description: "d" },
+      context,
+    );
+    expect(result).toContain(`${MAX_BLOBS}`);
+    expect(roster.created).toEqual([]);
+  });
+
+  it("creates a Blob when the name is free", async () => {
+    const roster = fakeRoster(["Scout"]);
+    const spawn = makeRosterTools(roster.access, "Ken").find((tool) => tool.name === "spawn_blob");
+    expect(await spawn?.execute({ name: "Filer", title: "t", description: "d" }, context)).toBe(
+      "Created Filer.",
+    );
+    expect(roster.created).toEqual(["Filer"]);
+  });
+
+  it("refuses a delete whose confirmation does not match", async () => {
+    const roster = fakeRoster(["Scout"]);
+    const remove = makeRosterTools(roster.access, "Ken").find(
+      (tool) => tool.name === "delete_blob",
+    );
+    const result = await remove?.execute({ name: "Scout", confirm_name: "Scoot" }, context);
+    expect(result).toContain("must be the same Blob name");
+    expect(roster.deleted).toEqual([]);
+  });
+
+  it("refuses self-deletion and unknown names, and deletes a real match", async () => {
+    const roster = fakeRoster(["Scout", "Ken"]);
+    const remove = makeRosterTools(roster.access, "Ken").find(
+      (tool) => tool.name === "delete_blob",
+    );
+    expect(await remove?.execute({ name: "Ken", confirm_name: "Ken" }, context)).toBe(
+      "You cannot delete yourself.",
+    );
+    expect(await remove?.execute({ name: "Ghost", confirm_name: "Ghost" }, context)).toContain(
+      "No Blob named Ghost",
+    );
+    expect(roster.deleted).toEqual([]);
+    expect(await remove?.execute({ name: "Scout", confirm_name: "Scout" }, context)).toBe(
+      "Deleted Scout.",
+    );
+    expect(roster.deleted).toEqual(["id-0"]);
   });
 });

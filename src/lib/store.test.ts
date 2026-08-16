@@ -82,6 +82,27 @@ describe("store (browser fallback)", () => {
     expect(await store.loadBlobRun(BLOB_ID)).toBeNull();
   });
 
+  it("round-trips user-scope memories through the `user` slice", async () => {
+    expect(await store.loadUserMemories()).toBeNull();
+
+    const memories = [{ id: "u1", text: "Allergic to peanuts", createdAt: 1 }];
+    // Debounced like every other config write (covered above), so the flush
+    // event is what makes it readable.
+    store.saveUserMemories(memories);
+    window.dispatchEvent(new Event("beforeunload"));
+    expect(await store.loadUserMemories()).toEqual(memories);
+
+    // Non-array values (a hand-edited file) read as null, never as memories.
+    store.saveUserMemories({ oops: true } as never);
+    window.dispatchEvent(new Event("beforeunload"));
+    expect(await store.loadUserMemories()).toBeNull();
+  });
+
+  it("exportBlob is a no-op outside Tauri rather than throwing", async () => {
+    // The browser dev server has no Rust side; Settings shows a hint instead.
+    expect(await store.exportBlob(BLOB_ID, "Ken")).toBeNull();
+  });
+
   it("ignores corrupt stored JSON instead of throwing", async () => {
     store.saveBlobConfig(BLOB_ID, ken);
     window.dispatchEvent(new Event("beforeunload"));

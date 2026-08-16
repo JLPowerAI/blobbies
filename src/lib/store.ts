@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Agent, Message, Routine } from "@/data/agents";
+import type { BlobMemory } from "@/lib/blob-tools";
+import type { McpServerConfig } from "@/lib/mcp";
 import { type ActiveRun, parseRun } from "@/lib/run-state";
 import { isTauri } from "@/lib/tauri";
 
@@ -18,6 +21,12 @@ export interface Settings {
   /** Ollama model tag used for chat, e.g. "llama3.2:latest". Empty = unset. */
   model: string;
   plugins: string[];
+  /**
+   * Local MCP servers. Lives here rather than in a new slice because it is
+   * app-wide config, not Blob state — and this file is not a secret store:
+   * `parseLoopbackUrl` rejects URLs carrying credentials.
+   */
+  mcpServers?: McpServerConfig[];
 }
 
 export interface UiLayout {
@@ -163,6 +172,19 @@ export function saveSettings(settings: Settings): void {
   queueWrite("settings", settings);
 }
 
+/**
+ * Memories shared by every Blob ("All Blobs" scope), stored in the root
+ * `user` slice. Per-Blob memories stay in that Blob's config.
+ */
+export async function loadUserMemories(): Promise<BlobMemory[] | null> {
+  const value = await rawRead("user");
+  return Array.isArray(value) ? (value as BlobMemory[]) : null;
+}
+
+export function saveUserMemories(memories: BlobMemory[]): void {
+  queueWrite("user", memories);
+}
+
 export async function loadUiLayout(): Promise<Partial<UiLayout> | null> {
   const value = await rawRead("ui-layout");
   return value !== null && typeof value === "object" ? (value as Partial<UiLayout>) : null;
@@ -215,6 +237,22 @@ export async function deleteBlobData(id: string): Promise<void> {
   for (const slice of ["config", "routines", "transcript", "runs"]) {
     backendRemove(`slice:blobs/${id}/${slice}`);
   }
+}
+
+/**
+ * Write every slice this Blob owns to one JSON file in Downloads and reveal
+ * it in the file manager. Returns the path, or null outside Tauri.
+ *
+ * The bundle is assembled in Rust so the filename and target directory are
+ * validated there — the Blob name is user text going into a path.
+ */
+export async function exportBlob(id: string, name: string): Promise<string | null> {
+  if (!isTauri()) {
+    return null;
+  }
+  const path = await invoke<string>("store_export_blob", { id, name });
+  await revealItemInDir(path);
+  return path;
 }
 
 /** Immediate (non-debounced) roster write, for create/delete. */

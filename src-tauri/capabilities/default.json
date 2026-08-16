@@ -1,11 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Least-privilege capability for the main window.",
+  "description": "Least-privilege capability for the main window. http:default allows https everywhere (minus the private-range denies) plus http on loopback, which exists only for local MCP servers and is re-checked in TS on every request (src/lib/mcp.ts).",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "notification:default",
+    "opener:allow-reveal-item-in-dir",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
@@ -28,6 +30,12 @@
       "allow": [
         {
           "url": "https://**"
+        },
+        {
+          "url": "http://127.0.0.1:*/**"
+        },
+        {
+          "url": "http://localhost:*/**"
         }
       ],
       "deny": [

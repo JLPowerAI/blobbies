@@ -29,13 +29,15 @@
     "rs:lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
     "rs:test": "cargo test --manifest-path src-tauri/Cargo.toml --all-features",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm rs:lint",
-    "prepare": "lefthook install"
+    "prepare": "lefthook install",
+    "sim:mcp": "vitest run --config vitest.sim.config.ts sim/mcp.sim.ts"
   },
   "dependencies": {
     "@kenkaiiii/gg-agent": "^5.44.0",
     "@kenkaiiii/gg-ai": "^5.44.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-http": "^2.5.9",
+    "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "lucide-react": "^1.31.0",
     "openai": "^7.4.0",

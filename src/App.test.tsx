@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
-import { flushRoster, loadRoster, saveBlobTranscript } from "@/lib/store";
+import { flushRoster, loadRoster, loadUserMemories, saveBlobTranscript } from "@/lib/store";
 
 /** Completes the first-run creator with the given Blob name. */
 async function createFirstBlob(user: UserEvent, name = "Ken") {
@@ -447,6 +447,56 @@ describe("App", () => {
     expect(within(dialog).getByRole("tab", { name: "Yours" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Plugins" })).not.toBeInTheDocument();
+  });
+
+  it("adds a memory and promotes it from this Blob to all Blobs", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+
+    await user.click(screen.getByRole("button", { name: "Show details panel" }));
+    const details = screen.getByRole("complementary", { name: "Ken details" });
+
+    await user.click(within(details).getByRole("button", { name: "Add memory" }));
+    await user.type(within(details).getByLabelText("Memory text"), "Biscuit is a beagle{Enter}");
+
+    // Numbered to match renderMemories, so "forget 1" in chat means this row.
+    expect(within(details).getByText(/\[1\] Biscuit is a beagle/)).toBeInTheDocument();
+    expect(within(details).getByText("This Blob")).toBeInTheDocument();
+    expect(await loadUserMemories()).toBeNull();
+
+    // Promote: the fact leaves the Blob's config for the shared `user` slice.
+    await user.click(within(details).getByRole("button", { name: "Share with all Blobs" }));
+    expect(within(details).getByText("All Blobs")).toBeInTheDocument();
+    expect(within(details).queryByText(/\[1\]/)).not.toBeInTheDocument();
+
+    window.dispatchEvent(new Event("beforeunload"));
+    expect(await loadUserMemories()).toEqual([
+      expect.objectContaining({ text: "Biscuit is a beagle" }),
+    ]);
+    const roster = await loadRoster();
+    expect(roster?.[0]?.memories ?? []).toEqual([]);
+
+    // And back again, so the toggle is not one-way.
+    await user.click(within(details).getByRole("button", { name: "Keep to this Blob only" }));
+    expect(within(details).getByText("This Blob")).toBeInTheDocument();
+  });
+
+  it("deletes a memory from the details panel", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+
+    await user.click(screen.getByRole("button", { name: "Show details panel" }));
+    const details = screen.getByRole("complementary", { name: "Ken details" });
+    await user.click(within(details).getByRole("button", { name: "Add memory" }));
+    await user.type(within(details).getByLabelText("Memory text"), "Temporary{Enter}");
+
+    await user.click(within(details).getByRole("button", { name: "Delete memory: Temporary" }));
+    expect(within(details).queryByText(/Temporary/)).not.toBeInTheDocument();
+    expect(
+      within(details).getByText(/Facts this Blob has learned about you show up here/),
+    ).toBeInTheDocument();
   });
 
   it("keeps the details panel hidden until opened from the chat header", async () => {

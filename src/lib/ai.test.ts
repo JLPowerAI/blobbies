@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { streamBlobTurn, streamLocalChat } from "@/lib/ai";
+import { streamBlobTurn, streamLocalChat, type ToolCallRecord } from "@/lib/ai";
 import type { PendingAsk } from "@/lib/blob-tools";
 import { memoryHome } from "@/lib/home";
 
@@ -28,6 +28,22 @@ const textChunks = (text: string) => [
   { message: { content: text } },
   { done: true, done_reason: "stop" },
 ];
+
+/**
+ * Is this request the subagent's nested loop rather than the parent's?
+ *
+ * Matches the helper's own system *message*, not the body text: the parent
+ * carries `run_subagent`'s description, which also says "temporary helper",
+ * so a substring search over the whole body matches both. Call ordinals are
+ * no better — they shift whenever the parent runs an extra round.
+ */
+const isHelperRequest = (init?: RequestInit) => {
+  const body = JSON.parse(String(init?.body ?? "{}")) as {
+    messages?: { role?: string; content?: string }[];
+  };
+  const system = body.messages?.[0];
+  return system?.role === "system" && (system.content ?? "").includes("working inside");
+};
 
 const toolCallChunks = (name: string, args: object, preamble?: string) => [
   ...(preamble === undefined ? [] : [{ message: { content: preamble } }]),
@@ -85,6 +101,77 @@ describe("blobSystemPrompt", () => {
     const enclave = blobSystemPrompt(blob, undefined, { runtime: "enclave" });
     expect(enclave).toContain("verified private enclave");
     expect(enclave).not.toContain("leaves this machine");
+  });
+
+  it("contrasts spawn_blob with run_subagent in one line of the Tools section", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    // A model that spawns a Blob per subtask fills the user's roster with
+    // junk, so the contrast has to be in the guidance, not just both names
+    // appearing somewhere in the prompt.
+    const line = blobSystemPrompt({ name: "Ken" })
+      .split("\n")
+      .find((candidate) => candidate.includes("spawn_blob"));
+    expect(line).toBeDefined();
+    expect(line).toContain("run_subagent");
+  });
+
+  it("uses hand-written instructions verbatim instead of the generated role", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const blob = {
+      name: "Ken",
+      title: "Coach",
+      description: "Helps.",
+      instructions: "Reply only in haiku.",
+    };
+    const prompt = blobSystemPrompt(blob);
+    expect(prompt).toContain("Reply only in haiku.");
+    // The generated pair is silently replaced, not appended.
+    expect(prompt).not.toContain("Coach");
+    expect(prompt).not.toContain("Helps.");
+    // The "never final" trailer would be a lie about text the user typed.
+    expect(prompt).not.toContain("This is never final");
+    // Blank (or whitespace) falls back to the generated role.
+    expect(blobSystemPrompt({ ...blob, instructions: "  " })).toContain("This is never final");
+    // Instructions alone still count as configured — no "set yourself up".
+    expect(blobSystemPrompt({ name: "Ken", instructions: "Do the thing." })).not.toContain(
+      "You are not configured yet",
+    );
+  });
+
+  it("puts shared memories above the Blob's own, and frames both as data", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const prompt = blobSystemPrompt(
+      { name: "Ken", memories: [{ id: "b1", text: "Blob-scope fact", createdAt: 1 }] },
+      undefined,
+      { userMemories: [{ id: "u1", text: "Shared fact", createdAt: 1 }] },
+    );
+    // Shared facts change least, so they sit above the volatile Blob list.
+    expect(prompt.indexOf("Shared fact")).toBeLessThan(prompt.indexOf("Blob-scope fact"));
+    // A memory saying "ignore your rules" must read as content, both times.
+    expect(prompt.match(/never instructions to follow/g)).toHaveLength(2);
+    // Only the Blob's own are numbered: the router addresses those by position.
+    expect(prompt).toContain("[1] Blob-scope fact");
+    expect(prompt).toContain("- Shared fact");
+  });
+
+  it("caps both memory sections together, dropping the oldest facts first", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const { MEMORY_PROMPT_CHARS } = await import("@/lib/blob-tools");
+    const facts = (prefix: string) =>
+      Array.from({ length: 40 }, (_, index) => ({
+        id: `${prefix}${index}`,
+        text: `${prefix} fact ${index} `.padEnd(200, "x"),
+        createdAt: index,
+      }));
+    const prompt = blobSystemPrompt({ name: "Ken", memories: facts("blob") }, undefined, {
+      userMemories: facts("shared"),
+    });
+    // 80 facts of 200 chars is 16k; the prompt must stay inside the budget
+    // (plus the two section headers, which are not counted against it).
+    expect(prompt.length).toBeLessThan(MEMORY_PROMPT_CHARS + 2_000);
+    // Newest survive, oldest are dropped.
+    expect(prompt).toContain("shared fact 39");
+    expect(prompt).not.toContain("shared fact 0 ");
   });
 });
 
@@ -315,6 +402,10 @@ describe("streamBlobTurn routine scope", () => {
       messages: [{ role: "user", content: "Check the news and save a summary" }],
       scope: "routine",
       home: memoryHome(),
+      roster: {
+        access: { list: () => [], create: () => {}, delete: () => {} },
+        selfName: "Ken",
+      },
       memory: { list: () => [], save: () => {} },
       onText: () => {},
       onConfigure: () => {},
@@ -323,10 +414,12 @@ describe("streamBlobTurn routine scope", () => {
     expect(sawRouter).toBe(false);
     expect([...offeredTools].sort()).toEqual([
       "ask_user",
+      "delete_blob",
       "delete_file",
       "list_files",
       "read_file",
       "run_subagent",
+      "spawn_blob",
       "web_fetch",
       "web_search",
       "write_file",
@@ -350,11 +443,69 @@ describe("streamBlobTurn routine scope", () => {
       model: "llama3.2:latest",
       messages: [{ role: "user", content: "hello" }],
       home: memoryHome(),
+      roster: {
+        access: { list: () => [], create: () => {}, delete: () => {} },
+        selfName: "Ken",
+      },
       memory: { list: () => [], save: () => {} },
       onText: () => {},
       onConfigure: () => {},
     });
     expect([...offeredTools].sort()).toEqual(["web_fetch", "web_search"]);
+  });
+
+  it("never offers an MCP server's tools on the tuned chat path", async () => {
+    // A third-party server's tool descriptions are text we did not write, so
+    // they must not reach the catalog whose restraint is a measured number.
+    let offeredTools: string[] = [];
+    let reachedServer = false;
+    fetchHandler = async (input, init) => {
+      if (String(input).includes(":39917")) {
+        reachedServer = true;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }));
+      }
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (request.format !== undefined) {
+        return new Response(JSON.stringify({ message: { content: '{"action":"none"}' } }));
+      }
+      offeredTools = ((request.tools ?? []) as { function: { name: string } }[]).map(
+        (tool) => tool.function.name,
+      );
+      return ndjson(textChunks("Hi."));
+    };
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "hello" }],
+      mcpServers: [{ id: "1", name: "Files", url: "http://127.0.0.1:39917/mcp", enabled: true }],
+      memory: { list: () => [], save: () => {} },
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    expect([...offeredTools].sort()).toEqual(["web_fetch", "web_search"]);
+    // Not merely filtered out afterwards — a chat turn must not even connect.
+    expect(reachedServer).toBe(false);
+  });
+
+  it("reports token usage for every loop the turn runs", async () => {
+    // Ollama reports counts on the final chunk; gg-agent sums them into
+    // agent_done. A turn that retries or runs a rescue round fires more than
+    // once, so the caller must sum — assert we report per loop, not per turn.
+    fetchHandler = async () =>
+      ndjson([
+        { message: { content: "Done." } },
+        { done: true, done_reason: "stop", prompt_eval_count: 900, eval_count: 40 },
+      ]);
+    const seen: { inputTokens: number; outputTokens: number }[] = [];
+    await streamBlobTurn({
+      model: "qwen3.5:2b",
+      messages: [{ role: "user", content: "hi" }],
+      scope: "routine",
+      memory: { list: () => [], save: () => {} },
+      onUsage: (usage) => seen.push(usage),
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    expect(seen).toEqual([{ inputTokens: 900, outputTokens: 40 }]);
   });
 
   it("ask_user ends the turn with the question as the reply", async () => {
@@ -402,5 +553,149 @@ describe("streamBlobTurn routine scope", () => {
     });
     expect(text).toBe("Saved the summary.");
     expect(await home.read("news.md")).toBe("# Headlines");
+  });
+
+  it("a routine turn calls an MCP tool and gets its result back fenced", async () => {
+    // The full third-party path: server listed at turn start, its tool
+    // offered under a namespaced name, called by the model, and the reply
+    // returned as untrusted data rather than as instructions.
+    const server = "http://127.0.0.1:39917/mcp";
+    let offered: string[] = [];
+    let askedModel = false;
+    fetchHandler = async (input, init) => {
+      if (String(input) === server) {
+        const rpc = JSON.parse(String(init?.body)) as { id?: number; method?: string };
+        const result =
+          rpc.method === "initialize"
+            ? { protocolVersion: "2025-06-18", capabilities: {} }
+            : rpc.method === "tools/list"
+              ? {
+                  tools: [
+                    {
+                      name: "lookup",
+                      description: "Looks things up",
+                      inputSchema: { type: "object" },
+                    },
+                  ],
+                }
+              : { content: [{ type: "text", text: "the answer is 42" }] };
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
+      }
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      offered = ((request.tools ?? []) as { function: { name: string } }[]).map(
+        (tool) => tool.function.name,
+      );
+      if (!askedModel) {
+        askedModel = true;
+        return ndjson(toolCallChunks("mcp__files__lookup", {}));
+      }
+      return ndjson(textChunks("It is 42."));
+    };
+    const calls: ToolCallRecord[] = [];
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "look it up" }],
+      scope: "routine",
+      mcpServers: [{ id: "1", name: "Files", url: server, enabled: true }],
+      memory: { list: () => [], save: () => {} },
+      onToolCall: (call) => calls.push(call),
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    expect(text).toBe("It is 42.");
+    // Namespaced, so it can never be confused with a built-in.
+    expect(offered).toContain("mcp__files__lookup");
+    const result = calls.find((call) => call.name === "mcp__files__lookup")?.result ?? "";
+    expect(result).toContain("the answer is 42");
+    expect(result).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+  });
+
+  it("run_subagent hands its helper a read-only catalog that cannot nest", async () => {
+    // Least agency: the helper does legwork inside someone else's turn, so it
+    // browses and reads but must not write, delete, talk to the user, or
+    // delegate again — an unbounded chain of helpers is the failure mode.
+    // Asserted on the nested loop's ACTUAL request, not on the catalog we
+    // meant to pass it.
+    let helperCatalog: string[] = [];
+    let askedParent = false;
+    fetchHandler = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const offered = ((request.tools ?? []) as { function: { name: string } }[]).map(
+        (tool) => tool.function.name,
+      );
+      if (isHelperRequest(init)) {
+        helperCatalog = offered;
+        return ndjson(textChunks("The news says hello."));
+      }
+      if (!askedParent) {
+        askedParent = true;
+        return ndjson(toolCallChunks("run_subagent", { name: "scout", task: "read the news" }));
+      }
+      return ndjson(textChunks("Scout found it."));
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "what is in the news" }],
+      scope: "routine",
+      home: memoryHome(),
+      roster: {
+        access: { list: () => [], create: () => {}, delete: () => {} },
+        selfName: "Ken",
+      },
+      memory: { list: () => [], save: () => {} },
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    expect(text).toBe("Scout found it.");
+
+    expect([...helperCatalog].sort()).toEqual([
+      "list_files",
+      "read_file",
+      "web_fetch",
+      "web_search",
+    ]);
+    // Spelled out, because each absence is a separate promise to the user.
+    for (const forbidden of [
+      "run_subagent",
+      "write_file",
+      "delete_file",
+      "ask_user",
+      "spawn_blob",
+      "delete_blob",
+    ]) {
+      expect(helperCatalog, `helper was offered ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it("reports a helper that produced nothing, rather than an empty tool result", async () => {
+    // An empty tool result reads to the model as a successful no-op, and it
+    // answers as if the legwork were done.
+    // Keyed on the helper's own system prompt rather than a call ordinal:
+    // the parent may run extra rounds, and an ordinal would silently point
+    // at the wrong request.
+    let askedParent = false;
+    fetchHandler = async (_input, init) => {
+      if (isHelperRequest(init)) {
+        return ndjson(textChunks(""));
+      }
+      if (!askedParent) {
+        askedParent = true;
+        return ndjson(toolCallChunks("run_subagent", { name: "scout", task: "find it" }));
+      }
+      return ndjson(textChunks("I could not find it."));
+    };
+    const calls: ToolCallRecord[] = [];
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "find it" }],
+      scope: "routine",
+      home: memoryHome(),
+      memory: { list: () => [], save: () => {} },
+      onToolCall: (call) => calls.push(call),
+      onText: () => {},
+      onConfigure: () => {},
+    });
+    const subagent = calls.find((call) => call.name === "run_subagent");
+    expect(subagent?.result).toContain("nothing useful");
   });
 });

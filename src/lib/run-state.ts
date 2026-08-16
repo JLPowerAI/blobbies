@@ -22,6 +22,13 @@ export interface ActiveRun {
   askKind?: "question" | "action";
   startedAt: number;
   status: RunStatus;
+  /**
+   * Tokens this run spent in the agent loop. Optional because runs stored
+   * before this existed have neither, and `parseRun` stays tolerant of them.
+   * Excludes the router/reconcile/configure calls — see `onUsage` in ai.ts.
+   */
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 /**
