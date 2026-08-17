@@ -10,9 +10,11 @@
  * second read path and no flicker (`img-src` already allows `data:`).
  *
  * simplification: that puts the bytes in the transcript slice, which Rust caps
- * at 8 MB. Hence the deliberately small budget below — ~30 KB a picture, so a
- * conversation holds a couple of hundred before that matters. If it ever does,
- * the upgrade is a `previews/` folder in the Blob's home plus a lazy read.
+ * at 8 MB — past the cap the write is *refused* (see write_slice_file), so the
+ * newest message is not persisted but the conversation itself always loads.
+ * The budget below (~35 KB a picture) puts that cliff around 200 images in one
+ * conversation; the upgrade path, if it is ever reached, is a `previews/`
+ * folder in the Blob's home plus a lazy read.
  */
 
 /** Longest edge of a stored preview. Bubble width is ~260px; this is retina. */

@@ -116,6 +116,15 @@ fn write_slice_file(path: &Path, value: serde_json::Value) -> Result<()> {
     };
     let serialized =
         serde_json::to_vec_pretty(&slice).map_err(|error| Error::Corrupt(error.to_string()))?;
+    // A slice too big to read back must never be written: `read_slice_file`
+    // refuses anything over MAX_SLICE_BYTES, so writing it anyway would leave a
+    // transcript that can never load again — and the next save, starting from
+    // the now-empty state, would overwrite it and take the whole conversation
+    // with it. Refusing here keeps the last good file on disk: the newest
+    // change is not persisted, everything before it still is.
+    if serialized.len() as u64 > MAX_SLICE_BYTES {
+        return Err(Error::SliceTooLarge);
+    }
 
     let tmp = path.with_extension("json.tmp");
     {
@@ -478,6 +487,30 @@ mod tests {
         write_slice_file(&path, value.clone()).unwrap_or_else(|_| panic!("write"));
         let read = read_slice_file(&path).unwrap_or_else(|_| panic!("read"));
         assert_eq!(read, Some(value));
+    }
+
+    #[test]
+    fn an_oversized_write_is_refused_and_the_old_file_survives() {
+        let root = temp_root("size-cap");
+        let path = resolve_slice_path(&root, "roster").unwrap_or_else(|_| panic!("path"));
+        let good = serde_json::json!({ "rows": [] });
+        write_slice_file(&path, good.clone()).unwrap_or_else(|_| panic!("write"));
+
+        // Past the cap once serialized pretty (the wrapper adds bytes, so pad
+        // well beyond it).
+        let huge = serde_json::json!({
+            "rows": [],
+            "pad": "x".repeat(usize::try_from(MAX_SLICE_BYTES).unwrap_or(usize::MAX) + 64),
+        });
+        let refused = write_slice_file(&path, huge).expect_err("must refuse");
+        assert!(matches!(refused, Error::SliceTooLarge), "got: {refused}");
+
+        // The load side still works and still holds the last good value — this
+        // pair is the whole point of the write-side cap. Without it, the file
+        // would be written, every future read would fail with SliceTooLarge,
+        // and the next save from the (empty) loaded state would destroy it.
+        let read = read_slice_file(&path).unwrap_or_else(|_| panic!("read"));
+        assert_eq!(read, Some(good));
     }
 
     #[test]
