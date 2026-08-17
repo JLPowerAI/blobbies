@@ -84,7 +84,9 @@ export async function ocrPdf(bytes: Uint8Array): Promise<string> {
   const worker = new Worker(new URL("./pdf-worker.ts", import.meta.url), { type: "module" });
   GlobalWorkerOptions.workerPort = worker;
   const task = getDocument({
-    data: bytes,
+    // Copied for the same reason as in pdf-text: pdf.js transfers this buffer
+    // to the worker and detaches the caller's array.
+    data: new Uint8Array(bytes),
     // Rendering is on here, unlike pdf-text: without it there are no pixels to
     // read. Fonts stay off the main thread and forms stay off entirely.
     disableFontFace: true,

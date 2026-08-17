@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
@@ -6,36 +6,48 @@ import { defineConfig, type Plugin } from "vite";
 const host = process.env.TAURI_DEV_HOST;
 
 /**
- * pdf.js's pure-JS image decoders, served so `wasmUrl` can reach them.
+ * Serve pdf.js's pure-JS image decoders at `/pdfjs/`.
  *
- * We render PDF pages with `useWasm: false` (wasm would need
- * `'wasm-unsafe-eval'` in the CSP, see src/lib/pdf-ocr.ts). pdf.js then falls
- * back to these JS builds — but only if it can `import()` them from `wasmUrl`.
- * With no URL set it silently ends up with no decoder at all, and a scan made
- * of JBIG2 or JPEG2000 images renders as a blank white page that OCRs as
- * "no text found".
+ * We rasterize PDF pages with `useWasm: false`, because wasm would need
+ * `'wasm-unsafe-eval'` in the CSP and that applies to the whole page. pdf.js
+ * then falls back to these JS builds — but only if it can `import()` them from
+ * `wasmUrl` (see src/lib/pdf-ocr.ts). With no URL it ends up with no decoder at
+ * all and a JBIG2/JPEG2000 scan renders blank, which reads to the user as
+ * "no text could be found".
  *
- * They land in `public/pdfjs/` (gitignored) rather than being committed, so
- * they cannot drift from the installed pdfjs-dist.
+ * Not `public/`: Vite's dev server refuses to serve a public file that source
+ * code imports ("should not be imported from source code"), so the fallback
+ * worked in a production build and broke in dev — the worst possible split.
+ * Served from `node_modules` in dev, copied into the bundle for release, so
+ * the bytes can never drift from the installed pdfjs-dist.
  */
 function pdfjsFallbackDecoders(): Plugin {
   const files = ["jbig2_nowasm_fallback.js", "openjpeg_nowasm_fallback.js"];
+  const source = (file: string) =>
+    fileURLToPath(new URL(`./node_modules/pdfjs-dist/wasm/${file}`, import.meta.url));
+
   return {
     name: "pdfjs-fallback-decoders",
-    buildStart() {
-      const target = fileURLToPath(new URL("./public/pdfjs", import.meta.url));
-      mkdirSync(target, { recursive: true });
-      for (const file of files) {
-        const from = fileURLToPath(
-          new URL(`./node_modules/pdfjs-dist/wasm/${file}`, import.meta.url),
-        );
-        const to = `${target}/${file}`;
-        // Skipped when unchanged: public/ is watched, and rewriting these on
-        // every start would trigger a full page reload each time.
-        if (existsSync(to) && statSync(to).size === statSync(from).size) {
-          continue;
+
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const file = files.find((name) => request.url?.startsWith(`/pdfjs/${name}`));
+        if (file === undefined) {
+          next();
+          return;
         }
-        copyFileSync(from, to);
+        response.setHeader("Content-Type", "text/javascript");
+        response.end(readFileSync(source(file)));
+      });
+    },
+
+    // Copied rather than `emitFile`d: these are pre-built ESM bundles, and
+    // running them through the bundler would only risk rewriting them.
+    writeBundle(options) {
+      const outDir = options.dir ?? fileURLToPath(new URL("./dist", import.meta.url));
+      mkdirSync(`${outDir}/pdfjs`, { recursive: true });
+      for (const file of files) {
+        copyFileSync(source(file), `${outDir}/pdfjs/${file}`);
       }
     },
   };

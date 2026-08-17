@@ -46,5 +46,3 @@ src-tauri/icons/ios
 # Internal planning — never commit
 docs/agent-roadmap.md
 
-# pdf.js fallback image decoders, copied from pdfjs-dist by vite.config.ts
-public/pdfjs

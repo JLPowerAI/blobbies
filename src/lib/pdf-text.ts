@@ -44,7 +44,12 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string> {
   // `await` between these two statements.
   GlobalWorkerOptions.workerPort = worker;
   const task = getDocument({
-    data: bytes,
+    // A copy, because pdf.js *transfers* this buffer to the worker: the
+    // caller's array would come back detached (`byteLength === 0`) and its
+    // next use throws "An ArrayBuffer is detached and could not be cloned".
+    // Verified in a real browser — a scanned PDF read here and then passed to
+    // pdf-ocr is exactly that sequence.
+    data: new Uint8Array(bytes),
     // Hardening. Names checked against pdfjs-dist 6.2.108's own type
     // definitions — `isEvalSupported` no longer exists in v6, so passing it
     // would be a no-op that merely looks safe.
