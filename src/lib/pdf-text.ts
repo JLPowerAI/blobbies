@@ -10,7 +10,14 @@
  * loads once someone actually attaches a PDF.
  */
 
-import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
+import { GlobalWorkerOptions, getDocument, type PDFPageProxy } from "pdfjs-dist";
+
+/**
+ * What `streamTextContent()` yields. Derived from the public API rather than
+ * imported: pdfjs-dist's root does not export `TextContent`, and reaching into
+ * `pdfjs-dist/types/...` would pin us to its file layout.
+ */
+type TextChunk = Awaited<ReturnType<PDFPageProxy["getTextContent"]>>;
 
 /** Pages read per document. A book-length PDF is not a chat attachment. */
 const MAX_PAGES = 200;
@@ -33,6 +40,36 @@ const TIMEOUT_MS = 20_000;
  * Callers treat a throw as "this file is not attachable" and say so; nothing
  * here is trusted enough to be worth a partial result on a parser error.
  */
+/**
+ * One page's text, read off pdf.js's stream by hand.
+ *
+ * `page.getTextContent()` would be the obvious call, but it async-iterates a
+ * `ReadableStream` (`for await (const value of readableStream)`) and WebKit has
+ * never shipped `Symbol.asyncIterator` on streams. In WKWebView — the only
+ * engine this app ships on — that throws "undefined is not a function (near
+ * '...value of readableStream...')", so *every* PDF failed while working fine
+ * in Chrome. `streamTextContent()` is the same public API one layer down.
+ */
+async function pageText(page: PDFPageProxy): Promise<string> {
+  const reader = page.streamTextContent().getReader();
+  const parts: string[] = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      for (const item of (value as TextChunk).items) {
+        // Marked-content entries carry structure, not text, and have no `str`.
+        parts.push("str" in item ? item.str + (item.hasEOL ? "\n" : "") : "");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return parts.join("");
+}
+
 export async function extractPdfText(bytes: Uint8Array): Promise<string> {
   // A fresh worker per document, terminated below. We construct it ourselves
   // so pdf.js never calls `new Worker` and so never reaches its blob:-URL
@@ -68,14 +105,7 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string> {
     const pages: string[] = [];
     for (let page = 1; page <= Math.min(pdf.numPages, MAX_PAGES); page++) {
       const loaded = await pdf.getPage(page);
-      const { items } = await loaded.getTextContent();
-      pages.push(
-        items
-          // Marked-content entries carry structure, not text, and have no
-          // `str` — the `in` check is what narrows the union.
-          .map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : "") : ""))
-          .join(""),
-      );
+      pages.push(await pageText(loaded));
       loaded.cleanup();
     }
     if (pdf.numPages > MAX_PAGES) {

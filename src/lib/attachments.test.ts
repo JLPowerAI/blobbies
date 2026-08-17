@@ -40,6 +40,8 @@ beforeEach(() => {
   extract.mockReset();
   ocrPdfFile.mockReset();
   ocrImageFile.mockReset();
+  // Undo any vi.stubEnv from a previous test.
+  vi.unstubAllEnvs();
 });
 
 /** A PNG header, so the sniff routes these bytes to OCR. */
@@ -171,12 +173,29 @@ describe("saveAttachments", () => {
     expect(rejected[0]?.reason).toContain("no text could be found");
   });
 
-  it("keeps rasterizer internals out of what the user is shown", async () => {
+  it("keeps rasterizer internals out of a release build's message", async () => {
+    // Vitest runs with DEV=true; a shipped app does not, and that is the mode
+    // this rule is about.
+    vi.stubEnv("DEV", false);
     extract.mockResolvedValue("");
     ocrPdfFile.mockRejectedValue(new TypeError("DOMMatrix is not defined"));
+
     const { rejected } = await saveAttachments(memoryHome(), [pdf("scan.pdf")]);
+
     expect(rejected[0]?.reason).not.toContain("DOMMatrix");
     expect(rejected[0]?.reason).toContain("couldn't be read");
+  });
+
+  it("appends the real parser error in a dev build", async () => {
+    // The webview's console never reaches the terminal, and some of these
+    // failures reproduce only inside WKWebView — so in dev the transcript is
+    // the only place the actual error can surface.
+    extract.mockRejectedValue(new TypeError("DOMMatrix is not defined"));
+
+    const { rejected } = await saveAttachments(memoryHome(), [pdf("scan.pdf")]);
+
+    expect(rejected[0]?.reason).toContain("dev detail");
+    expect(rejected[0]?.reason).toContain("DOMMatrix");
   });
 
   it("reads an image with OCR and saves the text", async () => {

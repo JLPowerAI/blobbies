@@ -160,8 +160,10 @@ async function readText(
       // Loaded on demand: pdf.js is ~500 KB that most sessions never need.
       const { extractPdfText } = await import("@/lib/pdf-text");
       text = await extractPdfText(bytes);
-    } catch {
-      return { reason: "its PDF text couldn't be read (it may be encrypted or damaged)" };
+    } catch (error) {
+      return {
+        reason: `its PDF text couldn't be read (it may be encrypted or damaged)${devDetail(error)}`,
+      };
     }
     if (text.trim() === "") {
       // No text layer: a scan. Rasterize the pages and read them with OCR,
@@ -170,10 +172,10 @@ async function readText(
       try {
         const { ocrPdf } = await import("@/lib/pdf-ocr");
         text = await ocrPdf(bytes);
-      } catch {
+      } catch (error) {
         // Fixed wording: failures here are rasterizer internals, and a raw
         // JS message would be noise to the user and detail to everyone else.
-        return { reason: "its pages couldn't be read" };
+        return { reason: `its pages couldn't be read${devDetail(error)}` };
       }
       if (text.trim() === "") {
         return { reason: "no text could be found in it" };
@@ -208,6 +210,22 @@ function clip(text: string, what: string): string {
   return text.length > MAX_ATTACHMENT_CHARS
     ? `${text.slice(0, MAX_ATTACHMENT_CHARS)}\n[truncated: the ${what} was longer than this file can hold]`
     : text;
+}
+
+/**
+ * The underlying parser error, appended in dev builds only.
+ *
+ * A release build shows nothing: these messages are parser internals, useless
+ * to the user and detail to anyone else. In dev it is the only channel there
+ * is — the webview's console never reaches the terminal, and some of these
+ * failures reproduce *only* inside WKWebView.
+ */
+function devDetail(error: unknown): string {
+  if (!import.meta.env.DEV) {
+    return "";
+  }
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return ` — dev detail: ${message.slice(0, 200)}`;
 }
 
 /**
