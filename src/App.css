@@ -2638,6 +2638,11 @@ a.modal-button {
   color: var(--text-primary);
 }
 
+.composer-add:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 :root[data-theme="dark"] .composer-add {
   background: #3c3c3c;
   color: #929292;
@@ -2645,6 +2650,76 @@ a.modal-button {
 
 .composer-add:hover {
   background: var(--surface-selected);
+}
+
+/* Dropping files anywhere on the composer attaches them; the border is the
+   only affordance, so it has to be visible in both themes. */
+.composer-dragging {
+  border-color: var(--accent-blue);
+}
+
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 4px 6px 4px 9px;
+  border-radius: 13px;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+/* Same pair as .composer-reply: the composer surface needs a lighter chip
+   than --surface-control gives. Scoped to the composer so bubble chips keep
+   the translucent fill below. */
+:root[data-theme="dark"] .composer-attachments .attachment-chip {
+  background: #3b3b3b;
+  color: #aeaeae;
+}
+
+.attachment-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip-size {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.attachment-chip-remove {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+/* Chips inside a sent bubble sit above the text and take its colors. */
+.bubble-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.bubble-attachments .attachment-chip {
+  background: rgb(255 255 255 / 18%);
+  color: inherit;
+}
+
+.bubble-agent .bubble-attachments .attachment-chip {
+  background: var(--surface-control);
 }
 
 .composer-input {

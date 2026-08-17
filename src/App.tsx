@@ -27,6 +27,12 @@ import {
   transcriptFor,
 } from "@/data/agents";
 import { blobSystemPrompt, streamBlobTurn, timeNote, trimHistory } from "@/lib/ai";
+import {
+  type Attachment,
+  attachmentsPrompt,
+  rejectionNote,
+  saveAttachments,
+} from "@/lib/attachments";
 import type { BlobMemory, RosterAccess } from "@/lib/blob-tools";
 import { homeFor } from "@/lib/home";
 import { reconcileMemories } from "@/lib/intent";
@@ -97,6 +103,8 @@ export function App() {
   const [mode, setMode] = useState<Mode>({ kind: "chat" });
   // Details stay hidden until explicitly opened from the chat header.
   const [detailOpen, setDetailOpen] = useState(false);
+  /** Bumped when the Blob's home folder changed, so the Files list re-reads. */
+  const [filesKey, setFilesKey] = useState(0);
   const [detailView, setDetailView] = useState<
     { kind: "info" } | { kind: "settings" } | { kind: "routine"; routineId: string }
   >({ kind: "info" });
@@ -662,6 +670,9 @@ export function App() {
       touchActivity(target.id, text);
       return "failed";
     }
+    // One backend for the whole turn: attachment reads below and the fs tools
+    // a routine turn gets both point at this Blob's sandbox.
+    const home = homeFor(target.id);
     const aiMessages: AiMessage[] = [
       // Byte-stable across turns (no clock inside): the system prompt plus the
       // untrimmed history form the request prefix, and Ollama's KV cache only
@@ -680,13 +691,25 @@ export function App() {
           },
         ),
       },
+      // Attachment text is read back from the home folder and inlined into
+      // the message that carried it — the chat catalog has no file tool, so
+      // this is the only way an attachment reaches the model there. Per-message
+      // and content-stable, so the cached prefix survives; trimHistory sizes
+      // the result like any other history.
       ...trimHistory(
-        history
-          .filter((entry): entry is Extract<Message, { kind: "text" }> => entry.kind === "text")
-          .map((entry): AiMessage => {
-            const role = entry.author === "user" ? ("user" as const) : ("assistant" as const);
-            return { role, content: entry.segments.map((segment) => segment.text).join("") };
-          }),
+        await Promise.all(
+          history
+            .filter((entry): entry is Extract<Message, { kind: "text" }> => entry.kind === "text")
+            .map(async (entry): Promise<AiMessage> => {
+              const role = entry.author === "user" ? ("user" as const) : ("assistant" as const);
+              const said = entry.segments.map((segment) => segment.text).join("");
+              const block = await attachmentsPrompt(home, entry.attachments ?? []);
+              // An attachment-only message has no words of its own; a leading
+              // blank line in its place is noise the model has to read past.
+              const content = [said, block].filter((part) => part !== "").join("\n\n");
+              return { role, content };
+            }),
+        ),
       ),
     ];
     // Routine (and answer-to-routine) turns carry the instruction as the
@@ -771,7 +794,7 @@ export function App() {
         forceConfigure:
           trigger === "user" && (target.title ?? "") === "" && (target.description ?? "") === "",
         scope: trigger === "user" ? "chat" : "routine",
-        home: homeFor(target.id),
+        home,
         roster: { access: rosterAccess, selfName: target.name },
         mcpServers,
         signal: abort.signal,
@@ -881,6 +904,11 @@ export function App() {
     touchActivity(target.id, text);
     // Persist once the reply settled; per-delta saves would thrash the store.
     flushTranscript();
+    // Only a routine turn carries file tools, so only it can have written
+    // something the Files list is not showing yet.
+    if (trigger !== "user") {
+      setFilesKey((key) => key + 1);
+    }
     return run.status === "waiting_input" ? "done" : outcome;
   };
 
@@ -896,16 +924,19 @@ export function App() {
     activeTurn.current?.abort.abort();
   };
 
-  const sendMessage = (text: string, replyTo?: string) => {
-    if (agent === undefined) {
-      return;
-    }
-    // Fat-finger guard: an identical send within half a second is a bounce.
+  /**
+   * Put the user's message in the transcript and get a reply going.
+   *
+   * Attachments are already saved in the Blob's home folder by here; the
+   * message carries only their names (see lib/attachments).
+   */
+  const dispatchMessage = (
+    target: Agent,
+    text: string,
+    replyTo: string | undefined,
+    attachments: Attachment[],
+  ) => {
     const now = Date.now();
-    if (lastSend.current?.text === text && now - lastSend.current.at < 500) {
-      return;
-    }
-    lastSend.current = { text, at: now };
     const message: Message = {
       id: `sent-${now}`,
       kind: "text",
@@ -913,21 +944,40 @@ export function App() {
       segments: [{ text }],
       timestampMs: now,
       ...(replyTo === undefined ? {} : { replyTo }),
+      ...(attachments.length === 0 ? {} : { attachments }),
     };
-    appendMessage(agent.id, message);
-    touchActivity(agent.id, text);
+    appendMessage(target.id, message);
+    const summary = text.trim() === "" ? attachments.map((entry) => entry.name).join(", ") : text;
+    touchActivity(target.id, summary);
     // Follow-up: this Blob is mid-turn, so the message steers the running
     // loop (gg-agent folds it in between tool rounds) — no second turn.
-    if (activeTurn.current?.blobId === agent.id) {
-      activeTurn.current.steering.push({ role: "user", content: text });
+    // The running loop never re-reads history, so a steering message has to
+    // carry its own attachment text; with no files the push stays synchronous,
+    // so a plain follow-up still reaches the very next tool round.
+    if (activeTurn.current?.blobId === target.id) {
+      const turn = activeTurn.current;
+      if (attachments.length === 0) {
+        turn.steering.push({ role: "user", content: text });
+        return;
+      }
+      void attachmentsPrompt(homeFor(target.id), attachments).then((block) => {
+        turn.steering.push({
+          role: "user",
+          content: [text, block].filter((part) => part !== "").join("\n\n"),
+        });
+      });
       return;
     }
-    const target = agent;
     const waiting = runsRef.current[target.id];
     const answering = waiting !== undefined && waiting.status === "waiting_input";
     void queueTurn(() => {
       // Read history through the ref: this may run after other queued turns.
-      const history = [...transcriptFor(target), ...(sentRef.current[target.id] ?? [])];
+      const sent = sentRef.current[target.id] ?? [];
+      // ...but the ref only refreshes on re-render, and saving attachments
+      // defers this call past the append, so the message that started the
+      // turn can still be missing from the snapshot. Fold it in by id.
+      const own = sent.some((entry) => entry.id === message.id) ? sent : [...sent, message];
+      const history = [...transcriptFor(target), ...own];
       return requestReply(
         target,
         history,
@@ -938,6 +988,46 @@ export function App() {
             }
           : undefined,
       );
+    });
+  };
+
+  const sendMessage = (text: string, replyTo?: string, files?: readonly File[]) => {
+    if (agent === undefined) {
+      return;
+    }
+    const attaching = files !== undefined && files.length > 0;
+    // Fat-finger guard: an identical send within half a second is a bounce.
+    // Attachments are exempt — the same caption twice with different files is
+    // two real messages.
+    const now = Date.now();
+    if (!attaching && lastSend.current?.text === text && now - lastSend.current.at < 500) {
+      return;
+    }
+    lastSend.current = { text, at: now };
+    const target = agent;
+    if (!attaching) {
+      dispatchMessage(target, text, replyTo, []);
+      return;
+    }
+    // Save first: what lands in the transcript is what the Blob can actually
+    // read, and anything refused says so on its own line instead of silently
+    // going missing.
+    void saveAttachments(homeFor(target.id), files).then(({ saved, rejected }) => {
+      if (rejected.length > 0) {
+        appendMessage(target.id, {
+          id: `event-${Date.now()}`,
+          kind: "event",
+          text: rejectionNote(rejected),
+          timestampMs: Date.now(),
+        });
+      }
+      if (saved.length > 0) {
+        setFilesKey((key) => key + 1);
+      }
+      if (saved.length === 0 && text.trim() === "") {
+        return;
+      }
+      dispatchMessage(target, text, replyTo, saved);
     });
   };
 
@@ -1085,6 +1175,7 @@ export function App() {
                   (runsByBlob[agent.id]?.inputTokens ?? 0) +
                   (runsByBlob[agent.id]?.outputTokens ?? 0)
                 }
+                filesKey={filesKey}
                 onChangeMemories={(next) => {
                   if (next.blob !== undefined) {
                     updateBlob(agent.id, { memories: next.blob });

@@ -19,6 +19,9 @@ interface DetailPanelProps {
   userMemories: BlobMemory[];
   /** Tokens the last run spent, for the "this run" half of the usage line. */
   lastRunTokens?: number;
+  /** Bumped whenever the folder may have changed (attachment saved, turn
+      finished); re-lists the files without polling for writes. */
+  filesKey?: number;
   onChangeMemories: (next: { blob?: BlobMemory[]; user?: BlobMemory[] }) => void;
   onClose: () => void;
   onOpenSettings: () => void;
@@ -30,11 +33,15 @@ function fileSize(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`;
 }
 
+/** Characters of a file shown in the side-panel preview. */
+const PREVIEW_CHARS = 4_000;
+
 /**
- * The Blob's home folder: files its tools wrote during autonomous turns.
- * Read-only viewer plus delete — authoring happens through the Blob itself.
+ * The Blob's home folder: files its tools wrote during autonomous turns, and
+ * the text pulled out of anything the user attached. Read-only viewer plus
+ * delete — authoring happens through the Blob itself.
  */
-function FilesSection({ blobId }: { blobId: string }) {
+function FilesSection({ blobId, filesKey }: { blobId: string; filesKey: number }) {
   const [entries, setEntries] = useState<HomeEntry[]>([]);
   const [preview, setPreview] = useState<{ name: string; text: string } | null>(null);
 
@@ -44,13 +51,26 @@ function FilesSection({ blobId }: { blobId: string }) {
       .then(setEntries)
       .catch(() => setEntries([]));
   };
-  // Refresh on Blob switch; "live while a run writes" is not worth polling.
-  useEffect(refresh, [blobId]);
+  // Refresh on Blob switch and whenever the app knows a write happened;
+  // "live *while* a run writes" is still not worth polling.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(filesKey): the key is the signal, not a value refresh reads
+  useEffect(refresh, [blobId, filesKey]);
 
   const openPreview = (name: string) => {
     homeFor(blobId)
       .read(name)
-      .then((text) => setPreview({ name, text: text.slice(0, 4_000) }))
+      .then((text) =>
+        setPreview({
+          name,
+          // Capped because this renders into one <pre>: an OCR'd 20-page scan
+          // is far longer than anyone reads in a side panel, and the point
+          // here is checking what an extractor got, not reading the file.
+          text:
+            text.length > PREVIEW_CHARS
+              ? `${text.slice(0, PREVIEW_CHARS)}\n\n[showing the first ${PREVIEW_CHARS.toLocaleString()} characters of ${text.length.toLocaleString()}]`
+              : text,
+        }),
+      )
       .catch(() => setPreview({ name, text: "(not a readable text file)" }));
   };
 
@@ -78,6 +98,9 @@ function FilesSection({ blobId }: { blobId: string }) {
             <button
               type="button"
               className="routine-row"
+              // Without this the name reads as "seats.csv15 B": two spans with
+              // no separator between them.
+              aria-label={entry.isDir ? entry.name : `Open ${entry.name}`}
               disabled={entry.isDir}
               onClick={() => openPreview(entry.name)}
             >
@@ -336,6 +359,7 @@ export function DetailPanel({
   routines,
   userMemories,
   lastRunTokens,
+  filesKey = 0,
   onChangeMemories,
   onClose,
   onOpenSettings,
@@ -432,7 +456,7 @@ export function DetailPanel({
         </p>
       ) : null}
 
-      <FilesSection blobId={agent.id} />
+      <FilesSection blobId={agent.id} filesKey={filesKey} />
 
       <MemoriesSection
         memories={agent.memories ?? []}

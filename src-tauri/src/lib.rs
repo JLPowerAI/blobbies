@@ -1,6 +1,7 @@
 mod commands;
 mod error;
 mod home;
+mod ocr;
 mod secrets;
 mod store;
 
@@ -34,6 +35,7 @@ pub fn run() {
             home::blob_home_read,
             home::blob_home_write,
             home::blob_home_delete,
+            ocr::ocr_image,
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete

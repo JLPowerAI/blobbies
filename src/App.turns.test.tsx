@@ -151,6 +151,44 @@ describe("turn wiring", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it("puts an attached file in the Blob's files and fences its text into the prompt", async () => {
+    const user = userEvent.setup();
+    script = [() => "Read it."];
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+
+    await user.upload(screen.getByLabelText("Attach files"), [
+      new File(["seat,price\n1,20"], "seats.csv", { type: "text/csv" }),
+      // A zip underneath, and not something we can read: refused with a
+      // reason, and it must not take the readable file (or the message) down
+      // with it.
+      new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00])], "report.docx"),
+    ]);
+    const before = calls.length;
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(calls.length).toBeGreaterThan(before));
+
+    expect(screen.getByText(/report.docx wasn't attached/)).toBeInTheDocument();
+    const sent = calls[calls.length - 1]?.messages ?? [];
+    const latest = String(sent[sent.length - 1]?.content ?? "");
+    // The chat catalog has no file tool, so the text has to be inline — and
+    // fenced, because a document is data and never an instruction.
+    expect(latest).toContain("seat,price");
+    expect(latest).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(latest).not.toContain("report.docx");
+
+    // Saved, not just inlined: it shows up in the Blob's files, and opening
+    // it shows the text — the only way to check what an extractor actually
+    // got out of a PDF or an image.
+    await user.click(screen.getByRole("button", { name: "Show details panel" }));
+    const details = screen.getByRole("complementary", { name: "Ken details" });
+    await waitFor(() =>
+      expect(within(details).getByRole("button", { name: "Delete seats.csv" })).toBeInTheDocument(),
+    );
+    await user.click(within(details).getByRole("button", { name: "Open seats.csv" }));
+    await waitFor(() => expect(within(details).getByText(/seat,price/)).toBeInTheDocument());
+  });
+
   it("accumulates tokens across an ask instead of losing the first leg", async () => {
     const user = userEvent.setup();
     // Leg 1 parks on a question after spending 1000 tokens; the answer turn

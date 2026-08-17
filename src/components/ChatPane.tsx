@@ -4,6 +4,7 @@ import {
   CornerUpRight,
   Download,
   Ellipsis,
+  FileText,
   Monitor,
   Plus,
   Smile,
@@ -24,6 +25,7 @@ import { BlobAvatar } from "@/components/BlobAvatar";
 import { MarkdownContent } from "@/components/MarkdownContent";
 import { PillSelect } from "@/components/PillSelect";
 import type { Agent, Message } from "@/data/agents";
+import { MAX_ATTACHMENTS } from "@/lib/attachments";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
 import {
   configureTinfoilFromKeychain,
@@ -44,7 +46,8 @@ interface ChatPaneProps {
   /** Whether the model may use chain-of-thought (slower, deeper). */
   reasoning: boolean;
   onReasoningChange: (on: boolean) => void;
-  onSend: (text: string, replyTo?: string) => void;
+  /** Files ride along with the message; the app saves them to the Blob's home. */
+  onSend: (text: string, replyTo?: string, files?: readonly File[]) => void;
   /** Abort the in-flight reply, keeping any partial text. */
   onStop?: () => void;
   /** The Blob paused mid-task and waits on the user (ask_user). */
@@ -75,7 +78,16 @@ function messagePreview(message: Message): string {
   if (message.kind === "event") {
     return message.text;
   }
-  return message.segments.map((segment) => segment.text).join("");
+  const text = message.segments.map((segment) => segment.text).join("");
+  // An attachment-only message has no words to quote; its files name it.
+  return text.trim() === ""
+    ? (message.attachments ?? []).map((entry) => entry.name).join(", ")
+    : text;
+}
+
+/** Human-readable file size, matching the Files panel's format. */
+function fileSize(bytes: number): string {
+  return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`;
 }
 
 function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }) {
@@ -95,6 +107,17 @@ function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }
     >
       {message.replyTo === undefined ? null : (
         <span className="bubble-quote">{message.replyTo}</span>
+      )}
+      {(message.attachments ?? []).length === 0 ? null : (
+        <span className="bubble-attachments">
+          {(message.attachments ?? []).map((attachment) => (
+            <span key={attachment.name} className="attachment-chip">
+              <FileText size={13} strokeWidth={1.8} aria-hidden="true" />
+              <span className="attachment-chip-name">{attachment.name}</span>
+              <span className="attachment-chip-size">{fileSize(attachment.bytes)}</span>
+            </span>
+          ))}
+        </span>
       )}
       {message.author === "user" ? (
         // The user's own words render verbatim; only the agent speaks markdown.
@@ -273,6 +296,11 @@ export function ChatPane({
   onOpenSettings,
 }: ChatPaneProps) {
   const [draft, setDraft] = useState("");
+  /** Files picked but not sent yet; they are saved only once the message goes.
+      Keyed by id, not name: picking the same file twice is two chips. */
+  const [attached, setAttached] = useState<{ id: string; file: File }[]>([]);
+  /** True while a drag hovers the composer, so the drop target is visible. */
+  const [dragging, setDragging] = useState(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [replyClosing, setReplyClosing] = useState(false);
   const [reactions, setReactions] = useState<Record<string, string>>({});
@@ -366,6 +394,7 @@ export function ChatPane({
   const [unseenCount, setUnseenCount] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   /** Whether the view is close enough to the bottom to auto-follow. */
   const nearBottomRef = useRef(true);
@@ -414,6 +443,8 @@ export function ChatPane({
   // biome-ignore lint/correctness/useExhaustiveDependencies(agent.id): only the switch matters
   useEffect(() => {
     setDraft("");
+    setAttached([]);
+    setDragging(false);
     setReplyTo(null);
     setReplyClosing(false);
     setPickerFor(null);
@@ -502,7 +533,21 @@ export function ChatPane({
     }
   }, [draft]);
 
-  const hasDraft = draft.trim().length > 0;
+  const hasDraft = draft.trim().length > 0 || attached.length > 0;
+
+  /** Take picked or dropped files, up to the cap; the rest are dropped here
+      rather than sent and rejected one by one downstream. */
+  const addFiles = (picked: FileList | readonly File[] | null) => {
+    if (picked === null) {
+      return;
+    }
+    const incoming = [...picked].map((file) => ({ id: crypto.randomUUID(), file }));
+    if (incoming.length === 0) {
+      return;
+    }
+    setAttached((previous) => [...previous, ...incoming].slice(0, MAX_ATTACHMENTS));
+    textareaRef.current?.focus();
+  };
 
   /** The circle shows Stop only with an empty composer: a draft typed mid-turn
       is a follow-up that steers the running loop, so Send must stay reachable. */
@@ -516,7 +561,7 @@ export function ChatPane({
   // every character. The send button's mic→arrow swap is deliberately not a
   // trigger: it has its own pop-in and the mic's small shift should be
   // instant.
-  const flipTrigger = `${multiline}|${replyTo !== null}`;
+  const flipTrigger = `${multiline}|${replyTo !== null}|${attached.length > 0}`;
   const lastFlipTrigger = useRef(flipTrigger);
   useLayoutEffect(() => {
     const form = composerRef.current;
@@ -559,11 +604,17 @@ export function ChatPane({
 
   const send = () => {
     const text = draft.trim();
-    if (text.length === 0) {
+    // Files alone are a valid message: "here, look at this".
+    if (text.length === 0 && attached.length === 0) {
       return;
     }
-    onSend(text, replyTo !== null && !replyClosing ? replyTo : undefined);
+    onSend(
+      text,
+      replyTo !== null && !replyClosing ? replyTo : undefined,
+      attached.length === 0 ? undefined : attached.map((entry) => entry.file),
+    );
     setDraft("");
+    setAttached([]);
     closeReply();
   };
 
@@ -793,9 +844,52 @@ export function ChatPane({
 
       <form
         ref={composerRef}
-        className={multiline || replyTo !== null ? "composer composer-expanded" : "composer"}
+        className={[
+          "composer",
+          multiline || replyTo !== null || attached.length > 0 ? "composer-expanded" : "",
+          dragging ? "composer-dragging" : "",
+        ]
+          .filter((entry) => entry !== "")
+          .join(" ")}
         onSubmit={submit}
+        // Dropping a file anywhere on the composer attaches it. preventDefault
+        // on dragover is what makes the drop fire at all; without it the
+        // webview navigates away to the file instead.
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setDragging(false);
+          }
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          addFiles(event.dataTransfer.files);
+        }}
       >
+        {attached.length === 0 ? null : (
+          <ul className="composer-attachments" aria-label="Attached files">
+            {attached.map(({ id, file }) => (
+              <li key={id} className="attachment-chip">
+                <FileText size={13} strokeWidth={1.8} aria-hidden="true" />
+                <span className="attachment-chip-name">{file.name}</span>
+                <button
+                  type="button"
+                  className="icon-button attachment-chip-remove"
+                  aria-label={`Remove ${file.name}`}
+                  onClick={() =>
+                    setAttached((previous) => previous.filter((entry) => entry.id !== id))
+                  }
+                >
+                  <X size={12} strokeWidth={2} aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         {replyTo === null ? null : (
           <div
             className={replyClosing ? "composer-reply composer-reply-closing" : "composer-reply"}
@@ -824,9 +918,23 @@ export function ChatPane({
             className="icon-button composer-add"
             aria-label="Add attachment"
             data-flip="add"
+            disabled={attached.length >= MAX_ATTACHMENTS}
+            onClick={() => fileInputRef.current?.click()}
           >
             <Plus size={16} strokeWidth={2} aria-hidden="true" />
           </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="visually-hidden"
+            aria-label="Attach files"
+            onChange={(event) => {
+              addFiles(event.currentTarget.files);
+              // Reset so picking the same file twice in a row still fires.
+              event.currentTarget.value = "";
+            }}
+          />
           <textarea
             ref={textareaRef}
             rows={1}
@@ -837,6 +945,14 @@ export function ChatPane({
             value={draft}
             onChange={(event) => setDraft(event.currentTarget.value)}
             onKeyDown={onComposerKeyDown}
+            // A pasted file attaches; every paste without one (plain text,
+            // a link) falls through to the default handler untouched.
+            onPaste={(event) => {
+              if (event.clipboardData.files.length > 0) {
+                event.preventDefault();
+                addFiles(event.clipboardData.files);
+              }
+            }}
           />
           {/* Plain dictate mic; fades in once the circle has become Send. */}
           <button

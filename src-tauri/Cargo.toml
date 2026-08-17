@@ -23,6 +23,8 @@ path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
+# Verifies the pinned checksums of the OCR models build.rs downloads.
+sha2 = "0.10.9"
 
 [dependencies]
 tauri = { version = "2.11.5", features = [] }
@@ -40,6 +42,23 @@ keyring = { version = "3.6", features = [
     "apple-native",
     "windows-native",
     "sync-secret-service",
+] }
+# On-device OCR for images and scanned PDFs. It runs here rather than in the
+# webview so that no CSP directive has to be loosened for WebAssembly, and so
+# a decoder chewing untrusted bytes sits outside the page holding the user's
+# conversations. `image` carries only the formats we accept.
+ocrs = "0.12.2"
+# 0.24, not 0.25: rten 0.25 raised its MSRV to 1.94 and this crate is pinned to
+# 1.90 on purpose (see rust-toolchain.toml). ocrs accepts ^0.24, so the older
+# line is a supported pairing rather than a downgrade — revisit when the
+# toolchain pin moves.
+rten = "0.24.0"
+image = { version = "0.25.10", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "gif",
+    "bmp",
 ] }
 
 [lints.rust]

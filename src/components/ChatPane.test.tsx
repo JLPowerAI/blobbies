@@ -19,7 +19,12 @@ const messages: Message[] = [
 ];
 
 /** ChatPane with everything that is not under test held constant. */
-const pane = (thinking: boolean, onStop: () => void, withMessages = false) => (
+const pane = (
+  thinking: boolean,
+  onStop: () => void,
+  withMessages = false,
+  onSend: (text: string, replyTo?: string, files?: readonly File[]) => void = () => {},
+) => (
   <ChatPane
     agent={agent}
     messages={withMessages ? messages : []}
@@ -28,7 +33,7 @@ const pane = (thinking: boolean, onStop: () => void, withMessages = false) => (
     onModelChange={() => {}}
     reasoning={false}
     onReasoningChange={() => {}}
-    onSend={() => {}}
+    onSend={onSend}
     onStop={onStop}
     detailOpen={false}
     onToggleDetail={() => {}}
@@ -97,6 +102,27 @@ describe("ChatPane", () => {
       window.dispatchEvent(new Event("blur"));
     });
     expect(second).toHaveClass("message-row-stale");
+  });
+
+  it("attaches picked files to the next message, and lets one be removed", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(pane(false, vi.fn(), false, onSend));
+
+    const keep = new File(["columns"], "data.csv", { type: "text/csv" });
+    const drop = new File(["draft"], "notes.md", { type: "text/markdown" });
+    await user.upload(screen.getByLabelText("Attach files"), [keep, drop]);
+
+    // Both chips show; removing one leaves the other attached.
+    expect(screen.getByText("data.csv")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove notes.md" }));
+    expect(screen.queryByText("notes.md")).not.toBeInTheDocument();
+
+    // Files alone are a message: no typing needed for Send to appear.
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(onSend).toHaveBeenCalledWith("", undefined, [keep]);
+    // Sent means gone from the composer, so the next message can't resend it.
+    expect(screen.queryByText("data.csv")).not.toBeInTheDocument();
   });
 
   it("keeps Send reachable mid-reply, so a follow-up can steer the turn", async () => {

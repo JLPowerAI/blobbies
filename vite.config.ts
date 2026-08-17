@@ -1,8 +1,45 @@
+import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 
 const host = process.env.TAURI_DEV_HOST;
+
+/**
+ * pdf.js's pure-JS image decoders, served so `wasmUrl` can reach them.
+ *
+ * We render PDF pages with `useWasm: false` (wasm would need
+ * `'wasm-unsafe-eval'` in the CSP, see src/lib/pdf-ocr.ts). pdf.js then falls
+ * back to these JS builds — but only if it can `import()` them from `wasmUrl`.
+ * With no URL set it silently ends up with no decoder at all, and a scan made
+ * of JBIG2 or JPEG2000 images renders as a blank white page that OCRs as
+ * "no text found".
+ *
+ * They land in `public/pdfjs/` (gitignored) rather than being committed, so
+ * they cannot drift from the installed pdfjs-dist.
+ */
+function pdfjsFallbackDecoders(): Plugin {
+  const files = ["jbig2_nowasm_fallback.js", "openjpeg_nowasm_fallback.js"];
+  return {
+    name: "pdfjs-fallback-decoders",
+    buildStart() {
+      const target = fileURLToPath(new URL("./public/pdfjs", import.meta.url));
+      mkdirSync(target, { recursive: true });
+      for (const file of files) {
+        const from = fileURLToPath(
+          new URL(`./node_modules/pdfjs-dist/wasm/${file}`, import.meta.url),
+        );
+        const to = `${target}/${file}`;
+        // Skipped when unchanged: public/ is watched, and rewriting these on
+        // every start would trigger a full page reload each time.
+        if (existsSync(to) && statSync(to).size === statSync(from).size) {
+          continue;
+        }
+        copyFileSync(from, to);
+      }
+    },
+  };
+}
 
 // Must stay in sync with `build.devUrl` in src-tauri/tauri.conf.json.
 const DEV_PORT = 1421;
@@ -10,7 +47,7 @@ const HMR_PORT = DEV_PORT + 1;
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), pdfjsFallbackDecoders()],
 
   resolve: {
     alias: [

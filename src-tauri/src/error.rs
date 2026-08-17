@@ -45,6 +45,11 @@ pub enum Error {
 
     #[error("storage error: {0}")]
     Io(String),
+
+    /// Message is shown to the user, so it must stay free of internals — see
+    /// `ocr::describe`.
+    #[error("{0}")]
+    Ocr(String),
 }
 
 impl Serialize for Error {

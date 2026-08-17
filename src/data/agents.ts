@@ -3,6 +3,10 @@
  * empty; the first-run creator makes the first one.
  */
 
+// Type-only, so this never becomes a runtime cycle (attachments → blob-tools
+// → this module).
+import type { Attachment } from "@/lib/attachments";
+
 export type AvatarTone =
   | "purple"
   | "blue"
@@ -82,6 +86,12 @@ export type Message =
        * button. The next user message answers it.
        */
       ask?: "question" | "action";
+      /**
+       * Files the user attached to this message. Metadata only: the text
+       * lives in the Blob's home folder and is read back per turn, so a
+       * transcript never carries a copy of the file (see lib/attachments).
+       */
+      attachments?: Attachment[];
     }
   | {
       id: string;
