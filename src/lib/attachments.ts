@@ -9,9 +9,10 @@
  *
  * Text in, text out. `blob_home_write` takes a string and the local models
  * this ships with are not multimodal, so a file is only attachable if it can
- * be reduced to text: decoded as UTF-8, or extracted from a PDF by `pdf-text`
- * (a parser fed untrusted bytes — read that module's header before touching
- * it). Images and Office files are refused with a reason the user sees.
+ * be reduced to text: decoded as UTF-8, extracted from a PDF by `pdf-text`, or
+ * read off an image (or a scan) by OCR. Both extractors are parsers fed
+ * untrusted bytes — read their module headers before touching them. Anything
+ * left, Office files included, is refused with a reason the user sees.
  */
 
 import { wrapUntrusted } from "@/lib/blob-tools";

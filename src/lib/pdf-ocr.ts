@@ -6,8 +6,10 @@
  * none of them and each is attack surface. Rasterizing needs the opposite, so
  * the two configurations do not belong in one function with a flag.
  *
- * Still no `eval`, no network and no main-thread parsing: pages are drawn to a
- * canvas here, and the pixels go to the Rust OCR engine.
+ * Still no `eval`, no remote fetch and no main-thread parsing: pages are drawn
+ * to a canvas here, and the pixels go to the Rust OCR engine. The one thing it
+ * does load is pdf.js's own JS image decoders, from our own origin under
+ * `wasmUrl` — see the note on that option below.
  */
 
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
