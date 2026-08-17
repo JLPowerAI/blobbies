@@ -42,9 +42,10 @@ export interface Agent {
   /** Pinned Blobs leave the list for the tray of avatar tiles at the top. */
   pinned?: boolean;
   /**
-   * Name of the sidebar section this Blob sits under. Anything that is not a
-   * current section name — absent, empty, or a deleted section — reads as the
-   * ungrouped run above them, so removing a section never strands its Blobs.
+   * Name of the group this Blob sits in — which is also its membership of
+   * that group's chat. Anything that is not a current group name — absent,
+   * empty, or a deleted group — reads as the ungrouped run above them, so
+   * removing a group never strands its Blobs.
    */
   section?: string;
   /** Hidden Blobs stay in the roster but are not listed in the sidebar. */
@@ -82,8 +83,15 @@ export type Message =
       kind: "text";
       author: "user" | "agent";
       segments: TextSegment[];
+      /**
+       * Which Blob said it, in a group chat where several do. Absent in a
+       * one-to-one conversation, where the Blob is the one in the header.
+       */
+      authorId?: string;
       /** Preview of the message this one replies to, shown quoted in the bubble. */
       replyTo?: string;
+      /** Id of the message this one replies to; routes a group reply to its author. */
+      replyToId?: string;
       /** Epoch ms when the message was created. Absent on legacy entries. */
       timestampMs?: number;
       /**
@@ -147,6 +155,48 @@ export const MAX_BLOB_NAME_LENGTH = 24;
  * statically import that module (startup-bundle budget).
  */
 export const MAX_BLOBS = 25;
+
+/**
+ * Names a Blob may not take, because `@`-addressing already means something
+ * else with them. `@everyone` addresses the room, so a Blob called that could
+ * never be reached on its own.
+ */
+const RESERVED_BLOB_NAMES = ["everyone"];
+
+/**
+ * A Blob name nothing else is using, suffixed if need be ("Scout 2").
+ *
+ * Names are the addressing key: `@Scout` resolves by name, so two Blobs
+ * sharing one leaves the second permanently unmentionable — the first match
+ * wins and the user has no way to say which they meant. Uniqueness is
+ * case-insensitive because the matcher is.
+ *
+ * `taken` is every OTHER Blob's name; a rename that keeps its own name must
+ * not have to fight itself for it.
+ *
+ * An empty name is returned untouched rather than given a default: the rename
+ * field passes through "" on its way to a new name, and inventing one there
+ * would type over the user.
+ */
+export function uniqueBlobName(wanted: string, taken: readonly string[]): string {
+  const base = wanted.trim().slice(0, MAX_BLOB_NAME_LENGTH);
+  if (base === "") {
+    return base;
+  }
+  const used = new Set([...taken.map((name) => name.trim().toLowerCase()), ...RESERVED_BLOB_NAMES]);
+  if (!used.has(base.toLowerCase())) {
+    return base;
+  }
+  for (let suffix = 2; ; suffix += 1) {
+    // Trimmed to fit the cap WITH its suffix, so a long name does not get
+    // sliced back onto the very name it is trying to avoid.
+    const tail = ` ${suffix}`;
+    const candidate = `${base.slice(0, MAX_BLOB_NAME_LENGTH - tail.length).trim()}${tail}`;
+    if (!used.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+}
 
 /** Blobs start empty; the first-run creator makes the first one. */
 export const agents: Agent[] = [];

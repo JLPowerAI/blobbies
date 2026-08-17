@@ -40,9 +40,11 @@ const say = (id: string, text: string): Message => ({
 const palette = (
   onSelect: (result: unknown) => void = () => {},
   transcripts: Record<string, Message[]> = {},
+  groups: { id: string; name: string; memberNames: string[] }[] = [],
 ) => (
   <SearchModal
     agents={[ken]}
+    groups={groups}
     transcripts={transcripts}
     routines={{}}
     hasChat={true}
@@ -94,6 +96,21 @@ describe("SearchModal", () => {
 
     await user.click(screen.getByRole("button", { name: "Links" }));
     expect(await screen.findByText("No links yet")).toBeInTheDocument();
+  });
+
+  it("switches to a group chat from the Groups tab", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(palette(onSelect, {}, [{ id: "g1", name: "Launch", memberNames: ["Ken", "Zed"] }]));
+
+    await user.click(screen.getByRole("button", { name: "Groups" }));
+    // The row says who is in the group — the name alone rarely identifies it.
+    expect(screen.getByText("Ken, Zed")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Launch"));
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "group", groupId: "g1" }),
+    );
   });
 
   it("searches the messages of every Blob", async () => {

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Agent, Message, Routine } from "@/data/agents";
 import type { BlobMemory } from "@/lib/blob-tools";
+import { type Group, groupIdFromConversation } from "@/lib/groups";
 import type { McpServerConfig } from "@/lib/mcp";
 import { type ActiveRun, parseRun } from "@/lib/run-state";
 import { isTauri } from "@/lib/tauri";
@@ -214,6 +215,42 @@ export function saveBlobTranscript(id: string, messages: Message[]): void {
 
 export function saveBlobConfig(id: string, config: Agent): void {
   queueWrite(`blobs/${id}/config`, config);
+}
+
+/**
+ * Group chats. The list is one root slice (names and ids only); each group's
+ * transcript is its own slice, so a busy group never bloats the list.
+ */
+export async function loadGroups(): Promise<Group[] | null> {
+  const value = await rawRead("groups");
+  return Array.isArray(value) ? (value as Group[]) : null;
+}
+
+export function saveGroups(groups: Group[]): void {
+  queueWrite("groups", groups);
+}
+
+export async function loadGroupTranscript(id: string): Promise<Message[] | null> {
+  const value = await rawRead(`groups/${id}/transcript`);
+  return Array.isArray(value) ? (value as Message[]) : null;
+}
+
+export function saveGroupTranscript(id: string, messages: Message[]): void {
+  queueWrite(`groups/${id}/transcript`, messages);
+}
+
+/**
+ * Persist a conversation without caring which kind it is — the turn loop
+ * writes through here, since a Blob's reply lands in its own transcript or in
+ * a group's depending only on where it was asked.
+ */
+export function saveConversation(conversationId: string, messages: Message[]): void {
+  const groupId = groupIdFromConversation(conversationId);
+  if (groupId === null) {
+    saveBlobTranscript(conversationId, messages);
+    return;
+  }
+  saveGroupTranscript(groupId, messages);
 }
 
 export async function loadBlobRun(id: string): Promise<ActiveRun | null> {

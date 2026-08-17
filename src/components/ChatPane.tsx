@@ -24,11 +24,13 @@ import {
 } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
 import { MarkdownContent } from "@/components/MarkdownContent";
+import { withMentions } from "@/components/Mention";
 import { PillSelect } from "@/components/PillSelect";
-import type { Agent, Message } from "@/data/agents";
+import { type Agent, MAX_BLOB_NAME_LENGTH, type Message } from "@/data/agents";
 import { type Attachment, MAX_ATTACHMENTS, type PickedFile } from "@/lib/attachments";
 import { fileBadge, fileKind } from "@/lib/file-kind";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
+import { type MentionPalette, mentionPalette } from "@/lib/mentions";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
 import { imagePreview } from "@/lib/preview";
 // Tinfoil's real module (attestation stack) is a lazy chunk; only the pure
@@ -49,8 +51,17 @@ const probeTinfoilModels = (set: (models: TinfoilModel[]) => void) =>
 interface ChatPaneProps {
   agent: Agent;
   messages: Message[];
+  /**
+   * Set when this pane is a group chat: the members share one transcript, so
+   * every agent message names who said it and the composer can @ them.
+   */
+  group?: { id: string; name: string; members: readonly Agent[] };
+  /** Rename the open group (its members move with it — see App.renameGroup). */
+  onRenameGroup?: (name: string) => void;
   /** True while the Blob is generating a reply; shows the thinking blob. */
   thinking?: boolean;
+  /** In a group, which member is generating — `agent` is only the fallback. */
+  thinkingAgent?: Agent;
   /** Ollama model tag driving replies; "" until one is chosen. */
   model: string;
   onModelChange: (model: string) => void;
@@ -58,7 +69,10 @@ interface ChatPaneProps {
   reasoning: boolean;
   onReasoningChange: (on: boolean) => void;
   /** Files ride along with the message; the app saves them to the Blob's home. */
-  onSend: (text: string, replyTo?: string, files?: readonly PickedFile[]) => void;
+  onSend: (
+    text: string,
+    options?: { replyTo?: string; replyToId?: string; files?: readonly PickedFile[] },
+  ) => void;
   /**
    * Ids of messages whose attachments are still being extracted — a PDF parse
    * or an OCR pass runs for seconds after the message is already on screen.
@@ -193,7 +207,13 @@ function dividerLabel(previous: number | null, ms: number): string | null {
   return ms - previous >= TIME_DIVIDER_GAP_MS ? clockLabel(ms) : null;
 }
 
-function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }) {
+function TextBubble({
+  message,
+  palette,
+}: {
+  message: Extract<Message, { kind: "text" }>;
+  palette?: MentionPalette | undefined;
+}) {
   // An ask renders as a highlighted card: the Blob paused its task and needs
   // the user — "action" means "do this yourself" (login, click, paste).
   const askClass =
@@ -216,7 +236,9 @@ function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }
               {segment.text}
             </span>
           ) : (
-            <span key={segment.text}>{segment.text}</span>
+            // The user's own @mentions are highlighted too: they are what
+            // actually decides who answers, so they must read as addressing.
+            <span key={segment.text}>{withMentions(segment.text, palette)}</span>
           ),
         )}
       </div>
@@ -238,7 +260,7 @@ function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }
           }
         >
           {position === 0 ? quote : null}
-          <MarkdownContent text={block.text} />
+          <MarkdownContent text={block.text} palette={palette} />
         </div>
       ))}
     </div>
@@ -268,6 +290,10 @@ function FileBubble({ message }: { message: Extract<Message, { kind: "file" }> }
 
 interface MessageRowProps {
   message: Message;
+  /** In a group, the Blob that said it — its name and face go above the bubble. */
+  author?: Agent | undefined;
+  /** In a group, the members' colours — highlights `@Name` in the text. */
+  palette?: MentionPalette | undefined;
   reaction: string | undefined;
   pickerOpen: boolean;
   /** Arrived after mount: plays the in-place jelly pop exactly once. */
@@ -285,6 +311,8 @@ interface MessageRowProps {
 /** A bubble plus its hover/focus action bar, reaction picker and reaction badge. */
 function MessageRow({
   message,
+  author,
+  palette,
   reaction,
   pickerOpen,
   fresh,
@@ -335,6 +363,12 @@ function MessageRow({
           ))}
         </div>
       ) : null}
+      {author === undefined || message.kind !== "text" || message.author !== "agent" ? null : (
+        <span className="message-author">
+          <BlobAvatar tone={author.tone} shape={author.shape} size={18} />
+          {author.name}
+        </span>
+      )}
       {message.kind !== "text" || (message.attachments ?? []).length === 0 ? null : (
         <span className="message-attachments">
           {(message.attachments ?? []).map((attachment) => (
@@ -382,7 +416,7 @@ function MessageRow({
         {message.kind !== "text" ? (
           <FileBubble message={message} />
         ) : message.segments.some((segment) => segment.text !== "") ? (
-          <TextBubble message={message} />
+          <TextBubble message={message} palette={palette} />
         ) : null}
       </div>
       {reaction === undefined ? null : (
@@ -404,6 +438,24 @@ function MicFilled({ size }: { size: number }) {
   );
 }
 
+/** How many members the @-menu offers at once; the group cap is six. */
+const MAX_MENTION_OPTIONS = 6;
+
+/**
+ * The "@name" being typed at the caret.
+ *
+ * Anchored to the start of a word, so an email address mid-sentence never
+ * opens the menu. Spaces are part of the captured prefix because Blob names
+ * routinely contain them ("Social Blob", "AI News Blob") — stopping at the
+ * first space made the menu vanish halfway through typing the very names it
+ * exists to complete.
+ *
+ * What closes the menu instead is having no match: the caller keeps it open
+ * only while some member's name still starts with the prefix, so ordinary
+ * prose after an "@" dismisses it within a word or two.
+ */
+const MENTION_TOKEN = /(?:^|\s)@([^@\n]*)$/u;
+
 /** Cap the composer's growth at five text lines (5 × 20px + block padding). */
 const COMPOSER_MAX_HEIGHT = 112;
 
@@ -414,7 +466,10 @@ const COMPOSER_LINE_HEIGHT = 32;
 export function ChatPane({
   agent,
   messages,
+  group,
+  onRenameGroup,
   thinking = false,
+  thinkingAgent,
   model,
   onModelChange,
   reasoning,
@@ -435,7 +490,37 @@ export function ChatPane({
   >([]);
   /** True while a drag hovers the composer, so the drop target is visible. */
   const [dragging, setDragging] = useState(false);
-  const [replyTo, setReplyTo] = useState<string | null>(null);
+  /** The message being replied to: its preview, and its id — which is what
+      routes the reply to one member in a group. */
+  const [replyTo, setReplyTo] = useState<{ id: string; preview: string } | null>(null);
+  /** Open @-mention menu: the partial name typed so far, or null. */
+  const [mention, setMention] = useState<string | null>(null);
+  /**
+   * Highlighted option, or null for none.
+   *
+   * Null while the menu is merely *listing* who is here (a bare “@”): with a
+   * first option pre-highlighted, the list reads as a choice already made
+   * before the user has expressed any preference. Typing a prefix is that
+   * preference, and highlights the best match.
+   */
+  const [mentionIndex, setMentionIndex] = useState<number | null>(null);
+  /** Where the caret goes once a completed mention has rendered. */
+  const pendingCaret = useRef<number | null>(null);
+  /**
+   * The group name being edited, or null when the field just shows the real
+   * one. Dropping back to null on blur is what puts a rejected rename (empty,
+   * or a name another group already has) back to the name that stuck.
+   *
+   * Mirrored in a ref because Escape has to blur to leave the field, and the
+   * blur handler runs with the render's closure — reading state there would
+   * commit the very edit Escape just abandoned.
+   */
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const nameDraftRef = useRef<string | null>(null);
+  const editName = (value: string | null) => {
+    nameDraftRef.current = value;
+    setNameDraft(value);
+  };
   const [replyClosing, setReplyClosing] = useState(false);
   const [reactions, setReactions] = useState<Record<string, string>>({});
   const [pickerFor, setPickerFor] = useState<string | null>(null);
@@ -527,6 +612,8 @@ export function ChatPane({
   /** Replies that arrived while the user was scrolled up; drives the pill. */
   const [unseenCount, setUnseenCount] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** The coloured copy of the draft sitting under the textarea. */
+  const mirrorRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -538,10 +625,30 @@ export function ChatPane({
   const autoScrollRef = useRef(false);
   const flipRects = useRef(new Map<string, DOMRect>());
 
+  /** What "this conversation" means here: one Blob, or one group. */
+  const conversationKey = group?.id ?? agent.id;
+
+  // Mention colours, groups only: a 1-to-1 chat has nobody to address, so
+  // there is nothing to disambiguate and "@" is just a character.
+  //
+  // Keyed by what the palette is actually built from, not by the array: the
+  // parent rebuilds `group` inline every render, so array identity changes on
+  // every streamed delta — and a new palette invalidates MarkdownContent's
+  // plugin memo, re-parsing every bubble in the transcript with it.
+  const members = group?.members;
+  const signature = members
+    ?.map((member) => `${member.id}:${member.name}:${member.tone}`)
+    .join("|");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `signature` is the stable form of `members`
+  const palette = useMemo(
+    () => (members === undefined ? undefined : mentionPalette(members)),
+    [signature],
+  );
+
   // Messages already on screen when this conversation opened. Anything newer
   // is "fresh" and pops in with the jelly animation — exactly once.
   // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot messages only when the conversation switches
-  const initialIds = useMemo(() => new Set(messages.map((entry) => entry.id)), [agent.id]);
+  const initialIds = useMemo(() => new Set(messages.map((entry) => entry.id)), [conversationKey]);
 
   // Time dividers per message id, computed over the WHOLE transcript (not the
   // visible slice) so paging older messages in keeps each divider anchored to
@@ -589,11 +696,16 @@ export function ChatPane({
 
   // Fresh conversation, fresh composer: clear the draft, reply chip and
   // reaction picker when switching Blobs so state never leaks across.
-  // biome-ignore lint/correctness/useExhaustiveDependencies(agent.id): only the switch matters
+  // biome-ignore lint/correctness/useExhaustiveDependencies(conversationKey): only the switch matters
   useEffect(() => {
     setDraft("");
     setAttached([]);
     setDragging(false);
+    setMention(null);
+    // Inlined rather than through `editName`: a non-stable function in here
+    // is one the dependency lint has to be argued with.
+    nameDraftRef.current = null;
+    setNameDraft(null);
     setReplyTo(null);
     setReplyClosing(false);
     setPickerFor(null);
@@ -607,7 +719,7 @@ export function ChatPane({
     // belongs to the old conversation, and a stale anchor blocks paging.
     loadAnchorRef.current = null;
     nearBottomRef.current = true;
-  }, [agent.id]);
+  }, [conversationKey]);
 
   // Older page mounted above the viewport: keep what the user was looking at
   // stationary by offsetting the scroll position with the added height.
@@ -672,6 +784,17 @@ export function ChatPane({
     void el.offsetHeight; // commit the starting point before animating
     el.style.height = `${next}px`;
     el.style.overflowY = next >= COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
+    // A completed mention asked for the caret to land mid-draft; the value is
+    // on screen now, so this is the first moment the range is valid.
+    if (pendingCaret.current !== null) {
+      el.setSelectionRange(pendingCaret.current, pendingCaret.current);
+      pendingCaret.current = null;
+    }
+    // Past five lines the textarea scrolls; the mirror has to scroll with it
+    // or the colours drift away from the words they belong to.
+    if (mirrorRef.current !== null) {
+      mirrorRef.current.scrollTop = el.scrollTop;
+    }
     // simplification: sticky until the draft is cleared — the expanded layout
     // widens the textarea, so re-measuring there would flip-flop for text that
     // only wraps at the narrow inline width.
@@ -687,7 +810,11 @@ export function ChatPane({
   /** Take picked or dropped files, up to the cap; the rest are dropped here
       rather than sent and rejected one by one downstream. */
   const addFiles = (picked: FileList | readonly File[] | null) => {
-    if (picked === null) {
+    // A group has no home folder to save into, so a file dropped or pasted
+    // here would be shown as a chip and then silently discarded on send. The
+    // attach button is already hidden; this is the same rule for every other
+    // way a file can arrive.
+    if (picked === null || group !== undefined) {
       return;
     }
     // The thumbnail promise is started here and kept on the entry, so a send
@@ -777,16 +904,19 @@ export function ChatPane({
     if (text.length === 0 && attached.length === 0) {
       return;
     }
-    const replyingTo = replyTo !== null && !replyClosing ? replyTo : undefined;
+    const replying = replyTo !== null && !replyClosing ? replyTo : undefined;
+    const reply =
+      replying === undefined ? {} : { replyTo: replying.preview, replyToId: replying.id };
     // Cleared first, so the composer empties on this frame however long the
     // thumbnails take.
     const sending = attached;
     setDraft("");
     setAttached([]);
+    setMention(null);
     closeReply();
 
     if (sending.length === 0) {
-      onSend(text, replyingTo);
+      onSend(text, reply);
       return;
     }
     // The thumbnail rides along: the composer already made it, and rebuilding
@@ -804,7 +934,55 @@ export function ChatPane({
           ]));
         return { file, ...(settled === undefined ? {} : { preview: settled }) };
       }),
-    ).then((files) => onSend(text, replyingTo, files));
+    ).then((files) => onSend(text, { ...reply, files }));
+  };
+
+  /**
+   * Members whose name starts with what has been typed after the "@".
+   *
+   * Empty means the menu is closed — which, with spaces allowed in the prefix,
+   * is also what dismisses it when the "@" turns out to be prose rather than
+   * an address.
+   */
+  const mentionMatches =
+    mention === null || group === undefined
+      ? []
+      : group.members
+          .filter((member) => member.name.toLowerCase().startsWith(mention.toLowerCase()))
+          .slice(0, MAX_MENTION_OPTIONS);
+
+  /**
+   * Track the partial "@name" the caret sits in, so the member list can offer
+   * completions. Only ever the token being typed — an "@" the caret has moved
+   * away from is finished text, not a menu.
+   */
+  const trackMention = (value: string, caret: number) => {
+    if (group === undefined) {
+      return;
+    }
+    const typed = MENTION_TOKEN.exec(value.slice(0, caret));
+    const prefix = typed?.[1] ?? null;
+    setMention(prefix);
+    setMentionIndex(prefix === null || prefix === "" ? null : 0);
+  };
+
+  /** Replace the half-typed "@na" under the caret with the member's full name. */
+  const completeMention = (name: string) => {
+    const field = textareaRef.current;
+    const caret = field?.selectionStart ?? draft.length;
+    const typed = MENTION_TOKEN.exec(draft.slice(0, caret));
+    if (typed === null) {
+      return;
+    }
+    const start = caret - typed[0].length + (typed[0].startsWith("@") ? 0 : 1);
+    setDraft(`${draft.slice(0, start)}@${name} ${draft.slice(caret)}`);
+    setMention(null);
+    // Put the caret after the inserted name, not at the end of the draft:
+    // mentions are often typed mid-sentence. Handed to the layout effect
+    // below rather than set from a frame callback — anything typed before that
+    // frame ran landed at the old caret, scrambling the words after it.
+    pendingCaret.current = start + name.length + 2;
+    field?.focus();
   };
 
   // Animate the chip out; it unmounts when the exit animation finishes.
@@ -825,7 +1003,7 @@ export function ChatPane({
   };
 
   const startReply = (message: Message) => {
-    setReplyTo(messagePreview(message));
+    setReplyTo({ id: message.id, preview: messagePreview(message) });
     setReplyClosing(false);
     setPickerFor(null);
     textareaRef.current?.focus();
@@ -850,6 +1028,44 @@ export function ChatPane({
   };
 
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // The @-menu owns the arrows, Tab, Enter and Escape while it is open:
+    // Enter must complete the mention, not send a half-typed one.
+    if (mentionMatches.length > 0) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        // From "nothing highlighted", Down takes the first option and Up the
+        // last — either arrow is a deliberate first move.
+        setMentionIndex((index) => {
+          if (index === null) {
+            return event.key === "ArrowDown" ? 0 : mentionMatches.length - 1;
+          }
+          const step = event.key === "ArrowDown" ? 1 : mentionMatches.length - 1;
+          return (index + step) % mentionMatches.length;
+        });
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        // Tab always completes — that is what Tab means in a list like this.
+        // Enter only completes something actually highlighted, so pressing it
+        // against a bare “@” sends the message instead of picking for you.
+        const picked =
+          mentionIndex === null
+            ? event.key === "Tab"
+              ? mentionMatches[0]
+              : undefined
+            : mentionMatches[mentionIndex];
+        if (picked !== undefined) {
+          event.preventDefault();
+          completeMention(picked.name);
+          return;
+        }
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
     // Enter sends; Shift+Enter inserts a newline; Escape cancels a reply
     // (unless a reply is streaming — then the window handler stops it).
     if (event.key === "Enter" && !event.shiftKey) {
@@ -861,19 +1077,60 @@ export function ChatPane({
   };
 
   return (
-    <section className="chat-pane" aria-label={`Conversation with ${agent.name}`}>
+    <section
+      className="chat-pane"
+      aria-label={group === undefined ? `Conversation with ${agent.name}` : `Group ${group.name}`}
+    >
       <header className="chat-header" data-tauri-drag-region>
         {/* drag-region only fires on the element itself, so the header stays
             draggable around this identity button. */}
-        <button
-          type="button"
-          className="chat-header-identity identity-button"
-          aria-label={`${agent.name} settings`}
-          onClick={onOpenSettings}
-        >
-          <BlobAvatar tone={agent.tone} shape={agent.shape} size={24} />
-          <h1 className="chat-title">{agent.name}</h1>
-        </button>
+        {group === undefined ? (
+          <button
+            type="button"
+            className="chat-header-identity identity-button"
+            aria-label={`${agent.name} settings`}
+            onClick={onOpenSettings}
+          >
+            <BlobAvatar tone={agent.tone} shape={agent.shape} size={24} />
+            <h1 className="chat-title">{agent.name}</h1>
+          </button>
+        ) : (
+          <div className="chat-header-identity">
+            <span className="chat-group-faces" aria-hidden="true">
+              {group.members.slice(0, 3).map((member) => (
+                <BlobAvatar key={member.id} tone={member.tone} shape={member.shape} size={24} />
+              ))}
+            </span>
+            {/* The title is the rename field: there is nowhere else to edit
+                it, and a name nobody can change stays "New Group" forever.
+                Commit on blur or Enter; Escape abandons the edit. */}
+            <input
+              className="chat-title chat-title-input"
+              aria-label="Group name"
+              value={nameDraft ?? group.name}
+              maxLength={MAX_BLOB_NAME_LENGTH}
+              onChange={(event) => editName(event.currentTarget.value)}
+              onBlur={() => {
+                if (nameDraftRef.current !== null) {
+                  onRenameGroup?.(nameDraftRef.current);
+                }
+                editName(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                } else if (event.key === "Escape") {
+                  editName(null);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+            <span className="chat-group-count">
+              {group.members.length === 1 ? "1 Blob" : `${group.members.length} Blobs`}
+            </span>
+          </div>
+        )}
         <div className="chat-header-controls">
           <PillSelect
             id="header-thinking"
@@ -918,15 +1175,19 @@ export function ChatPane({
               </optgroup>
             ) : null}
           </PillSelect>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={detailOpen ? "Hide details panel" : "Show details panel"}
-            aria-pressed={detailOpen}
-            onClick={onToggleDetail}
-          >
-            <Monitor size={17} strokeWidth={1.8} aria-hidden="true" />
-          </button>
+          {/* The details panel is one Blob's memories, files and routines —
+              there is no group-wide version of it. */}
+          {group === undefined ? (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={detailOpen ? "Hide details panel" : "Show details panel"}
+              aria-pressed={detailOpen}
+              onClick={onToggleDetail}
+            >
+              <Monitor size={17} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -977,6 +1238,12 @@ export function ChatPane({
               fresh={!initialIds.has(message.id)}
               key={message.id}
               message={message}
+              author={
+                message.kind === "text"
+                  ? group?.members.find((member) => member.id === message.authorId)
+                  : undefined
+              }
+              palette={palette}
               reaction={reactions[message.id]}
               pickerOpen={pickerFor === message.id}
               stale={hoverId !== undefined && hoverId !== message.id}
@@ -994,9 +1261,14 @@ export function ChatPane({
           className={thinking ? "thinking-row thinking-row-visible" : "thinking-row"}
           role="status"
           aria-hidden={!thinking}
-          aria-label={thinking ? `${agent.name} is thinking` : undefined}
+          aria-label={thinking ? `${(thinkingAgent ?? agent).name} is thinking` : undefined}
         >
-          <BlobAvatar tone={agent.tone} shape={agent.shape} size={30} variant="thinking" />
+          <BlobAvatar
+            tone={(thinkingAgent ?? agent).tone}
+            shape={(thinkingAgent ?? agent).shape}
+            size={30}
+            variant="thinking"
+          />
         </div>
         {waitingAsk === "action" ? (
           <div className="ask-action-bar" role="status">
@@ -1112,7 +1384,7 @@ export function ChatPane({
             }}
           >
             <CornerUpRight size={13} strokeWidth={1.8} aria-hidden="true" />
-            <span className="composer-reply-text">{replyTo}</span>
+            <span className="composer-reply-text">{replyTo.preview}</span>
             <button
               type="button"
               className="icon-button composer-reply-cancel"
@@ -1123,48 +1395,121 @@ export function ChatPane({
             </button>
           </div>
         )}
+        {mentionMatches.length === 0 ? null : (
+          <ul className="composer-mentions" aria-label="Mention a Blob">
+            {mentionMatches.map((member, index) => (
+              <li key={member.id}>
+                <button
+                  type="button"
+                  className={
+                    index === mentionIndex
+                      ? "composer-mention composer-mention-active"
+                      : "composer-mention"
+                  }
+                  // The textarea would blur before the click landed, and the
+                  // blur closes the menu.
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => completeMention(member.name)}
+                >
+                  <BlobAvatar tone={member.tone} shape={member.shape} size={18} />
+                  {member.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="composer-main">
-          <button
-            type="button"
-            className="icon-button composer-add"
-            aria-label="Add attachment"
-            data-flip="add"
-            disabled={attached.length >= MAX_ATTACHMENTS}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Plus size={16} strokeWidth={2} aria-hidden="true" />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="visually-hidden"
-            aria-label="Attach files"
-            onChange={(event) => {
-              addFiles(event.currentTarget.files);
-              // Reset so picking the same file twice in a row still fires.
-              event.currentTarget.value = "";
-            }}
-          />
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            className="composer-input"
-            data-flip="input"
-            placeholder={replyTo === null ? `Message ${agent.name}` : "Reply..."}
-            aria-label={`Message ${agent.name}`}
-            value={draft}
-            onChange={(event) => setDraft(event.currentTarget.value)}
-            onKeyDown={onComposerKeyDown}
-            // A pasted file attaches; every paste without one (plain text,
-            // a link) falls through to the default handler untouched.
-            onPaste={(event) => {
-              if (event.clipboardData.files.length > 0) {
-                event.preventDefault();
-                addFiles(event.clipboardData.files);
+          {/* Both, or neither: a file is saved in one Blob's home folder and
+              read back from there at turn time, and a group has no home of its
+              own — so a group pane takes no files by any route (drag and paste
+              are refused in `addFiles` for the same reason). */}
+          {group === undefined ? (
+            <>
+              <button
+                type="button"
+                className="icon-button composer-add"
+                aria-label="Add attachment"
+                data-flip="add"
+                disabled={attached.length >= MAX_ATTACHMENTS}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Plus size={16} strokeWidth={2} aria-hidden="true" />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="visually-hidden"
+                aria-label="Attach files"
+                onChange={(event) => {
+                  addFiles(event.currentTarget.files);
+                  // Reset so picking the same file twice in a row still fires.
+                  event.currentTarget.value = "";
+                }}
+              />
+            </>
+          ) : null}
+          {/* The field is the textarea plus a coloured copy of the draft
+              underneath it, so the mentions you are typing already carry
+              their Blob's colour. A textarea cannot hold styled runs at all,
+              and a contenteditable would cost IME handling, undo and paste
+              sanitising — for a highlight.
+
+              The wrapper carries `data-flip` in the textarea's place: it
+              occupies exactly the box the textarea used to, so the composer's
+              FLIP glides are unchanged. */}
+          <div className="composer-field" data-flip="input">
+            {/* `partial`: the name being typed is coloured as soon as one Blob
+                can complete it, so the colour arrives with the word rather
+                than on its final character. */}
+            {palette === undefined || draft === "" ? null : (
+              <div className="composer-mirror" aria-hidden="true" ref={mirrorRef}>
+                {withMentions(draft, palette, { partial: true })}
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              className={
+                palette === undefined ? "composer-input" : "composer-input composer-input-mirrored"
               }
-            }}
-          />
+              placeholder={
+                replyTo !== null
+                  ? "Reply..."
+                  : group === undefined
+                    ? `Message ${agent.name}`
+                    : `Message ${group.name} \u2014 @ a Blob to ask just them`
+              }
+              aria-label={`Message ${group === undefined ? agent.name : group.name}`}
+              value={draft}
+              onChange={(event) => {
+                setDraft(event.currentTarget.value);
+                trackMention(event.currentTarget.value, event.currentTarget.selectionStart);
+              }}
+              // The caret can leave a half-typed mention without the text
+              // changing at all — an arrow key or a click closes the menu.
+              onSelect={(event) =>
+                trackMention(event.currentTarget.value, event.currentTarget.selectionStart)
+              }
+              onBlur={() => setMention(null)}
+              onKeyDown={onComposerKeyDown}
+              // Keeps the coloured mirror aligned once the draft outgrows the
+              // five-line cap and the textarea starts scrolling.
+              onScroll={(event) => {
+                if (mirrorRef.current !== null) {
+                  mirrorRef.current.scrollTop = event.currentTarget.scrollTop;
+                }
+              }}
+              // A pasted file attaches; every paste without one (plain text,
+              // a link) falls through to the default handler untouched.
+              onPaste={(event) => {
+                if (event.clipboardData.files.length > 0) {
+                  event.preventDefault();
+                  addFiles(event.clipboardData.files);
+                }
+              }}
+            />
+          </div>
           {/* Plain dictate mic; fades in once the circle has become Send. */}
           <button
             type="button"

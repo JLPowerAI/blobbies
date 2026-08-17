@@ -396,13 +396,19 @@ describe("roster tools", () => {
     const blobs = names.map((name, index) => ({ id: `id-${index}`, name }));
     const created: string[] = [];
     const deleted: string[] = [];
+    const messaged: { id: string; text: string; prompt: string }[] = [];
     return {
       created,
       deleted,
+      messaged,
       access: {
         list: () => blobs,
         create: (blob: { name: string }) => created.push(blob.name),
         delete: (id: string) => deleted.push(id),
+        message: (id: string, message: { text: string; prompt: string }) => {
+          messaged.push({ id, ...message });
+          return "Sent.";
+        },
       },
     };
   };
@@ -443,6 +449,39 @@ describe("roster tools", () => {
     const result = await remove?.execute({ name: "Scout", confirm_name: "Scoot" }, context);
     expect(result).toContain("must be the same Blob name");
     expect(roster.deleted).toEqual([]);
+  });
+
+  it("hands off once per Blob per turn, fenced, and never to itself", async () => {
+    const roster = fakeRoster(["Scout", "Ken"]);
+    const tool = makeRosterTools(roster.access, "Ken").find(
+      (candidate) => candidate.name === "message_blob",
+    );
+
+    // Itself and unknown names go nowhere: a hand-off wakes a real turn, so a
+    // half-hallucinated target must not become one.
+    expect(await tool?.execute({ name: "Ken", message: "do it" }, context)).toContain(
+      "That is you",
+    );
+    expect(await tool?.execute({ name: "Ghost", message: "do it" }, context)).toContain(
+      "No Blob named Ghost",
+    );
+    expect(roster.messaged).toEqual([]);
+
+    expect(await tool?.execute({ name: "scout", message: "Check the feed" }, context)).toBe(
+      "Sent.",
+    );
+    // The receiver reads another model's words as data, not as orders — that
+    // Blob may have read a web page a minute ago.
+    expect(roster.messaged[0]?.id).toBe("id-0");
+    expect(roster.messaged[0]?.text).toBe("Check the feed");
+    expect(roster.messaged[0]?.prompt).toContain('from="blob:Ken"');
+    expect(roster.messaged[0]?.prompt).toContain("Check the feed");
+
+    // A retried round repeats the call; one nudge must not become three.
+    expect(await tool?.execute({ name: "Scout", message: "Check the feed" }, context)).toContain(
+      "Already messaged",
+    );
+    expect(roster.messaged).toHaveLength(1);
   });
 
   it("refuses self-deletion and unknown names, and deletes a real match", async () => {

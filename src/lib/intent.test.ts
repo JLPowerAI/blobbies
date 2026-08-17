@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BlobMemory } from "@/lib/blob-tools";
-import { reconcileMemories, routeIntent } from "@/lib/intent";
+import { applyGroupIntent, pickResponders, reconcileMemories, routeIntent } from "@/lib/intent";
 import { tinfoilStructuredCall } from "@/lib/tinfoil";
 
 // Only the structured call is faked: model-ref helpers stay real, so the
@@ -199,6 +199,185 @@ describe("routeIntent", () => {
         messages: [{ role: "user", content: "Update what you remember about my training" }],
       });
       expect(intent).toEqual({ action: "none", needsWeb: false });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("applyGroupIntent", () => {
+  const memories: BlobMemory[] = [{ id: "m1", text: "the user trains on Mondays", createdAt: 1 }];
+
+  it("saves a fact once, to the scope every Blob reads", async () => {
+    // Reconcile is a second model call; nothing is obsolete here.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => reply({ obsolete: [] })),
+    );
+    try {
+      const next = await applyGroupIntent(
+        { action: "save_fact", fact: "the user lives in Lisbon", needsWeb: false },
+        { model: base.model, memories },
+      );
+      // One list, returned once — the caller writes it to the shared scope.
+      // Six responders each saving their own copy is six drifting versions of
+      // one thing the user said once.
+      expect(next?.map((memory) => memory.text)).toEqual([
+        "the user trains on Mondays",
+        "the user lives in Lisbon",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("drops a fact the shared scope already holds", async () => {
+    const fetchSpy = vi.fn(async () => reply({ obsolete: [] }));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const next = await applyGroupIntent(
+        { action: "save_fact", fact: "The user trains on Mondays", needsWeb: false },
+        { model: base.model, memories },
+      );
+      expect(next).toBeNull();
+      // Not even reconciled: a duplicate is not worth a model call.
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("deletes by position, and ignores a position that is not there", async () => {
+    expect(
+      await applyGroupIntent(
+        { action: "delete_fact", memoryNumber: 1, needsWeb: false },
+        { model: base.model, memories },
+      ),
+    ).toEqual([]);
+    expect(
+      await applyGroupIntent(
+        { action: "delete_fact", memoryNumber: 9, needsWeb: false },
+        { model: base.model, memories },
+      ),
+    ).toBeNull();
+  });
+
+  it("never reconfigures a Blob from a group", async () => {
+    // "Be my writing coach instead" has one subject in a 1-to-1 chat and none
+    // in a room — rewriting whichever Blob answered would be a silent guess.
+    expect(
+      await applyGroupIntent(
+        { action: "change_job", needsWeb: false },
+        { model: base.model, memories },
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("pickResponders", () => {
+  const members = [
+    { name: "Scout", title: "Researcher", description: "Finds sources." },
+    { name: "Quill", title: "Writer", description: "Writes drafts." },
+    { name: "Ledger", title: "Bookkeeper", description: "Tracks spend." },
+  ];
+
+  it("constrains the answer to the members' own names, in roster order", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        body = JSON.parse(String(init?.body));
+        // Reversed, and with a duplicate: the model's ordering is arbitrary.
+        return reply({ responders: ["Quill", "Scout", "Quill"] });
+      }),
+    );
+    try {
+      const picked = await pickResponders({ model: base.model, text: "draft this", members });
+      // Deduped and re-ordered by the roster, so a group always speaks in the
+      // same order whatever the model emits.
+      expect(picked).toEqual(["Scout", "Quill"]);
+      // An unknown name must not be generatable, not merely filtered after.
+      const format = body.format as {
+        properties?: { responders?: { items?: { enum?: string[] } } };
+      };
+      expect(format.properties?.responders?.items?.enum).toEqual(["Scout", "Quill", "Ledger"]);
+      // Same runner options as every other call, or Ollama reloads the model.
+      expect((body.options as Record<string, unknown>).num_ctx).toBe(16384);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("passes recent lines so a bare follow-up is routable", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        body = JSON.parse(String(init?.body));
+        return reply({ responders: ["Ledger"] });
+      }),
+    );
+    try {
+      await pickResponders({
+        model: base.model,
+        text: "and what did that cost?",
+        members,
+        recent: ["Ken: book the venue", "Scout: booked for the 14th"],
+      });
+      const system = String(
+        (body.messages as { role: string; content: string }[])[0]?.content ?? "",
+      );
+      // "that" is unresolvable without them.
+      expect(system).toContain("booked for the 14th");
+      // And the excerpt must not become the answer: naming someone in it is
+      // not a reason to pick them.
+      expect(system).toContain("Do not pick someone merely because they appear");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("honours a pick of nobody \u2014 silence is a real answer in a group", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => reply({ responders: [] })),
+    );
+    try {
+      expect(await pickResponders({ model: base.model, text: "thanks all", members })).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fails open to everyone, so a router outage never mutes a group", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("connection refused");
+      }),
+    );
+    try {
+      expect(await pickResponders({ model: base.model, text: "where are we", members })).toEqual([
+        "Scout",
+        "Quill",
+        "Ledger",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("asks nothing when there is no choice to make", async () => {
+    const fetchSpy = vi.fn(async () => reply({ responders: [] }));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const one = [members[0] as { name: string }];
+      expect(await pickResponders({ model: base.model, text: "hi", members: one })).toEqual([
+        "Scout",
+      ]);
+      // A one-Blob group, or an empty message, is not worth a model call.
+      expect(await pickResponders({ model: base.model, text: "  ", members })).toHaveLength(3);
+      expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }

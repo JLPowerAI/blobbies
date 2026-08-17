@@ -25,6 +25,7 @@
     "sim": "vitest run --config vitest.sim.config.ts sim/agent.sim.ts",
     "sim:caps": "vitest run --config vitest.sim.config.ts sim/capabilities.sim.ts",
     "sim:tools": "vitest run --config vitest.sim.config.ts sim/tools.sim.ts",
+    "sim:group": "vitest run --config vitest.sim.config.ts sim/group.sim.ts",
     "rs:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml --all",
     "rs:lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
     "rs:test": "cargo test --manifest-path src-tauri/Cargo.toml --all-features",

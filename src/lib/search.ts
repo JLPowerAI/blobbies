@@ -43,6 +43,7 @@ interface RowBase {
 export type SearchResult =
   | (RowBase & { kind: "message"; blobId: string; at: number })
   | (RowBase & { kind: "blob"; blobId: string; at: number })
+  | (RowBase & { kind: "group"; groupId: string; at: number })
   | (RowBase & { kind: "file"; blobId: string; fileName: string; at: number })
   | (RowBase & { kind: "link"; url: string; blobId: string; at: number })
   | (RowBase & { kind: "routine"; blobId: string; routineId: string; at: number })
@@ -144,6 +145,12 @@ interface IndexInput {
   /** Home-folder listing per Blob id. */
   files: Record<string, HomeEntry[]>;
   routines: Record<string, Routine[]>;
+  /**
+   * Group chats, with the names of their members — which is what a group is
+   * searchable by besides its own name. Group *messages* are not indexed:
+   * unlike a Blob's transcript there is no per-Blob read that would find them.
+   */
+  groups?: { id: string; name: string; memberNames: string[] }[];
   /** False with no conversation open, which hides the Chat Settings action. */
   hasChat: boolean;
   /** Injectable clock, so message timestamps render deterministically in tests. */
@@ -164,6 +171,7 @@ export function buildIndex({
   transcripts,
   files,
   routines,
+  groups = [],
   hasChat,
   now = Date.now(),
 }: IndexInput): SearchIndex {
@@ -178,6 +186,21 @@ export function buildIndex({
   };
   /** Newest sighting of a URL wins its row; earlier ones only add a label. */
   const links = new Map<string, Extract<SearchResult, { kind: "link" }>>();
+
+  for (const [position, group] of groups.entries()) {
+    index.group.push({
+      kind: "group",
+      id: `group-${group.id}`,
+      groupId: group.id,
+      title: group.name,
+      subtitle: group.memberNames.length === 0 ? "No Blobs yet" : group.memberNames.join(", "),
+      // Members are part of what the user remembers a group by.
+      haystack: `${group.name} ${group.memberNames.join(" ")}`,
+      // Groups have no activity clock of their own yet, so sidebar order is
+      // the ranking — negative, to keep byNewest's ordering stable.
+      at: -position,
+    });
+  }
 
   for (const agent of agents) {
     index.blob.push({

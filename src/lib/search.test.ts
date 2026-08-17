@@ -119,8 +119,27 @@ describe("buildIndex", () => {
     expect(rows[0]?.subtitle).toBe("Ken · 2 KB");
   });
 
-  it("has no groups to offer until group chats exist", () => {
+  it("has no group rows until a group chat exists", () => {
     expect(index().group).toEqual([]);
+  });
+
+  it("finds a group by its name or by who is in it", () => {
+    const rows = index({
+      groups: [{ id: "g1", name: "Launch", memberNames: ["Ken", "Zed"] }],
+    }).group;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.title).toBe("Launch");
+    // The members are the subtitle, so the row says who the user would reach.
+    expect(rows[0]?.subtitle).toBe("Ken, Zed");
+    expect(rows[0]?.kind === "group" && rows[0].groupId).toBe("g1");
+    // Searchable by a member's name too — a group is often remembered by who
+    // is in it rather than by the name it was given.
+    expect(filterRows(rows, "zed")).toHaveLength(1);
+  });
+
+  it("keeps an empty group findable, and says it is empty", () => {
+    const rows = index({ groups: [{ id: "g1", name: "Launch", memberNames: [] }] }).group;
+    expect(rows[0]?.subtitle).toBe("No Blobs yet");
   });
 
   it("offers Chat Settings only while a conversation is open", () => {

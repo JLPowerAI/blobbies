@@ -586,12 +586,63 @@ select:focus:not(:focus-visible) {
   color: var(--text-secondary);
 }
 
+/* Anchors the unread dot to the avatar's corner. */
+.agent-row-face {
+  position: relative;
+  flex: none;
+  display: flex;
+}
+
 .unread-dot {
   flex-shrink: 0;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--accent-blue);
+}
+
+/* Badged on the avatar's bottom-right, not trailing the snippet: at the end
+   of a variable-length line the dot landed somewhere different on every row,
+   and it disappeared entirely in the collapsed rail — which is precisely when
+   it is the only signal left.
+
+   The ring punches the dot out of the avatar so it stays legible on a
+   same-coloured Blob, so it has to be the row's background rather than the
+   sidebar's: the selected row is opaque, and a fixed colour left a pale seam
+   on it. Hover is translucent and needs no override. */
+.agent-row-face .unread-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 2px var(--row-bg, var(--surface-sidebar));
+}
+
+.agent-row-selected {
+  --row-bg: var(--surface-selected);
+}
+
+/* On a group header the dot carries the same sweep as an @mention: both mean
+   “something addressed to you is here”, and one shared motion is what makes
+   that legible without a legend. Colour is the app accent — a group has no
+   single Blob's colour to borrow. */
+.unread-dot-shimmer {
+  margin-inline-start: 6px;
+  animation: unread-pulse 3.6s ease-in-out infinite;
+}
+
+@keyframes unread-pulse {
+  0%,
+  60%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  30% {
+    opacity: 0.55;
+    transform: scale(0.82);
+  }
 }
 
 .sidebar-footer {
@@ -1481,16 +1532,19 @@ select:focus:not(:focus-visible) {
 
 /* Same box as .agent-row so the hover highlight lines up with the rows below,
    but transparent at rest: a permanent fill made every header compete with
-   the conversations it is only labelling. */
+   the conversations it is only labelling.
+
+   Full-width, with the chevron and the remove button overlaying its right
+   edge rather than sitting beside it — as flex siblings they ate into this
+   box, and the highlight stopped short of the row edges below it. */
 .section-toggle {
-  flex: 1;
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  padding: 9px 12px;
+  padding: 9px 32px 9px 12px;
   border-radius: 11px;
   font-size: 13px;
   font-weight: 500;
@@ -1517,15 +1571,39 @@ select:focus:not(:focus-visible) {
   white-space: nowrap;
 }
 
+/* The open group reads like a selected row, because it is one: its name is
+   the door to a conversation now, not just a label. */
+.section-header-open .section-toggle,
+.section-header-open .section-toggle:hover {
+  background: var(--surface-selected);
+  color: var(--text-primary);
+}
+
+/* Collapsing left the name button when the name became the chat. Pinned to
+   the header's right edge, in the same spot the remove button uses, so the
+   two crossfade in place instead of one sliding in from the side. */
+.section-collapse {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.section-collapse:hover {
+  color: var(--text-primary);
+}
+
 /* Points down when open, right when shut — the arrow is the affordance, so
-   it rotates rather than swapping glyphs. Trails the name, where a
-   disclosure arrow sits in a row this wide. */
+   it rotates rather than swapping glyphs. */
 .section-chevron {
   flex: none;
-  margin-left: auto;
-  transition:
-    transform 180ms var(--ease-squish),
-    opacity var(--duration-fast) var(--ease-standard);
+  transition: transform 180ms var(--ease-squish);
 }
 
 .section-chevron-shut {
@@ -1536,10 +1614,11 @@ select:focus:not(:focus-visible) {
    control ever occupies the right edge. Keyed to the same `.agent-group:hover`
    that reveals the button — a narrower scope here would leave the two stacked
    on top of each other whenever the pointer was over the rows below. Declared
-   after .section-chevron: at equal-or-lower source order it would lose the
+   after .section-collapse: at equal-or-lower source order it would lose the
    cascade. */
-.agent-group:hover .section-header:has(.section-remove) .section-chevron {
+.agent-group:hover .section-header:has(.section-remove) .section-collapse {
   opacity: 0;
+  pointer-events: none;
 }
 
 /* A shut section still says how much is inside, or collapsing it hides the
@@ -1549,13 +1628,17 @@ select:focus:not(:focus-visible) {
   opacity: 0.7;
 }
 
-/* Overlays the toggle's right edge, in front of the chevron it replaces
-   while hovered — an empty section has nothing to disclose. */
+/* Overlays the header's right edge, in front of the chevron it replaces
+   while hovered — an empty group has nothing to disclose. Same coordinates as
+   .section-collapse, so nothing travels across the row on hover. */
 .section-remove {
   position: absolute;
-  right: 12px;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
+  padding: 4px;
   color: var(--text-secondary);
   opacity: 0;
   transition: opacity var(--duration-fast) var(--ease-standard);
@@ -1593,26 +1676,6 @@ select:focus:not(:focus-visible) {
   padding: 12px 10px;
   font-size: 13px;
   color: var(--text-secondary);
-}
-
-.section-add {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
-  border-radius: 11px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  transition:
-    background-color var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard);
-}
-
-.section-add:hover {
-  background: var(--hover-overlay);
-  color: var(--text-primary);
 }
 
 /* The row stays in place while its copy follows the cursor, so the list never
@@ -2457,6 +2520,43 @@ a.modal-button {
   text-overflow: ellipsis;
 }
 
+/* A group's title IS its rename field: there is no other place to edit it,
+   and a name nobody can change stays "New Group" forever. Chromeless until
+   focused, so the header still reads as a title. */
+.chat-title-input {
+  min-width: 0;
+  padding: 3px 6px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.chat-title-input:hover {
+  background: var(--hover-overlay);
+}
+
+.chat-title-input:focus {
+  background: var(--surface-control);
+  outline: none;
+}
+
+/* The members, overlapped like a group avatar in a messenger list. */
+.chat-group-faces {
+  display: flex;
+}
+
+.chat-group-faces > * + * {
+  margin-inline-start: -9px;
+}
+
+.chat-group-count {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .message-scroll {
   flex: 1;
   overflow-y: auto;
@@ -2469,10 +2569,30 @@ a.modal-button {
   padding: 8px 20px 14px;
 }
 
+/* Extra air where the speaker changes. Consecutive Blob bubbles stay tight —
+   they read as one side continuing — but a user message against a Blob's is a
+   turn boundary, and at the same 7px the two sides ran together. Applied to
+   whichever row starts the new side, so one gap grows rather than both. */
+.message-row-user + .message-row-agent,
+.message-row-agent + .message-row-user {
+  margin-block-start: 11px;
+}
+
 .message-row {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+/* Who is speaking, above the bubble — only in a group, where the face in the
+   header is not the answer. */
+.message-author {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 /* New messages pop in place: a fast jelly squash-and-settle, no sliding. */
@@ -2859,6 +2979,59 @@ a.modal-button {
   color: var(--accent-link);
 }
 
+/* An @mention, in the mentioned Blob's own colour — the same colour as its
+   avatar, so "who is being addressed" is answerable without reading. Both
+   colours ride on the element (set inline from the roster) and CSS picks by
+   theme, because the theme can change without React re-rendering the
+   transcript: resolving it in JS would leave every existing bubble wrong.
+
+   The pale end of a Blob's gradient is unreadable on white and the deep end
+   disappears on near-black, which is why there are two and not one. */
+.mention {
+  font-weight: 600;
+  /* Falls back to the surrounding text colour: a mention whose colour was
+     rejected as malformed is still bold, never invisible. */
+  color: var(--mention-on-light, currentColor);
+  /* The shimmer is a highlight travelling across the text: a moving
+     transparent band over the flat colour, clipped to the glyphs. The base
+     colour stays in `color`, so a browser without background-clip: text — or
+     a reduced-motion user, below — still gets a correctly coloured mention. */
+  background-image: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--mention-on-light) 35%, white) 42%,
+    color-mix(in srgb, var(--mention-on-light) 35%, white) 50%,
+    transparent 72%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: mention-shimmer 3.6s linear infinite;
+}
+
+:root[data-theme="dark"] .mention {
+  color: var(--mention-on-dark, currentColor);
+  background-image: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--mention-on-dark) 45%, white) 42%,
+    color-mix(in srgb, var(--mention-on-dark) 45%, white) 50%,
+    transparent 72%
+  );
+}
+
+/* Decreasing background-position moves the band left-to-right across the
+   text, which is the direction reading goes. */
+@keyframes mention-shimmer {
+  from {
+    background-position: 160% 0;
+  }
+  to {
+    background-position: -60% 0;
+  }
+}
+
 /* Markdown inside agent bubbles. Block spacing is margin-block throughout so
    adjacent blocks collapse evenly; the first/last trim keeps the bubble's own
    padding visually symmetric whatever element the reply starts or ends with. */
@@ -3089,6 +3262,34 @@ a.modal-button {
 /* First control of the right-hand cluster takes the pushing margin. */
 .composer-expanded .composer-mic-plain {
   margin-inline-start: auto;
+}
+
+/* The @-menu sits inside the composer, above the text: the list is short (a
+   group is six Blobs at most), so it grows the composer instead of floating
+   over the transcript. */
+.composer-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.composer-mention {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 5px 6px;
+  border-radius: 999px;
+  background: var(--surface-control);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.composer-mention:hover,
+.composer-mention-active {
+  background: var(--surface-selected);
 }
 
 .composer-reply {
@@ -3395,6 +3596,48 @@ a.modal-button {
   --file-accent: #0ea5e9;
 }
 
+/* The composer's text field: the textarea, plus a coloured copy of the draft
+   behind it. Takes the flex slot and the `data-flip` the textarea used to, so
+   the composer's FLIP glides see the same box as before. The textarea stays in
+   flow inside it, which is what keeps its height transition driving the
+   field's height. */
+.composer-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+/* Sits exactly under the textarea. Every box property here must match
+   .composer-input below — padding, font, line-height, wrapping — or the
+   colours drift away from the words they belong to.
+
+   simplification: a classic scrollbar (non-overlay platforms) narrows the
+   textarea's text area past five lines without narrowing the mirror, so long
+   drafts could wrap one column early. The upgrade is `scrollbar-gutter:
+   stable` on both; not taken because it reserves a gutter in every composer
+   on every platform to fix a case macOS never hits. */
+.composer-mirror {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  padding: 6px 0;
+  overflow: hidden;
+  /* A textarea wraps on whitespace and keeps runs of spaces; matching both is
+     what stops a highlight sliding off the word it belongs to. */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: var(--text-primary);
+  pointer-events: none;
+}
+
+/* Declared after .composer-input below, not here: same specificity, so
+   source order decides, and above this the textarea's own `color` won and
+   drew a second copy of the text over the mirror. */
+
 .composer-input {
   flex: 1;
   min-width: 0;
@@ -3413,6 +3656,26 @@ a.modal-button {
   /* Same duration/easing as the FLIP glides so the box growth and the
      control repositioning land together with the caret. */
   transition: height var(--duration-compose) var(--ease-standard);
+}
+
+/* The mirrored textarea goes invisible and lets the coloured copy show
+   through, keeping only its caret and selection — which is the whole reason
+   this is a real textarea and not a contenteditable.
+
+   Must stay AFTER .composer-input: equal specificity, so source order is what
+   decides, and declared before it the rule above won and drew a second copy
+   of the text on top of the mirror. */
+.composer-input-mirrored {
+  color: transparent;
+  caret-color: var(--text-primary);
+}
+
+/* Background only. Setting a selection `color` too made the textarea's own
+   glyphs opaque again the moment you dragged across them, printing a second
+   copy over the mirror — the selected text stays readable because the mirror
+   is what you were reading all along, and this band paints behind it. */
+.composer-input-mirrored::selection {
+  background: var(--surface-selected);
 }
 
 .composer-input::placeholder {
@@ -3895,7 +4158,6 @@ a.modal-button {
 .sidebar-collapsed .section-header,
 .sidebar-collapsed .section-remove,
 .sidebar-collapsed .section-empty,
-.sidebar-collapsed .section-add,
 .sidebar-collapsed .pin-tray-hint,
 .sidebar-collapsed .pin-tile-name {
   display: none;
@@ -4131,6 +4393,18 @@ a.modal-button {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* Both sweeps are decoration — the mention's colour and weight, and the
+     dot's mere presence, carry the meaning — so they are dropped outright
+     rather than slowed. */
+  .mention {
+    background-image: none;
+    animation: none;
+  }
+
+  .unread-dot-shimmer {
+    animation: none;
+  }
+
   .icon-button,
   .agent-row,
   .footer-row,
@@ -4157,8 +4431,8 @@ a.modal-button {
   .creator-suggestions,
   .plugins-tab,
   .search-field,
-  .section-add,
   .section-remove,
+  .section-collapse,
   .section-toggle,
   .section-chevron,
   .section-slot,

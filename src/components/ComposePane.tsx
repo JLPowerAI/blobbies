@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Plus, Users } from "lucide-react";
 import { type KeyboardEvent, useState } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
 import type { Agent } from "@/data/agents";
@@ -7,15 +7,26 @@ interface ComposePaneProps {
   agents: Agent[];
   onOpen: (agentId: string) => void;
   onCreate: (name: string) => void;
+  /** Start a group chat; Blobs join it by being dragged in. */
+  onCreateGroup: (name: string) => void;
   onCancel: () => void;
 }
 
 /**
- * "New Blob" compose view: a To: field with a command palette listing
- * "Create new Blob" plus existing Blobs filtered by the query. Enter opens the
- * highlighted row, ⌘1–9 jump straight to a row, Escape dismisses.
+ * "New" compose view: a To: field with a command palette listing "Create new
+ * Blob", "New group chat", and existing Blobs filtered by the query. Enter
+ * opens the highlighted row, ⌘1–9 jump straight to a row, Escape dismisses.
+ *
+ * Both creation paths live here, which is why the sidebar list has no "new
+ * group" button of its own: one door for anything new.
  */
-export function ComposePane({ agents, onOpen, onCreate, onCancel }: ComposePaneProps) {
+export function ComposePane({
+  agents,
+  onOpen,
+  onCreate,
+  onCreateGroup,
+  onCancel,
+}: ComposePaneProps) {
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
 
@@ -23,8 +34,9 @@ export function ComposePane({ agents, onOpen, onCreate, onCancel }: ComposePaneP
   const matches = agents.filter((agent) =>
     agent.name.toLowerCase().includes(trimmed.toLowerCase()),
   );
-  // Option 0 is always "Create new Blob"; existing Blobs follow.
-  const optionCount = 1 + matches.length;
+  // Options 0 and 1 are the two creation rows; existing Blobs follow.
+  const CREATE_ROWS = 2;
+  const optionCount = CREATE_ROWS + matches.length;
   const clampedHighlight = Math.min(highlighted, optionCount - 1);
 
   const activate = (index: number) => {
@@ -32,7 +44,11 @@ export function ComposePane({ agents, onOpen, onCreate, onCancel }: ComposePaneP
       onCreate(trimmed);
       return;
     }
-    const match = matches[index - 1];
+    if (index === 1) {
+      onCreateGroup(trimmed);
+      return;
+    }
+    const match = matches[index - CREATE_ROWS];
     if (match !== undefined) {
       onOpen(match.id);
     }
@@ -69,7 +85,7 @@ export function ComposePane({ agents, onOpen, onCreate, onCancel }: ComposePaneP
   };
 
   return (
-    <section className="compose-pane" aria-label="New Blob">
+    <section className="compose-pane" aria-label="New chat">
       <header className="compose-header" data-tauri-drag-region>
         <label className="compose-to">
           <span className="compose-to-label">To:</span>
@@ -114,8 +130,29 @@ export function ComposePane({ agents, onOpen, onCreate, onCancel }: ComposePaneP
               </span>
             </button>
           </li>
+          <li>
+            <button
+              type="button"
+              className={
+                clampedHighlight === 1 ? "compose-option compose-option-active" : "compose-option"
+              }
+              onClick={() => activate(1)}
+              onMouseEnter={() => setHighlighted(1)}
+            >
+              <span className="compose-create-glyph" aria-hidden="true">
+                <Users size={15} strokeWidth={2} />
+              </span>
+              <span className="compose-option-name">
+                {trimmed.length > 0 ? `New group chat "${trimmed}"` : "New group chat"}
+              </span>
+              <span className="compose-kbd-group" aria-hidden="true">
+                <kbd className="compose-kbd">⌘</kbd>
+                <kbd className="compose-kbd">2</kbd>
+              </span>
+            </button>
+          </li>
           {matches.map((agent, index) => {
-            const optionIndex = index + 1;
+            const optionIndex = index + CREATE_ROWS;
             return (
               <li key={agent.id}>
                 <button

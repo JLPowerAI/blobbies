@@ -25,6 +25,7 @@ import {
 } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
 import { type Agent, MAX_BLOBS } from "@/data/agents";
+import { type Group, MAX_GROUP_MEMBERS } from "@/lib/groups";
 import { readPreference, writePreference } from "@/lib/preferences";
 import { isTauri } from "@/lib/tauri";
 import { formatAgentTime } from "@/lib/time";
@@ -65,6 +66,11 @@ interface SidebarProps {
   agents: Agent[];
   /** Null while composing: no conversation is highlighted. */
   selectedId: string | null;
+  /** Group chats, in sidebar order. A Blob's `section` is its membership. */
+  groups: Group[];
+  selectedGroupId: string | null;
+  onSelectGroup: (id: string) => void;
+  onChangeGroups: (next: Group[]) => void;
   composing: boolean;
   userName: string;
   onSelect: (id: string) => void;
@@ -96,6 +102,8 @@ function zoneFor(section: string | null): string {
 }
 
 /** A string-array preference; `[]` for anything a hand-edit made unreadable. */
+// (Collapsed-group names still live here: which groups are shut is a view
+// preference, unlike the groups themselves, which are conversations.)
 function readNames(key: string): string[] {
   try {
     const parsed: unknown = JSON.parse(readPreference(key, "[]"));
@@ -105,11 +113,6 @@ function readNames(key: string): string[] {
   } catch {
     return [];
   }
-}
-
-/** Sections the user made, including empty ones the roster cannot imply. */
-function readSections(): string[] {
-  return readNames("pref:sections");
 }
 
 /** Keep the fixed-position menu inside the viewport. */
@@ -129,6 +132,10 @@ function initialsOf(name: string): string {
 export function Sidebar({
   agents,
   selectedId,
+  groups,
+  selectedGroupId,
+  onSelectGroup,
+  onChangeGroups,
   composing,
   userName,
   onSelect,
@@ -145,18 +152,24 @@ export function Sidebar({
   const [contextMenu, setContextMenu] = useState<MenuTarget | null>(null);
   /** Blob awaiting delete confirmation (window.confirm is a no-op in wry). */
   const [confirmDelete, setConfirmDelete] = useState<Agent | null>(null);
-  const [sections, setSections] = useState<string[]>(readSections);
   /** Hidden Blobs are collapsed behind a toggle — the only way back to one. */
   const [showHidden, setShowHidden] = useState(false);
 
-  /** Collapsed section names. Order is the section list's, not this one's. */
+  /** Collapsed group names. Order is the group list's, not this one's. */
   const [collapsedSections, setCollapsedSections] = useState<string[]>(() =>
     readNames("pref:sectionsCollapsed"),
   );
 
+  /** Group names, in order — what the drag zones and membership are keyed by. */
+  const sections = groups.map((group) => group.name);
+
+  /** Reorder or drop groups by name, keeping each group's id (and chat). */
   const saveSections = (next: string[]) => {
-    setSections(next);
-    writePreference("pref:sections", JSON.stringify(next));
+    onChangeGroups(
+      next
+        .map((name) => groups.find((group) => group.name === name))
+        .filter((group): group is Group => group !== undefined),
+    );
   };
 
   const saveCollapsedSections = (next: string[]) => {
@@ -173,9 +186,10 @@ export function Sidebar({
   };
 
   /**
-   * Drop a section, and its collapsed flag with it: `addSection` reuses "New
-   * section", so a leftover flag would make a later section of the same name
-   * open up already shut.
+   * Drop a group, and its collapsed flag with it: `addSection` reuses "New
+   * Group", so a leftover flag would make a later group of the same name
+   * open up already shut. The group's transcript stays on disk — removing an
+   * empty group tidies the sidebar, it does not delete a conversation.
    */
   const removeSection = (name: string) => {
     saveSections(sections.filter((candidate) => candidate !== name));
@@ -193,6 +207,18 @@ export function Sidebar({
     if (zone === PIN_ZONE) {
       onUpdateBlob(id, { pinned: true });
       return;
+    }
+    // A group is a chat, and every member answers a message in it, so the
+    // cap is enforced where the membership is written — a seventh Blob that
+    // sat in the group but never spoke would be a silent lie.
+    if (zone.startsWith(SECTION_PREFIX)) {
+      const name = zone.slice(SECTION_PREFIX.length);
+      const taken = agents.filter(
+        (candidate) => candidate.hidden !== true && candidate.section === name,
+      ).length;
+      if (taken >= MAX_GROUP_MEMBERS) {
+        return;
+      }
     }
     // Anything that is not the pin tray unpins: a Blob lives in one place.
     // The ungrouped run clears `section` rather than setting one.
@@ -402,8 +428,10 @@ export function Sidebar({
   const inSection = (candidate: Agent) =>
     candidate.section !== undefined && sections.includes(candidate.section);
   const ungrouped = unpinned.filter((candidate) => !inSection(candidate));
-  const sectionGroups = sections.map((name) => ({
+  const sectionGroups = groups.map(({ id, name, unread }) => ({
+    id,
     name,
+    unread,
     rows: unpinned.filter((candidate) => candidate.section === name),
   }));
   const dragging = drag !== null;
@@ -438,7 +466,16 @@ export function Sidebar({
           }}
           onContextMenu={(event) => openContextMenu(event, agent.id)}
         >
-          <BlobAvatar tone={agent.tone} shape={agent.shape} />
+          {/* The dot badges the avatar rather than trailing the snippet: at
+              the end of a variable-length line it sat in a different place on
+              every row, and it vanished entirely when the sidebar collapsed
+              to avatars — exactly when it is the only signal left. */}
+          <span className="agent-row-face">
+            <BlobAvatar tone={agent.tone} shape={agent.shape} />
+            {agent.unread === true ? (
+              <span className="unread-dot" role="status" aria-label="Unread messages" />
+            ) : null}
+          </span>
           <span className="agent-row-text">
             <span className="agent-row-top">
               <span className="agent-name">{agent.name}</span>
@@ -450,23 +487,11 @@ export function Sidebar({
             </span>
             <span className="agent-row-bottom">
               <span className="agent-snippet">{agent.snippet}</span>
-              {agent.unread === true ? (
-                <span className="unread-dot" role="status" aria-label="Unread messages" />
-              ) : null}
             </span>
           </span>
         </button>
       </li>
     );
-  };
-
-  /** Add "New section", then "New section 2", and so on. */
-  const addSection = () => {
-    let name = "New section";
-    for (let suffix = 2; sections.includes(name); suffix += 1) {
-      name = `New section ${suffix}`;
-    }
-    saveSections([...sections, name]);
   };
 
   return (
@@ -493,10 +518,11 @@ export function Sidebar({
             </>
           )}
         </div>
+        {/* "New chat", not "New Blob": the pane it opens starts a group too. */}
         <button
           type="button"
           className="icon-button sidebar-new-blob"
-          aria-label="New Blob"
+          aria-label="New chat"
           onClick={onStartCompose}
         >
           <Plus size={17} strokeWidth={1.8} aria-hidden="true" />
@@ -581,87 +607,127 @@ export function Sidebar({
           </li>
         ) : null}
 
-        {/* The ungrouped run, then one group per section. */}
-        {[{ name: null, rows: ungrouped }, ...sectionGroups].map((group) => {
-          const zone = zoneFor(group.name);
-          // Never collapsed in the rail: it hides `.section-header`, so the
-          // only control that could reopen the section is gone and its Blobs
-          // would be unreachable until the sidebar is widened again.
-          const shut = !collapsed && group.name !== null && collapsedSections.includes(group.name);
-          return (
-            <li
-              key={group.name ?? UNGROUPED_ZONE}
-              className={[
-                "agent-group",
-                sectionDrag?.id === group.name ? "agent-group-dragging" : "",
-                sectionDrag !== null && sectionDrag.over === zone && sectionDrag.id !== group.name
-                  ? "agent-group-reorder-over"
-                  : "",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-              data-drop={zone}
-            >
-              {group.name === null ? null : (
-                <div className="section-header">
-                  {/* One control: press-and-hold reorders, a plain click
-                      collapses. Sections are the only thing in this list a
-                      user can end up with dozens of. */}
-                  <button
-                    type="button"
-                    className="section-toggle"
-                    aria-expanded={!shut}
-                    onPointerDown={(event) => startSectionDrag(event, group.name)}
-                    onClick={() => {
-                      if (!consumeSectionClick()) {
-                        toggleSection(group.name);
-                      }
-                    }}
+        {/* Blobs in no group first, then one run per group. */}
+        {[{ id: null, name: null, unread: undefined, rows: ungrouped }, ...sectionGroups].map(
+          (group) => {
+            const zone = zoneFor(group.name);
+            // Never collapsed in the rail: it hides `.section-header`, so the
+            // only control that could reopen the section is gone and its Blobs
+            // would be unreachable until the sidebar is widened again.
+            const shut =
+              !collapsed && group.name !== null && collapsedSections.includes(group.name);
+            return (
+              <li
+                key={group.name ?? UNGROUPED_ZONE}
+                className={[
+                  "agent-group",
+                  sectionDrag?.id === group.name ? "agent-group-dragging" : "",
+                  sectionDrag !== null && sectionDrag.over === zone && sectionDrag.id !== group.name
+                    ? "agent-group-reorder-over"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                data-drop={zone}
+              >
+                {group.name === null ? null : (
+                  <div
+                    className={
+                      group.id === selectedGroupId
+                        ? "section-header section-header-open"
+                        : "section-header"
+                    }
                   >
-                    <span className="section-name">{group.name}</span>
-                    {shut ? <span className="section-count">{group.rows.length}</span> : null}
-                    <ChevronDown
-                      size={15}
-                      strokeWidth={2}
-                      aria-hidden="true"
-                      className={shut ? "section-chevron section-chevron-shut" : "section-chevron"}
-                    />
-                  </button>
-                  {/* Only an empty section can be removed: with rows it would be
-                    a destructive-looking button next to real conversations. */}
-                  {group.rows.length === 0 ? (
+                    {/* The name is the group's chat: press-and-hold reorders, a
+                      plain click opens the conversation. Collapsing moved to
+                      the chevron beside it — a group is somewhere you go now,
+                      and that has to be the primary click. */}
                     <button
                       type="button"
-                      className="section-remove"
-                      aria-label={`Remove section ${group.name}`}
-                      onClick={() => removeSection(group.name)}
+                      className="section-toggle"
+                      aria-current={group.id === selectedGroupId ? "true" : undefined}
+                      aria-label={
+                        group.unread === true ? `${group.name}, unread messages` : undefined
+                      }
+                      onPointerDown={(event) => startSectionDrag(event, group.name)}
+                      onClick={() => {
+                        if (!consumeSectionClick()) {
+                          onSelectGroup(group.id);
+                        }
+                      }}
                     >
-                      <X size={12} strokeWidth={2} aria-hidden="true" />
+                      <span className="section-name">{group.name}</span>
+                      {/* Replies landed while you were elsewhere. The group's
+                        words live in its own transcript, so no member's unread
+                        dot can stand in for this.
+
+                        Announced through the button's own accessible name:
+                        inside a button, a labelled child is concatenated into
+                        that name, so the row read as “LaunchUnread messages in
+                        Launch”. */}
+                      {group.unread === true ? (
+                        <span className="unread-dot unread-dot-shimmer" aria-hidden="true" />
+                      ) : null}
+                      {/* Shut: how much is hidden. Full: why the next drop will
+                        not land — a group answers as a whole, so it is capped. */}
+                      {shut || group.rows.length >= MAX_GROUP_MEMBERS ? (
+                        <span className="section-count">
+                          {shut ? group.rows.length : `${group.rows.length}/${MAX_GROUP_MEMBERS}`}
+                        </span>
+                      ) : null}
                     </button>
-                  ) : null}
-                </div>
-              )}
-              {/* Collapses on the same 0fr→1fr grid as the compose slot, and
+                    <button
+                      type="button"
+                      className="section-collapse"
+                      aria-expanded={!shut}
+                      aria-label={shut ? `Expand ${group.name}` : `Collapse ${group.name}`}
+                      onClick={() => toggleSection(group.name)}
+                    >
+                      <ChevronDown
+                        size={15}
+                        strokeWidth={2}
+                        aria-hidden="true"
+                        className={
+                          shut ? "section-chevron section-chevron-shut" : "section-chevron"
+                        }
+                      />
+                    </button>
+                    {/* Only an empty group can be removed: with rows it would be
+                    a destructive-looking button next to real conversations. */}
+                    {group.rows.length === 0 ? (
+                      <button
+                        type="button"
+                        className="section-remove"
+                        aria-label={`Remove group ${group.name}`}
+                        onClick={() => removeSection(group.name)}
+                      >
+                        <X size={12} strokeWidth={2} aria-hidden="true" />
+                      </button>
+                    ) : null}
+                  </div>
+                )}
+                {/* Collapses on the same 0fr→1fr grid as the compose slot, and
                   stays mounted while shut so the group remains a drop target
                   the Blob drag can hit and expand. `inert` (not `hidden`,
                   which cannot animate) takes the rows out of the a11y tree
                   and off the tab order for the duration. */}
-              <div className={shut ? "section-slot section-slot-shut" : "section-slot"}>
-                <ul
-                  inert={shut}
-                  className={
-                    drag?.over === zone ? "agent-group-rows agent-group-over" : "agent-group-rows"
-                  }
-                >
-                  {group.rows.length === 0 && group.name !== null ? (
-                    <li className="section-empty">Drag chats here</li>
-                  ) : null}
-                  {group.rows.map((agent) => agentRow(agent, true))}
-                </ul>
-              </div>
-            </li>
-          );
-        })}
+                <div className={shut ? "section-slot section-slot-shut" : "section-slot"}>
+                  <ul
+                    inert={shut}
+                    className={
+                      drag?.over === zone ? "agent-group-rows agent-group-over" : "agent-group-rows"
+                    }
+                  >
+                    {group.rows.length === 0 && group.name !== null ? (
+                      <li className="section-empty">Drag Blobs here to add them</li>
+                    ) : null}
+                    {group.rows.map((agent) => agentRow(agent, true))}
+                  </ul>
+                </div>
+              </li>
+            );
+          },
+        )}
 
         {/* Hidden Blobs. Not a drop zone: see agentRow. */}
         {hidden.length > 0 && !collapsed ? (
@@ -684,15 +750,6 @@ export function Sidebar({
             {showHidden ? (
               <ul className="agent-group-rows">{hidden.map((agent) => agentRow(agent, false))}</ul>
             ) : null}
-          </li>
-        ) : null}
-
-        {agents.length > 0 && !collapsed ? (
-          <li>
-            <button type="button" className="section-add" onClick={addSection}>
-              <Plus size={13} strokeWidth={2} aria-hidden="true" />
-              New section
-            </button>
           </li>
         ) : null}
       </ul>
@@ -874,12 +931,12 @@ export function Sidebar({
 
       <div className="sidebar-footer">
         {/* Collapsed rail: + moves down here, above the account avatar. Only
-            mounted while collapsed so the expanded tree has one New Blob button. */}
+            mounted while collapsed so the expanded tree has one New button. */}
         {collapsed ? (
           <button
             type="button"
             className="icon-button footer-new-blob"
-            aria-label="New Blob"
+            aria-label="New chat"
             onClick={onStartCompose}
           >
             <Plus size={17} strokeWidth={1.8} aria-hidden="true" />

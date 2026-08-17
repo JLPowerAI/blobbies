@@ -1,7 +1,12 @@
 import { type CSSProperties, useId } from "react";
 import type { AgentShape, AvatarTone } from "@/data/agents";
 
-const GRADIENTS: Record<AvatarTone, [string, string]> = {
+/**
+ * Each tone as `[pale, deep]`. Exported because a Blob's colour identifies it
+ * outside its avatar too — an `@mention` in a transcript is drawn in it — and a
+ * second palette elsewhere would drift out of sync with this one.
+ */
+export const BLOB_GRADIENTS: Record<AvatarTone, [string, string]> = {
   purple: ["#b18cfe", "#7130e6"],
   blue: ["#6cb8fd", "#1f6ff0"],
   green: ["#5fe08a", "#12a348"],
@@ -151,7 +156,7 @@ export function BlobAvatar({
   size = 38,
   variant = "idle",
 }: BlobAvatarProps) {
-  const [light, dark] = GRADIENTS[tone];
+  const [light, dark] = BLOB_GRADIENTS[tone];
   // The same tone can render more than once (sidebar row + chat header), so
   // gradient/clip ids must be per-instance to stay unique in the document.
   const uid = useId();

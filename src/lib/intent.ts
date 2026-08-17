@@ -1,5 +1,5 @@
 import type { Message } from "@kenkaiiii/gg-ai";
-import { type BlobMemory, renderMemories } from "@/lib/blob-tools";
+import { type BlobMemory, MEMORY_LIMIT, MEMORY_TEXT_LIMIT, renderMemories } from "@/lib/blob-tools";
 import { OLLAMA_URL } from "@/lib/ollama";
 import { OLLAMA_KEEP_ALIVE, OLLAMA_NUM_CTX } from "@/lib/ollama-native";
 import { isTinfoilModel, tinfoilStructuredCall } from "@/lib/tinfoil";
@@ -158,6 +158,17 @@ const ROUTER_PROMPT =
  */
 const MEMORY_WORDS = /\b(remember|memory|memories|forget|forgot|recall)\b/i;
 
+/**
+ * How much of a group's transcript the responder router sees.
+ *
+ * Four lines, 200 chars each. The router's job is to resolve what a message
+ * refers to ("and the cost?"), not to understand the conversation — and more
+ * context measurably pulls a small model towards picking whoever appears in
+ * it rather than whoever the message needs.
+ */
+const GROUP_CONTEXT_LINES = 4;
+const GROUP_CONTEXT_CHARS = 200;
+
 /** Grammar for the reconcile call: only a list of positions is legal. */
 const RECONCILE_SCHEMA = {
   type: "object",
@@ -285,6 +296,208 @@ export async function reconcileMemories(options: {
   } catch {
     // Timeout, abort, offline server, malformed JSON: keep memory as it was.
     return [];
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onParentAbort);
+  }
+}
+
+/**
+ * Apply a group message's classification to the *shared* memory scope.
+ *
+ * Returns the new list, or null when nothing changed.
+ *
+ * Two decisions, both about who owns a fact said in a room:
+ *
+ * The scope is **shared**, never one Blob's own. Six responders each writing
+ * their private copy of the same sentence — each reconciled against a
+ * different list — is how a group ends up with six drifting versions of one
+ * thing the user said once. Shared is also simply true: it was said to
+ * everyone, and every Blob already reads this scope.
+ *
+ * `change_job` is dropped. In a one-to-one chat "be my writing coach instead"
+ * has one unambiguous subject; in a group it does not, and silently
+ * reconfiguring whichever Blob happened to answer would be a destructive
+ * guess. The user can say it in that Blob's own chat.
+ */
+export async function applyGroupIntent(
+  intent: Intent,
+  options: { model: string; memories: BlobMemory[]; signal?: AbortSignal },
+): Promise<BlobMemory[] | null> {
+  if (intent.action === "save_fact") {
+    const text = (intent.fact ?? "").trim().slice(0, MEMORY_TEXT_LIMIT);
+    if (text === "") {
+      return null;
+    }
+    // Same duplicate guard as the per-Blob path: a group repeats itself more,
+    // not less, because several Blobs may prompt the user to restate things.
+    if (options.memories.some((memory) => memory.text.toLowerCase() === text.toLowerCase())) {
+      return null;
+    }
+    const obsolete = await reconcileMemories({
+      model: options.model,
+      fact: text,
+      existing: options.memories,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    const kept = options.memories.filter((_, index) => !obsolete.includes(index + 1));
+    return [
+      ...kept.slice(Math.max(0, kept.length - (MEMORY_LIMIT - 1))),
+      { id: crypto.randomUUID(), text, createdAt: Date.now() },
+    ];
+  }
+  if (intent.action === "delete_fact") {
+    const at = (intent.memoryNumber ?? 0) - 1;
+    if (at < 0 || at >= options.memories.length) {
+      return null;
+    }
+    return options.memories.filter((_, index) => index !== at);
+  }
+  return null;
+}
+
+/**
+ * Pick which members of a group answer a message.
+ *
+ * Only reached when nobody was addressed — a mention or a reply is answered
+ * without a model call (see `addressedResponders`). What this replaces is
+ * "every member answers", which on one local model means N serial turns and N
+ * near-identical replies to a question that concerned one of them.
+ *
+ * Same mechanism as the intent router and for the same reason: choosing is
+ * what small models are bad at, filling a grammar is what they are reliable
+ * at. The enum is the members' own names, so an unknown name is not merely
+ * filtered afterwards — it is not generatable.
+ *
+ * Fails open to everyone: a router problem must never leave a group silent,
+ * and "everyone answers" is exactly the behaviour this refines.
+ */
+export async function pickResponders(options: {
+  model: string;
+  text: string;
+  members: { name: string; title?: string; description?: string }[];
+  /**
+   * The few lines before this message, oldest first, already labelled
+   * ("Ken: …", "Scout: …"). "and what did that cost?" is unroutable on its
+   * own — the subject was three messages ago.
+   */
+  recent?: string[];
+  signal?: AbortSignal;
+}): Promise<string[]> {
+  const names = options.members.map((member) => member.name);
+  // Nothing to choose between, and no reason to pay for a call.
+  if (options.members.length <= 1 || options.text.trim() === "") {
+    return names;
+  }
+  const schema = {
+    type: "object",
+    required: ["responders"],
+    properties: {
+      responders: { type: "array", items: { type: "string", enum: names } },
+    },
+    additionalProperties: false,
+  } as const;
+  // Enough to resolve "that"/"it", short enough that the message itself is
+  // still the loudest thing in the prompt.
+  const recent = (options.recent ?? [])
+    .slice(-GROUP_CONTEXT_LINES)
+    .map((line) => `- ${line.replace(/\s+/g, " ").slice(0, GROUP_CONTEXT_CHARS)}`)
+    .join("\n");
+  const roster = options.members
+    .map(
+      (member) =>
+        `- ${member.name}: ${
+          [member.title, member.description]
+            .map((part) => (part ?? "").trim())
+            .filter((part) => part !== "")
+            .join(" \u2014 ") || "no stated job"
+        }`,
+    )
+    .join("\n");
+  const messages = [
+    {
+      role: "system",
+      content:
+        "People in a group chat have different jobs. Given a message, list " +
+        "ONLY those whose job the message actually needs.\n\n" +
+        "Rules:\n" +
+        "- Usually exactly one person. Two only when the message genuinely " +
+        "needs both, and never everyone unless it is addressed to the group " +
+        "(\u201Ceveryone\u201D, \u201Cyou all\u201D, a general greeting or announcement).\n" +
+        "- Someone with no relevant job stays quiet. Silence is normal and " +
+        "correct \u2014 do not add people to be safe.\n" +
+        "- Judge by their job, not by who spoke last.\n" +
+        // The context is for resolving what the message refers to, not for
+        // re-answering it: without this line a small model picks whoever was
+        // busy in the excerpt.
+        "- Earlier lines are only to work out what the message is ABOUT. Do " +
+        "not pick someone merely because they appear there.\n\n" +
+        `The people:\n${roster}` +
+        (recent === "" ? "" : `\n\nEarlier in the chat:\n${recent}`),
+    },
+    { role: "user", content: options.text },
+  ];
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), ROUTER_TIMEOUT_MS);
+  const onParentAbort = () => deadline.abort();
+  if (options.signal !== undefined) {
+    if (options.signal.aborted) {
+      deadline.abort();
+    } else {
+      options.signal.addEventListener("abort", onParentAbort, { once: true });
+    }
+  }
+  try {
+    let content: string;
+    if (isTinfoilModel(options.model)) {
+      const result = await tinfoilStructuredCall({
+        model: options.model,
+        messages,
+        schema,
+        schemaName: "pick_responders",
+        temperature: ROUTER_TEMPERATURE,
+        maxTokens: ROUTER_MAX_TOKENS,
+        signal: deadline.signal,
+      });
+      if (result === null) {
+        return names;
+      }
+      content = result;
+    } else {
+      const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: deadline.signal,
+        body: JSON.stringify({
+          model: options.model,
+          stream: false,
+          think: false,
+          keep_alive: OLLAMA_KEEP_ALIVE,
+          format: schema,
+          options: ROUTER_OPTIONS,
+          messages,
+        }),
+      });
+      if (!response.ok) {
+        return names;
+      }
+      const payload = (await response.json()) as { message?: { content?: string } };
+      content = payload.message?.content ?? "{}";
+    }
+    const parsed: unknown = JSON.parse(content);
+    const picked = (parsed as Record<string, unknown> | null)?.responders;
+    if (!Array.isArray(picked)) {
+      return names;
+    }
+    // Dedupe and re-order by the roster: the model's ordering is arbitrary,
+    // and a group reads best when the same people always speak in the same
+    // order. A pick of nobody means nobody — that is the point of the router.
+    const wanted = new Set(picked.filter((value): value is string => typeof value === "string"));
+    return names.filter((name) => wanted.has(name));
+  } catch {
+    // Timeout, abort, offline, malformed JSON: everyone answers, which is the
+    // behaviour this function refines rather than a new failure.
+    return names;
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", onParentAbort);

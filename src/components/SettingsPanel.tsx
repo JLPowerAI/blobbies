@@ -153,7 +153,11 @@ interface SettingsPanelProps {
   user: UserContext;
   /** Where the selected model runs; keeps the preview's identity line honest. */
   runtime: "local" | "enclave";
-  onUpdate: (patch: Partial<Agent>) => void;
+  /**
+   * `commitName` marks the end of a rename — the app settles name uniqueness
+   * only then, so it never fights a half-typed name.
+   */
+  onUpdate: (patch: Partial<Agent> & { commitName?: boolean }) => void;
   /** Shared memories, so the prompt preview matches what a turn actually sends. */
   userMemories: BlobMemory[];
   /** App-wide local MCP servers (not per-Blob). */
@@ -218,6 +222,11 @@ export function SettingsPanel({
           <label className="settings-label" htmlFor="settings-name">
             Name
           </label>
+          {/* Typing is never fought: the field updates on every keystroke and
+              uniqueness is settled on blur. Enforcing per keystroke fights the
+              user — “Scout Two” becomes “Scout 2” the moment it passes an
+              existing “Scout”, and a trailing space is stripped before the
+              second word can be typed. */}
           <input
             id="settings-name"
             type="text"
@@ -225,6 +234,7 @@ export function SettingsPanel({
             maxLength={MAX_BLOB_NAME_LENGTH}
             value={agent.name}
             onChange={(event) => onUpdate({ name: event.currentTarget.value })}
+            onBlur={() => onUpdate({ name: agent.name, commitName: true })}
           />
         </div>
 

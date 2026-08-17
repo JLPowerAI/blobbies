@@ -453,6 +453,15 @@ export async function streamBlobTurn(options: {
    * is no human in the loop to fill gaps.
    */
   scope?: "chat" | "routine";
+  /**
+   * Classification the caller already made for this message, with its writes
+   * already applied — skips this turn's router and its memory write.
+   *
+   * Exists for group chats: one user message classified once, then shared by
+   * every responder. Per-responder routing would mean N calls deciding the
+   * same sentence and N private copies of one fact.
+   */
+  intent?: Intent;
   /** The Blob's sandboxed home folder; enables file tools on routine turns. */
   home?: HomeBackend;
   /**
@@ -505,15 +514,23 @@ export async function streamBlobTurn(options: {
   // (see runLoop) — and it also decides whether the loop gets the web pair.
   // Routine turns skip it: there is no fresh user message to classify, the
   // instruction is the task, and autonomous turns must not write memories.
+  //
+  // A caller can also classify *for* this turn (`options.intent`). That is
+  // what a group does: one message, one classification, shared by every
+  // responder — otherwise each of them routes the same sentence and each
+  // writes its own private copy of the same fact, which is how six Blobs end
+  // up with six drifting versions of one thing the user said once.
   const intent: Intent =
-    scope === "routine"
+    options.intent ??
+    (scope === "routine"
       ? { action: "none", needsWeb: true }
       : await routeIntent({
           model: options.model,
           messages: conversation,
           memories: options.memory.list(),
-        });
-  if (intent.action !== "none") {
+        }));
+  // A pre-classified turn has had its writes applied by the caller, once.
+  if (options.intent === undefined && intent.action !== "none") {
     const applied = await applyIntent(intent, options.memory);
     if (applied !== null) {
       options.onToolCall?.(applied);
@@ -523,7 +540,14 @@ export async function streamBlobTurn(options: {
 
   // A job change is a reconfigure: run the same forced round that sets up a
   // new Blob, which is the only path measured reliable on a small model.
-  const forceConfigure = options.forceConfigure === true || intent.action === "change_job";
+  //
+  // Never from a pre-classified intent. "Be my writing coach instead" has one
+  // subject in a 1-to-1 chat and none in a group, so rewriting whichever
+  // member happened to answer would be a silent destructive guess — the same
+  // reason `applyGroupIntent` drops the action rather than applying it.
+  const forceConfigure =
+    options.forceConfigure === true ||
+    (options.intent === undefined && intent.action === "change_job");
 
   // simplification: forcing configure_blob on the first unconfigured turn
   // means a greeting like "hi" also triggers a (generic) self-config; the

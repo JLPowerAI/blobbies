@@ -23,7 +23,10 @@ const pane = (
   thinking: boolean,
   onStop: () => void,
   withMessages: Message[] = [],
-  onSend: (text: string, replyTo?: string, files?: readonly PickedFile[]) => void = () => {},
+  onSend: (
+    text: string,
+    options?: { replyTo?: string; replyToId?: string; files?: readonly PickedFile[] },
+  ) => void = () => {},
 ) => (
   <ChatPane
     agent={agent}
@@ -174,7 +177,7 @@ describe("ChatPane", () => {
     expect(screen.queryByText("data.csv")).not.toBeInTheDocument();
     // The send waits for the thumbnail (jsdom renders none, so the file goes
     // on its own) and hands the file over with it, not bare.
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith("", undefined, [{ file: keep }]));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("", { files: [{ file: keep }] }));
   });
 
   it("gives a table its own bubble, so it is not squeezed by the prose around it", () => {
@@ -212,6 +215,181 @@ describe("ChatPane", () => {
     const stack = document.querySelector(".bubble-stack") as HTMLElement;
     expect(stack.querySelectorAll(":scope > .bubble")).toHaveLength(1);
     expect(stack.querySelector(".bubble-table")).toBeNull();
+  });
+
+  it("offers Blobs whose name has a space, all the way through typing it", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    const social: Agent = { ...agent, id: "social", name: "Social Blob" };
+    const news: Agent = { ...agent, id: "news", name: "AI News Blob" };
+    render(
+      <ChatPane
+        agent={agent}
+        group={{ id: "g1", name: "Launch", members: [social, news] }}
+        messages={[]}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={onSend}
+        onStop={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+    const field = screen.getByRole("textbox", { name: "Message Launch" });
+
+    // A bare "@" lists everyone available — the menu is how you learn who is
+    // in the room without memorising names.
+    await user.type(field, "@");
+    expect(screen.getByRole("button", { name: "Social Blob" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "AI News Blob" })).toBeInTheDocument();
+    // Nothing highlighted yet: with a first option pre-selected the list reads
+    // as a choice already made before the user expressed one.
+    expect(document.querySelectorAll(".composer-mention-active")).toHaveLength(0);
+
+    // Almost every real Blob name has a space in it. The menu has to survive
+    // typing one, or it disappears halfway through the name it completes.
+    await user.type(field, "Soc");
+    // And the colour arrives with the word, not on its last character: once
+    // only one Blob can complete what is typed, it is already that colour.
+    expect(document.querySelector(".composer-mirror .mention")?.textContent).toBe("@Soc");
+
+    await user.type(field, "ial B");
+    expect(screen.queryByRole("button", { name: "AI News Blob" })).not.toBeInTheDocument();
+    // Narrowing IS the preference, so now the best match is highlighted and
+    // Enter takes it.
+    expect(document.querySelectorAll(".composer-mention-active")).toHaveLength(1);
+    await user.keyboard("{Enter}");
+    expect(field).toHaveValue("@Social Blob ");
+
+    // The coloured mirror renders the draft as you type, so a mention is in
+    // its Blob's colour before the message is even sent.
+    expect(document.querySelector(".composer-mirror .mention")?.textContent).toBe("@Social Blob");
+
+    // And prose after an @ closes the menu rather than latching it open.
+    await user.type(field, "mail me @ later today");
+    expect(screen.queryByRole("button", { name: "Social Blob" })).not.toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(onSend).toHaveBeenCalledWith("@Social Blob mail me @ later today", {});
+  });
+
+  it("in a group, names the speaker and completes an @mention", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    const zed: Agent = { ...agent, id: "zed", name: "Zed" };
+    render(
+      <ChatPane
+        agent={agent}
+        group={{ id: "g1", name: "Launch", members: [agent, zed] }}
+        messages={[
+          {
+            id: "m1",
+            kind: "text",
+            author: "agent",
+            authorId: zed.id,
+            segments: [{ text: "Done." }],
+          },
+        ]}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={onSend}
+        onStop={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+
+    // Several Blobs share the transcript, so a reply that does not say who
+    // sent it is unreadable.
+    expect(screen.getByText("Done.").closest(".message-row")).toHaveTextContent("Zed");
+    // No attach button: a file is saved in one Blob's home folder, and a group
+    // has none of its own.
+    expect(screen.queryByLabelText("Attach files")).not.toBeInTheDocument();
+
+    // Typing "@Z" offers the member; Enter completes rather than sending a
+    // half-typed mention that would address nobody.
+    const field = screen.getByRole("textbox", { name: "Message Launch" });
+    await user.type(field, "@Z");
+    expect(screen.getByRole("button", { name: "Zed" })).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(field).toHaveValue("@Zed ");
+
+    await user.keyboard("take it{Enter}");
+    expect(onSend).toHaveBeenCalledWith("@Zed take it", {});
+  });
+
+  it("colours an @mention in the mentioned Blob's own colour, both ways", () => {
+    const zed: Agent = { ...agent, id: "zed", name: "Zed", tone: "pink" };
+    render(
+      <ChatPane
+        agent={agent}
+        group={{ id: "g1", name: "Launch", members: [agent, zed] }}
+        messages={[
+          { id: "m1", kind: "text", author: "user", segments: [{ text: "@Zed take this" }] },
+          {
+            id: "m2",
+            kind: "text",
+            author: "agent",
+            authorId: agent.id,
+            segments: [{ text: "On it. @Zed draft it once I'm done." }],
+          },
+        ]}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        onStop={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+
+    // Both bubble kinds: the user's words render verbatim, a Blob's through
+    // markdown, and an unhighlighted mention in either would misreport who
+    // is being addressed.
+    const mentions = document.querySelectorAll(".mention");
+    expect([...mentions].map((node) => node.textContent)).toEqual(["@Zed", "@Zed"]);
+    // Two colours, not one: the theme flips without React re-rendering the
+    // transcript, so CSS — not JS — has to choose between them.
+    for (const node of mentions) {
+      const style = node.getAttribute("style") ?? "";
+      expect(style).toContain("--mention-on-light");
+      expect(style).toContain("--mention-on-dark");
+    }
+  });
+
+  it("leaves an @ alone in a one-to-one chat, where it addresses nobody", () => {
+    render(
+      <ChatPane
+        agent={agent}
+        messages={[
+          {
+            id: "m1",
+            kind: "text",
+            author: "user",
+            segments: [{ text: "mail me @ ken@x.example" }],
+          },
+        ]}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        onStop={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+    expect(document.querySelectorAll(".mention")).toHaveLength(0);
   });
 
   it("keeps Send reachable mid-reply, so a follow-up can steer the turn", async () => {

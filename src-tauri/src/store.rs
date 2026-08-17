@@ -39,11 +39,15 @@ struct TrashMarker {
 }
 
 /// Slices that live at the data root. `user` holds memories shared by every
-/// Blob (per-Blob memories live in that Blob's `config`).
-const ROOT_SLICES: [&str; 4] = ["settings", "ui-layout", "roster", "user"];
+/// Blob (per-Blob memories live in that Blob's `config`); `groups` holds the
+/// group-chat list (names and ids only — transcripts are their own slices).
+const ROOT_SLICES: [&str; 5] = ["settings", "ui-layout", "roster", "user", "groups"];
 
 /// Slices that live inside a Blob directory.
 const BLOB_SLICES: [&str; 4] = ["config", "routines", "transcript", "runs"];
+
+/// Slices that live inside a group-chat directory.
+const GROUP_SLICES: [&str; 1] = ["transcript"];
 
 fn now_ms() -> u128 {
     SystemTime::now()
@@ -53,6 +57,7 @@ fn now_ms() -> u128 {
 }
 
 /// True when `id` looks like a hyphenated UUID (lowercase hex, 8-4-4-4-12).
+/// Group ids are minted the same way and validated with this too.
 fn is_valid_blob_id(id: &str) -> bool {
     let bytes = id.as_bytes();
     if bytes.len() != 36 {
@@ -65,7 +70,8 @@ fn is_valid_blob_id(id: &str) -> bool {
 }
 
 /// Resolve a slice key to its on-disk path, rejecting anything not on the
-/// allowlist. Keys are either `<root-slice>` or `blobs/<uuid>/<blob-slice>`.
+/// allowlist. Keys are `<root-slice>`, `blobs/<uuid>/<blob-slice>` or
+/// `groups/<uuid>/<group-slice>`.
 fn resolve_slice_path(data_root: &Path, key: &str) -> Result<PathBuf> {
     if ROOT_SLICES.contains(&key) {
         return Ok(data_root.join(format!("{key}.json")));
@@ -77,6 +83,16 @@ fn resolve_slice_path(data_root: &Path, key: &str) -> Result<PathBuf> {
     {
         return Ok(data_root
             .join("blobs")
+            .join(id)
+            .join(format!("{slice}.json")));
+    }
+    if let Some(rest) = key.strip_prefix("groups/")
+        && let Some((id, slice)) = rest.split_once('/')
+        && is_valid_blob_id(id)
+        && GROUP_SLICES.contains(&slice)
+    {
+        return Ok(data_root
+            .join("groups")
             .join(id)
             .join(format!("{slice}.json")));
     }
@@ -373,6 +389,8 @@ mod tests {
         assert!(resolve_slice_path(root, "user").is_ok());
         assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/config")).is_ok());
         assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/runs")).is_ok());
+        assert!(resolve_slice_path(root, "groups").is_ok());
+        assert!(resolve_slice_path(root, &format!("groups/{BLOB_ID}/transcript")).is_ok());
     }
 
     #[test]
@@ -384,6 +402,9 @@ mod tests {
             "blobs/../evil/config",
             "blobs/not-a-uuid/config",
             &format!("blobs/{BLOB_ID}/unknown"),
+            &format!("groups/{BLOB_ID}/config"),
+            "groups/not-a-uuid/transcript",
+            "groups/../evil/transcript",
             "unknown",
             "users",
             "user/x",

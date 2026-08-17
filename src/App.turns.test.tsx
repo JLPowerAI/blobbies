@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Agent } from "@/data/agents";
 import type { streamBlobTurn as StreamBlobTurn } from "@/lib/ai";
 import type { SchedulerHost } from "@/lib/scheduler";
 import type { Settings } from "@/lib/store";
@@ -36,6 +37,28 @@ vi.mock("@/lib/ai", async (importOriginal) => ({
     calls.push(options);
     const next = script.shift();
     return next === undefined ? "" : await next(options);
+  }),
+}));
+
+/**
+ * Who the group router picks, by name. Null lets every member through, which
+ * is also what the real router falls back to when Ollama is unreachable.
+ */
+let responderPick: ((names: string[]) => string[]) | null = null;
+vi.mock("@/lib/intent", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/intent")>()),
+  pickResponders: vi.fn(async (options: { members: { name: string }[] }) => {
+    const names = options.members.map((member) => member.name);
+    return responderPick === null ? names : responderPick(names);
+  }),
+  // The classifier itself is covered in intent.test.ts against a faked
+  // fetch; here it only has to be deterministic so the *wiring* — one call
+  // per message, one shared write — is what is being measured.
+  routeIntent: vi.fn(async (options: { messages: { content: unknown }[] }) => {
+    const said = String(options.messages[options.messages.length - 1]?.content ?? "");
+    return /remember I live in Lisbon/.test(said)
+      ? { action: "save_fact", fact: "the user lives in Lisbon", needsWeb: false }
+      : { action: "none", needsWeb: false };
   }),
 }));
 
@@ -126,6 +149,26 @@ async function say(user: UserEvent, text: string) {
   await waitFor(() => expect(calls.length).toBeGreaterThan(before));
 }
 
+/**
+ * Two Blobs in one group, on disk, ready for mount — membership is the Blob's
+ * `section`, and the group list carries the id its transcript is keyed by.
+ */
+const GROUP_ID = "9f1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d";
+
+async function seedGroup() {
+  const member = (index: number, name: string): Agent => ({
+    id: `61ec34f1-9ba5-4eff-b8e1-7acefb21${String(index).padStart(4, "0")}`,
+    name,
+    time: "Now",
+    snippet: "New Blob. Say hello",
+    tone: "blue",
+    shape: "sphere",
+    section: "Launch",
+  });
+  await store.flushRoster([member(1, "Researcher"), member(2, "Writer")]);
+  store.saveGroups([{ id: GROUP_ID, name: "Launch" }]);
+}
+
 describe("turn wiring", () => {
   beforeEach(() => {
     // Drain writes the previous test left queued, THEN wipe. Without the
@@ -136,6 +179,7 @@ describe("turn wiring", () => {
     script = [];
     calls = [];
     schedulerHost = null;
+    responderPick = null;
     notify.mockClear();
   });
 
@@ -309,6 +353,115 @@ describe("turn wiring", () => {
     expect(filer?.title).toBe("Files things");
     // A real id, so the scheduler and per-Blob slices can address it.
     expect(filer?.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("message_blob wakes the other Blob in its own conversation, fenced", async () => {
+    const user = userEvent.setup();
+    script = [
+      (options) => {
+        options.onSegment?.("Done.");
+        return "Done.";
+      },
+      (options) => {
+        options.onSegment?.("On it.");
+        return "On it.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(await within(conversations).findByRole("button", { name: /Researcher/ }));
+    await user.type(screen.getByLabelText("Message Researcher"), "hello{Enter}");
+    await waitFor(() => expect(calls.length).toBe(1));
+
+    expect(
+      await callRosterTool("message_blob", { name: "Writer", message: "Draft the post" }),
+    ).toBe("Sent to Writer. They will answer in their own conversation.");
+
+    // The receiver wakes on its own turn — the sender does not wait for it,
+    // and does not get the answer back inside its own turn.
+    await waitFor(() => expect(calls.length).toBe(2));
+    const woken = calls[1];
+    expect(woken?.roster?.selfName).toBe("Writer");
+    // Autonomous, so it gets the routine catalog rather than the tuned chat
+    // path: there is no human in this turn to fill gaps.
+    expect(woken?.scope).toBe("routine");
+    // Another Blob's words are model output, so they arrive fenced as data.
+    const prompt = String(woken?.messages[woken.messages.length - 1]?.content ?? "");
+    expect(prompt).toContain('from="blob:Researcher"');
+    expect(prompt).toContain("Draft the post");
+
+    // And the hand-off is visible where the work landed, not only in logs.
+    await user.click(within(conversations).getByRole("button", { name: /Writer/ }));
+    expect(await screen.findByText("Researcher: Draft the post")).toBeInTheDocument();
+  });
+
+  it("Stop cancels a hand-off that has not started yet", async () => {
+    const user = userEvent.setup();
+    // The sender hands off and then holds the turn open, so Stop lands while
+    // the receiver's turn is still queued behind it — which is the only
+    // window in which cancelling it is a decision at all.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    script = [
+      async (options) => {
+        await callRosterTool("message_blob", { name: "Writer", message: "Draft the post" });
+        options.onSegment?.("Handed it over.");
+        await held;
+        return "Handed it over.";
+      },
+      (options) => {
+        options.onSegment?.("On it.");
+        return "On it.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(await within(conversations).findByRole("button", { name: /Researcher/ }));
+    await user.type(screen.getByLabelText("Message Researcher"), "hello{Enter}");
+    await waitFor(() => expect(screen.getByText("Handed it over.")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Stop replying" }));
+    release();
+    // Waited out properly: the sender's turn has to finish and the queue drain
+    // before "the receiver never ran" means anything.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Stop replying" })).not.toBeInTheDocument(),
+    );
+    // Stop means the whole exchange: another Blob must not pick up the work
+    // the user just stopped, in a conversation they are not even looking at.
+    expect(calls.length).toBe(1);
+    expect(screen.queryByText("On it.")).not.toBeInTheDocument();
+  });
+
+  it("stops a hand-off chain before two Blobs pin the model forever", async () => {
+    const user = userEvent.setup();
+    const results: string[] = [];
+    // Every woken Blob immediately hands the work back. Turns are serial
+    // against one local model, so unchecked this never stops and Stop is the
+    // user's only lever.
+    script = Array.from({ length: 8 }, () => async (options: TurnOptions) => {
+      const to = options.roster?.selfName === "Writer" ? "Researcher" : "Writer";
+      results.push(await callRosterTool("message_blob", { name: to, message: "your turn" }));
+      options.onSegment?.("Passed it on.");
+      return "Passed it on.";
+    });
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(await within(conversations).findByRole("button", { name: /Researcher/ }));
+    await user.type(screen.getByLabelText("Message Researcher"), "hello{Enter}");
+
+    // The chain runs to the cap and then refuses, rather than growing.
+    await waitFor(() => expect(results.at(-1)).toContain("hand-offs in a row"));
+    await waitFor(() => expect(calls.length).toBe(4));
+    expect(calls.length).toBe(4);
   });
 
   it("a spawn mid-turn does not discard that turn's own token count", async () => {
@@ -497,6 +650,393 @@ describe("turn wiring", () => {
     expect(
       String(routineTurn?.messages.find((message) => message.role === "system")?.content ?? ""),
     ).toContain("Biscuit is a beagle");
+  });
+
+  it("has a group answer in turn, each member reading the ones before it", async () => {
+    const user = userEvent.setup();
+    // Spoken as segments, the way a real turn emits them — a group reply has
+    // no sidebar snippet to fall back on.
+    script = [
+      (options) => {
+        options.onSegment?.("Sources gathered.");
+        return "Sources gathered.";
+      },
+      (options) => {
+        options.onSegment?.("Draft written.");
+        return "Draft written.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    // The group's name in the sidebar is the door to its chat.
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText("Message Launch"), "where are we?{Enter}");
+
+    // Nobody was addressed, so both members answer — one turn each, in roster
+    // order, not one turn on behalf of the group.
+    await waitFor(() => expect(calls.length).toBe(2));
+    await waitFor(() => expect(screen.getByText("Draft written.")).toBeInTheDocument());
+
+    // Each reply is attributed, or a group transcript cannot be read at all.
+    expect(screen.getByText("Sources gathered.").closest(".message-row")).toHaveTextContent(
+      "Researcher",
+    );
+
+    const [first, second] = calls;
+    // The system prompt tells each member who else is in the room.
+    const prompt = String(first?.messages.find((entry) => entry.role === "system")?.content ?? "");
+    expect(prompt).toContain("Group chat");
+    expect(prompt).toContain("Writer");
+
+    // The second member sees the first's line as somebody else's, labelled:
+    // as an assistant message it would read as its own earlier answer.
+    const seen = second?.messages.filter((entry) => entry.role !== "system") ?? [];
+    const line = seen.find((entry) => String(entry.content).includes("Sources gathered."));
+    expect(line?.role).toBe("user");
+    expect(String(line?.content)).toContain("[Researcher]:");
+    // A group is a conversation, so it stays the tuned chat path.
+    expect(second?.scope ?? "chat").toBe("chat");
+  });
+
+  it("asks only the Blob the router picked, not the whole group", async () => {
+    const user = userEvent.setup();
+    // Nobody is @-mentioned, so the router decides — and a question that
+    // concerns one member must not cost six turns and six near-identical
+    // replies on one local model.
+    responderPick = (names) => names.filter((name) => name === "Writer");
+    script = [
+      (options) => {
+        options.onSegment?.("On it.");
+        return "On it.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "can someone draft the post{Enter}");
+
+    await waitFor(() => expect(screen.getByText("On it.")).toBeInTheDocument());
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.roster?.selfName).toBe("Writer");
+  });
+
+  it("a fact told to a group is saved once, shared, not per Blob", async () => {
+    const user = userEvent.setup();
+    // Both members answer, so a per-responder router would classify the same
+    // sentence twice and write two private copies of it.
+    responderPick = (names) => names;
+    script = [
+      (options) => {
+        options.onSegment?.("Noted.");
+        return "Noted.";
+      },
+      (options) => {
+        options.onSegment?.("Same here.");
+        return "Same here.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "remember I live in Lisbon{Enter}");
+    await waitFor(() => expect(screen.getByText("Same here.")).toBeInTheDocument());
+
+    // One copy, in the scope every Blob reads — and none in either Blob's own
+    // list, where two reconciles against two lists would drift apart.
+    window.dispatchEvent(new Event("beforeunload"));
+    expect((await store.loadUserMemories())?.map((memory) => memory.text)).toEqual([
+      "the user lives in Lisbon",
+    ]);
+    for (const blob of (await store.loadRoster()) ?? []) {
+      expect(blob.memories ?? []).toEqual([]);
+    }
+  });
+
+  it("lets a Blob stay out, and shows nothing rather than the word PASS", async () => {
+    const user = userEvent.setup();
+    responderPick = (names) => names;
+    script = [
+      (options) => {
+        options.onSegment?.("The 14th.");
+        return "The 14th.";
+      },
+      // Nothing to add — a colleague already answered. Being picked is an
+      // invitation, not an obligation.
+      (options) => {
+        options.onSegment?.("PASS");
+        return "PASS";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "when is the venue booked{Enter}");
+
+    await waitFor(() => expect(screen.getByText("The 14th.")).toBeInTheDocument());
+    // Both were asked, so both ran — the second's bubble is taken back off
+    // the screen rather than showing the user a bare "PASS".
+    await waitFor(() => expect(calls.length).toBe(2));
+    expect(screen.queryByText("PASS")).not.toBeInTheDocument();
+    // But it must leave a trace: the thinking blob already appeared for it,
+    // and vanishing without one is indistinguishable from a crash.
+    expect(await screen.findByText(/Writer had nothing to add/)).toBeInTheDocument();
+    window.dispatchEvent(new Event("beforeunload"));
+    const saved = (await store.loadGroupTranscript(GROUP_ID)) ?? [];
+    expect(
+      saved.some((entry) => entry.kind === "text" && /PASS/.test(entry.segments[0]?.text ?? "")),
+    ).toBe(false);
+  });
+
+  it("never lets a Blob the user named by name stay out", async () => {
+    const user = userEvent.setup();
+    script = [
+      (options) => {
+        options.onSegment?.("PASS");
+        return "PASS";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "@Writer draft it{Enter}");
+
+    // Being called on by name is an obligation. If the model emits the token
+    // anyway, a stray "PASS" is better than a silent non-answer to a direct
+    // question — the user would otherwise have no idea anything ran.
+    expect(await screen.findByText("PASS")).toBeInTheDocument();
+    expect(screen.queryByText(/No one here picked this up/)).not.toBeInTheDocument();
+  });
+
+  it("has every member answer @everyone — nobody may opt out", async () => {
+    const user = userEvent.setup();
+    // Both would rather stay out. They do not get to: the user addressed the
+    // whole room, and a room that answers with silence is not an answer.
+    script = [
+      (options) => {
+        options.onSegment?.("PASS");
+        return "PASS";
+      },
+      (options) => {
+        options.onSegment?.("PASS");
+        return "PASS";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "@everyone hows everyone{Enter}");
+
+    await waitFor(() => expect(calls.length).toBe(2));
+    // Both replies stand. A stray "PASS" on screen is a prompt problem the
+    // user can see; deleting it would hide that the Blob answered at all.
+    await waitFor(() => expect(screen.getAllByText("PASS")).toHaveLength(2));
+    expect(screen.queryByText(/No one here picked this up/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/had nothing to add/)).not.toBeInTheDocument();
+  });
+
+  it("drops a member removed from the group while the exchange is running", async () => {
+    const user = userEvent.setup();
+    responderPick = (names) => names;
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    script = [
+      async (options) => {
+        // Held open so the roster can change while the second member is still
+        // queued behind this one — an exchange runs several turns, and a Blob
+        // can be dragged out, hidden or deleted in between.
+        options.onSegment?.("Sources are in.");
+        await held;
+        return "Sources are in.";
+      },
+      (options) => {
+        options.onSegment?.("Should never speak.");
+        return "Should never speak.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "where are we{Enter}");
+    await waitFor(() => expect(screen.getByText("Sources are in.")).toBeInTheDocument());
+
+    // Writer leaves the group mid-exchange. Hiding is the quickest real UI
+    // path to it; dragging it out sets the same field.
+    fireEvent.contextMenu(within(conversations).getByRole("button", { name: /Writer/ }));
+    await user.click(await screen.findByText("Hide from sidebar"));
+    release();
+
+    // It must not speak on behalf of a group it is no longer in. Membership
+    // is re-read per speaker, so only the first member's turn ever ran.
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(screen.queryByText("Should never speak.")).not.toBeInTheDocument();
+    expect(calls.length).toBe(1);
+  });
+
+  it("names who stayed out when the whole room does", async () => {
+    const user = userEvent.setup();
+    responderPick = (names) => names;
+    script = [
+      (options) => {
+        options.onSegment?.("PASS");
+        return "PASS";
+      },
+      (options) => {
+        options.onSegment?.("PASS");
+        return "PASS";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "cheers all{Enter}");
+
+    // An empty screen is indistinguishable from a broken app. Both thinking
+    // blobs appeared, so both are accounted for by name — and the way out is
+    // one @ away.
+    expect(
+      await screen.findByText(/Researcher and Writer had nothing to add \u2014 @ a Blob/),
+    ).toBeInTheDocument();
+  });
+
+  it("flags a group unread when a reply lands while you are elsewhere", async () => {
+    const user = userEvent.setup();
+    responderPick = (names) => names.filter((name) => name === "Researcher");
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    script = [
+      async (options) => {
+        // Held open so the user can switch away mid-exchange — which is the
+        // whole case: a group runs several turns and they rarely watch it out.
+        await held;
+        options.onSegment?.("Sources are in.");
+        return "Sources are in.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "where are we{Enter}");
+    await waitFor(() => expect(calls.length).toBe(1));
+
+    await user.click(await within(conversations).findByRole("button", { name: /Researcher/ }));
+    release();
+
+    // The words land in the group's own transcript, so no member's unread dot
+    // can stand in for this.
+    const unread = await within(conversations).findByRole("button", {
+      name: "Launch, unread messages",
+    });
+
+    // Reading it is what clears it — and it stays cleared across a reload.
+    await user.click(unread);
+    await waitFor(() =>
+      expect(within(conversations).getByRole("button", { name: "Launch" })).toBeInTheDocument(),
+    );
+    window.dispatchEvent(new Event("beforeunload"));
+    expect((await store.loadGroups())?.[0]?.unread).toBe(false);
+  });
+
+  it("says the model is missing once, not once per member", async () => {
+    const user = userEvent.setup();
+    await seedGroup();
+    mountWithModel({ model: "" });
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "hello{Enter}");
+
+    // One app-level problem, said once — not shouted by every Blob in the room.
+    expect(await screen.findAllByText(/pick one in Settings/)).toHaveLength(1);
+  });
+
+  it("says so when the router picks nobody, rather than going silent", async () => {
+    const user = userEvent.setup();
+    // Silence is a legitimate answer in a group, but an app that shows
+    // nothing at all is indistinguishable from a broken one.
+    responderPick = () => [];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "thanks all{Enter}");
+
+    expect(await screen.findByText(/No one here picked this up/)).toBeInTheDocument();
+    expect(calls.length).toBe(0);
+  });
+
+  it("pulls in the teammate a responder hands the next step to, and only them", async () => {
+    const user = userEvent.setup();
+    responderPick = (names) => names.filter((name) => name === "Researcher");
+    script = [
+      (options) => {
+        // A hand-off (sentence-opening) and a passing reference in the same
+        // reply. Only the hand-off wakes anyone — sim:group caught a Blob
+        // referring to two teammates and waking both to say nothing.
+        options.onSegment?.("Sources are in. @Writer draft it, and tell @Researcher later.");
+        return "handed over";
+      },
+      (options) => {
+        options.onSegment?.("Drafting now.");
+        return "Drafting now.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText(/^Message Launch/), "where are we{Enter}");
+
+    await waitFor(() => expect(screen.getByText("Drafting now.")).toBeInTheDocument());
+    // Two turns: the picked Blob, then the one it handed to. The Blob it only
+    // referred to stays out, and a Blob that has spoken never speaks twice —
+    // between them, an exchange always ends.
+    expect(calls.length).toBe(2);
+    expect(calls[1]?.roster?.selfName).toBe("Writer");
+  });
+
+  it("asks only the mentioned member of a group", async () => {
+    const user = userEvent.setup();
+    script = [
+      (options) => {
+        options.onSegment?.("On it.");
+        return "On it.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText("Message Launch"), "@Writer draft it{Enter}");
+
+    await waitFor(() => expect(screen.getByText("On it.")).toBeInTheDocument());
+    // One turn, and it is the mentioned Blob's: the other member stays quiet.
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.roster?.selfName).toBe("Writer");
   });
 
   it("gives the turn its own identity, and no servers when none are configured", async () => {

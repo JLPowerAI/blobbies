@@ -115,6 +115,23 @@ describe("blobSystemPrompt", () => {
     expect(line).toContain("run_subagent");
   });
 
+  it("names the other members of a group, and only in a group", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const blob = { name: "Researcher" };
+    // No group: not a word about one, so the tuned one-to-one prompt is
+    // byte-identical to what it was before group chats existed.
+    expect(blobSystemPrompt(blob)).not.toContain("Group chat");
+
+    const prompt = blobSystemPrompt(blob, undefined, {
+      group: { name: "Launch", others: ["Writer"] },
+    });
+    expect(prompt).toContain("Launch");
+    expect(prompt).toContain("Writer");
+    // The label rule is the load-bearing part: another Blob's line arrives in
+    // the user role, so unexplained it reads as the user's own words.
+    expect(prompt).toContain("[Name]");
+  });
+
   it("uses hand-written instructions verbatim instead of the generated role", async () => {
     const { blobSystemPrompt } = await import("@/lib/ai");
     const blob = {
@@ -241,6 +258,36 @@ describe("streamBlobTurn", () => {
     });
     expect(configured).toEqual([{ title: "Therapist", description: "Listens first." }]);
     expect(text).toBe("All set.");
+  });
+
+  it("a pre-classified turn neither routes, writes memory, nor reconfigures", async () => {
+    // What a group turn is: the room classified the message once, before
+    // anyone spoke, and applied the write itself.
+    const requests: Record<string, unknown>[] = [];
+    fetchHandler = async (_input, init) => {
+      requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return ndjson(textChunks("Sure."));
+    };
+    const saved: unknown[] = [];
+    const configured: unknown[] = [];
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "be my writing coach instead" }],
+      // change_job is the dangerous one: `applyGroupIntent` drops it because
+      // in a room it has no unambiguous subject, so reconfiguring whichever
+      // member answered would be a silent destructive guess.
+      intent: { action: "change_job", needsWeb: false },
+      memory: { list: () => [], save: (next) => saved.push(next) },
+      onSegment: () => {},
+      onConfigure: (patch) => configured.push(patch),
+    });
+    expect(text).toBe("Sure.");
+    expect(saved).toEqual([]);
+    expect(configured).toEqual([]);
+    // Exactly one call: the streamed turn. No router, no forced-configure
+    // round — both would be structured calls carrying `format`.
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.format).toBeUndefined();
   });
 
   it("never offers memory tools to the loop, so a freelance forget cannot delete", async () => {
@@ -404,7 +451,7 @@ describe("streamBlobTurn routine scope", () => {
       scope: "routine",
       home: memoryHome(),
       roster: {
-        access: { list: () => [], create: () => {}, delete: () => {} },
+        access: { list: () => [], create: () => {}, delete: () => {}, message: () => "sent" },
         selfName: "Ken",
       },
       memory: { list: () => [], save: () => {} },
@@ -418,6 +465,7 @@ describe("streamBlobTurn routine scope", () => {
       "delete_blob",
       "delete_file",
       "list_files",
+      "message_blob",
       "read_file",
       "run_subagent",
       "spawn_blob",
@@ -445,7 +493,7 @@ describe("streamBlobTurn routine scope", () => {
       messages: [{ role: "user", content: "hello" }],
       home: memoryHome(),
       roster: {
-        access: { list: () => [], create: () => {}, delete: () => {} },
+        access: { list: () => [], create: () => {}, delete: () => {}, message: () => "sent" },
         selfName: "Ken",
       },
       memory: { list: () => [], save: () => {} },
@@ -640,7 +688,7 @@ describe("streamBlobTurn routine scope", () => {
       scope: "routine",
       home: memoryHome(),
       roster: {
-        access: { list: () => [], create: () => {}, delete: () => {} },
+        access: { list: () => [], create: () => {}, delete: () => {}, message: () => "sent" },
         selfName: "Ken",
       },
       memory: { list: () => [], save: () => {} },
@@ -656,6 +704,8 @@ describe("streamBlobTurn routine scope", () => {
       "web_search",
     ]);
     // Spelled out, because each absence is a separate promise to the user.
+    // message_blob among them: a helper that could wake other Blobs would put
+    // a whole hand-off chain behind a tool call the user never sees.
     for (const forbidden of [
       "run_subagent",
       "write_file",
@@ -663,6 +713,7 @@ describe("streamBlobTurn routine scope", () => {
       "ask_user",
       "spawn_blob",
       "delete_blob",
+      "message_blob",
     ]) {
       expect(helperCatalog, `helper was offered ${forbidden}`).not.toContain(forbidden);
     }

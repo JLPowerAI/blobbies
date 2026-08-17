@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Agent } from "@/data/agents";
+import type { Agent, Message } from "@/data/agents";
+import { groupConversationId } from "@/lib/groups";
 import * as store from "@/lib/store";
 
 const BLOB_ID = "61ec34f1-9ba5-4eff-b8e1-7acefb2148ea";
@@ -96,6 +97,39 @@ describe("store (browser fallback)", () => {
     store.saveUserMemories({ oops: true } as never);
     window.dispatchEvent(new Event("beforeunload"));
     expect(await store.loadUserMemories()).toBeNull();
+  });
+
+  it("routes a conversation write by its id, group or Blob", async () => {
+    const GROUP_ID = "9f1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d";
+    const line = (id: string): Message => ({
+      id,
+      kind: "text",
+      author: "user",
+      segments: [{ text: id }],
+    });
+    // The turn loop knows only a conversation id, so this is the seam that
+    // keeps a group reply out of the speaking Blob's own transcript.
+    store.saveConversation(groupConversationId(GROUP_ID), [line("g1")]);
+    store.saveConversation(BLOB_ID, [line("b1")]);
+    window.dispatchEvent(new Event("beforeunload"));
+
+    expect(await store.loadGroupTranscript(GROUP_ID)).toEqual([line("g1")]);
+    expect(await store.loadBlobTranscript(BLOB_ID)).toEqual([line("b1")]);
+  });
+
+  it("round-trips the group list, and reads a hand-edited one as none", async () => {
+    expect(await store.loadGroups()).toBeNull();
+
+    const groups = [{ id: "9f1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d", name: "Launch" }];
+    store.saveGroups(groups);
+    window.dispatchEvent(new Event("beforeunload"));
+    expect(await store.loadGroups()).toEqual(groups);
+
+    // Same rule as the memories slice: a non-array value on disk reads as
+    // nothing rather than as a group list.
+    store.saveGroups({ oops: true } as never);
+    window.dispatchEvent(new Event("beforeunload"));
+    expect(await store.loadGroups()).toBeNull();
   });
 
   it("exportBlob is a no-op outside Tauri rather than throwing", async () => {

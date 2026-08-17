@@ -258,7 +258,7 @@ describe("App", () => {
     render(<App />);
     await createFirstBlob(user, "Ken");
 
-    await user.click(screen.getByRole("button", { name: "New Blob" }));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
     const toField = screen.getByLabelText("Search or create Blobs");
     expect(toField).toHaveFocus();
 
@@ -271,17 +271,54 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "Zed", level: 1 })).toBeInTheDocument();
   });
 
+  it("starts a group chat from the palette, and drops the old empty section", async () => {
+    // A leftover "New section" from the sidebar's removed add button: empty
+    // scaffolding, so the migration must not seed a placeholder group with it.
+    const store = new Map<string, string>([["pref:sections", JSON.stringify(["New section"])]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await createFirstBlob(user, "Ken");
+
+      await user.click(screen.getByRole("button", { name: "New chat" }));
+      await user.type(screen.getByLabelText("Search or create Blobs"), "Launch");
+      await user.click(screen.getByRole("button", { name: 'New group chat "Launch"' }));
+
+      // The group opens on creation, named as typed and empty until Blobs are
+      // dragged in — which the empty state has to say, since nothing else does.
+      expect(screen.getByLabelText("Group name")).toHaveValue("Launch");
+      const conversations = screen.getByRole("navigation", { name: "Conversations" });
+      expect(within(conversations).getByText("Drag Blobs here to add them")).toBeInTheDocument();
+      expect(within(conversations).queryByText("New section")).not.toBeInTheDocument();
+
+      // A second group asking for the same name gets a suffix instead. The
+      // name IS the membership key (a Blob's `section`), so two groups
+      // sharing one would each claim the other's Blobs.
+      await user.click(screen.getByRole("button", { name: "New chat" }));
+      await user.type(screen.getByLabelText("Search or create Blobs"), "launch");
+      await user.click(screen.getByRole("button", { name: 'New group chat "launch"' }));
+      expect(screen.getByLabelText("Group name")).toHaveValue("launch 2");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("opens an existing Blob from the palette and dismisses on Escape", async () => {
     const user = userEvent.setup();
     render(<App />);
     await createFirstBlob(user, "Ken");
 
-    await user.click(screen.getByRole("button", { name: "New Blob" }));
-    const palette = screen.getByRole("region", { name: "New Blob" });
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    const palette = screen.getByRole("region", { name: "New chat" });
     await user.click(within(palette).getByRole("button", { name: /Ken/ }));
     expect(screen.getByRole("heading", { name: "Ken", level: 1 })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "New Blob" }));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
     await user.keyboard("{Escape}");
     expect(screen.queryByLabelText("Search or create Blobs")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Ken", level: 1 })).toBeInTheDocument();
@@ -292,7 +329,7 @@ describe("App", () => {
     render(<App />);
     await createFirstBlob(user, "Ken");
     // A second Blob, so picking one is a real choice rather than the only row.
-    await user.click(screen.getByRole("button", { name: "New Blob" }));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
     await user.type(screen.getByLabelText("Search or create Blobs"), "Zed");
     await user.click(screen.getByRole("button", { name: 'Create new Blob "Zed"' }));
     await user.click(screen.getByRole("button", { name: "Get started" }));
@@ -344,6 +381,39 @@ describe("App", () => {
     // Back returns to the info view.
     await user.click(within(panel).getByRole("button", { name: "Back" }));
     expect(screen.getByRole("complementary", { name: "Kenji details" })).toBeInTheDocument();
+  });
+
+  it("never lets two Blobs answer to the same name", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Scout");
+
+    // `@Scout` resolves to the first match, so a second one would be
+    // permanently unmentionable and the user could not say which they meant.
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await user.type(screen.getByLabelText("Search or create Blobs"), "scout");
+    await user.click(screen.getByRole("button", { name: 'Create new Blob "scout"' }));
+    await user.click(screen.getByRole("button", { name: "Get started" }));
+    expect(screen.getByRole("heading", { name: "scout 2", level: 1 })).toBeInTheDocument();
+
+    // Renaming onto a taken name is refused the same way — the settings
+    // field is the only rename UI, so this is the other half of the rule.
+    await user.click(screen.getByRole("button", { name: "scout 2 settings" }));
+    const panel = screen.getByRole("complementary", { name: "scout 2 settings" });
+    const field = within(panel).getByLabelText("Name");
+    await user.clear(field);
+    // Typed in full first: settling per keystroke would fight the user — this
+    // name passes the taken "Scout" on its way to "Scout Two".
+    await user.type(field, "Scout Two");
+    expect(field).toHaveValue("Scout Two");
+    await user.tab();
+    expect(screen.getByRole("heading", { name: "Scout Two", level: 1 })).toBeInTheDocument();
+
+    // But landing on the taken name itself is still refused.
+    await user.clear(field);
+    await user.type(field, "Scout");
+    await user.tab();
+    expect(screen.getByRole("heading", { name: "Scout 2", level: 1 })).toBeInTheDocument();
   });
 
   it("opens app settings from the account menu and edits preferences", async () => {
@@ -666,7 +736,7 @@ describe("App", () => {
     expect(screen.queryByRole("menuitem", { name: "Duplicate" })).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
 
-    await user.click(screen.getByRole("button", { name: "New Blob" }));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
     await user.type(screen.getByLabelText("Search or create Blobs"), "Zed");
     await user.click(screen.getByRole("button", { name: 'Create new Blob "Zed"' }));
 
@@ -677,8 +747,10 @@ describe("App", () => {
     expect((await loadRoster())?.length).toBe(MAX_BLOBS);
   });
 
-  it("collapses a section and keeps its Blobs out of the list", async () => {
-    // Sections live in localStorage, which this jsdom build does not provide.
+  it("collapses a group and keeps its Blobs out of the list", async () => {
+    // Seeded as a pre-group-chat "section" — which also proves the migration
+    // into real groups keeps the Blobs that were in it.
+    // Preferences live in localStorage, which this jsdom build does not provide.
     const store = new Map<string, string>([["pref:sections", JSON.stringify(["Work"])]]);
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => store.get(key) ?? null,
@@ -695,7 +767,10 @@ describe("App", () => {
       // drop target — so `inert` is what takes them off the tab order.
       const rows = () =>
         conversations.querySelector('[data-drop="section:Work"] .agent-group-rows');
-      const toggle = within(conversations).getByRole("button", { name: /Work/ });
+      // The name opens the group's chat now; collapsing is the chevron beside it.
+      const toggle = within(conversations).getByRole("button", {
+        name: /^(Collapse|Expand) Work$/,
+      });
       expect(toggle).toHaveAttribute("aria-expanded", "true");
       expect(rows()).not.toHaveAttribute("inert");
 

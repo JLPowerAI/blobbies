@@ -61,7 +61,7 @@ const TABS: Tab[] = [
     label: "Groups",
     icon: Users,
     empty: "No group chats yet",
-    none: "No group chats yet",
+    none: "No groups found",
   },
   { id: "file", label: "Files", icon: FileText, empty: "No files yet", none: "No files found" },
   { id: "link", label: "Links", icon: Link2, empty: "No links yet", none: "No links found" },
@@ -82,7 +82,7 @@ const TABS: Tab[] = [
 ];
 
 /** Kinds the All tab concatenates, in order. */
-const ALL_ORDER: SearchKind[] = ["blob", "message", "file", "link", "routine", "action"];
+const ALL_ORDER: SearchKind[] = ["blob", "group", "message", "file", "link", "routine", "action"];
 
 /** Kinds whose rows need the per-Blob reads (transcripts, routines, files). */
 const DEEP_TABS: TabId[] = ["message", "file", "link", "routine"];
@@ -92,6 +92,8 @@ interface SearchModalProps {
   /** Transcripts the app already holds; the rest are read on demand. */
   transcripts: Record<string, Message[]>;
   routines: Record<string, Routine[]>;
+  /** Group chats, listed on the Groups tab and switchable from here. */
+  groups: { id: string; name: string; memberNames: string[] }[];
   /** False when no conversation is open, which hides the Chat Settings action. */
   hasChat: boolean;
   onSelect: (result: SearchResult) => void;
@@ -122,15 +124,17 @@ function RowIcon({ result, agent }: { result: SearchResult; agent: Agent | undef
   // Actions wear the icon of where they lead, matching the sidebar footer.
   const action = result.kind === "action" ? result.action : undefined;
   const Glyph =
-    result.kind === "link"
-      ? Link2
-      : result.kind === "routine"
-        ? Clock
-        : action === "plugins"
-          ? Plug
-          : action === undefined
-            ? Command
-            : Settings;
+    result.kind === "group"
+      ? Users
+      : result.kind === "link"
+        ? Link2
+        : result.kind === "routine"
+          ? Clock
+          : action === "plugins"
+            ? Plug
+            : action === undefined
+              ? Command
+              : Settings;
   return (
     <span className="search-row-glyph" aria-hidden="true">
       <Glyph size={15} strokeWidth={1.8} />
@@ -149,6 +153,7 @@ function RowIcon({ result, agent }: { result: SearchResult; agent: Agent | undef
  */
 export function SearchModal({
   agents,
+  groups,
   transcripts,
   routines,
   hasChat,
@@ -219,10 +224,11 @@ export function SearchModal({
         // and actions cost no disk read at all.
         transcripts: { ...loaded?.transcripts, ...transcripts },
         routines: { ...loaded?.routines, ...routines },
+        groups,
         files: loaded?.files ?? {},
         hasChat,
       }),
-    [agents, transcripts, loaded, routines, hasChat],
+    [agents, groups, transcripts, loaded, routines, hasChat],
   );
 
   const rows = useMemo(() => {
