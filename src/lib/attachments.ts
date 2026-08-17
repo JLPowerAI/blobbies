@@ -263,11 +263,18 @@ export async function saveAttachments(
   } catch {
     // No listing (dev backend, IPC hiccup): dedupe within the batch only.
   }
-  for (const file of files.slice(0, MAX_ATTACHMENTS)) {
+  // Extraction runs for every file at once: a PDF parse and an OCR pass are
+  // seconds each, and done one after another six files would take six times as
+  // long for no reason — they do not touch each other's state. The *saving*
+  // below stays sequential, because `taken` is what stops two files claiming
+  // one name.
+  const results = await Promise.all(files.slice(0, MAX_ATTACHMENTS).map(readText));
+
+  for (const [index, file] of files.slice(0, MAX_ATTACHMENTS).entries()) {
     const label = attachmentName(file.name);
-    const result = await readText(file);
-    if ("reason" in result) {
-      rejected.push({ name: label, reason: result.reason });
+    const result = results[index];
+    if (result === undefined || "reason" in result) {
+      rejected.push({ name: label, reason: result?.reason ?? "it couldn't be read" });
       continue;
     }
     // An extracted file is stored as `report.pdf.txt`: what lands on disk is

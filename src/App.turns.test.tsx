@@ -197,19 +197,22 @@ describe("turn wiring", () => {
 
     // Extraction that never settles: a PDF parse or an OCR pass takes seconds,
     // and the user's own message must not wait behind it.
-    const slow = new Promise<string>(() => {});
-    vi.spyOn(File.prototype, "arrayBuffer").mockReturnValue(slow as never);
+    vi.spyOn(File.prototype, "arrayBuffer").mockReturnValue(new Promise<never>(() => {}));
+    try {
+      await user.upload(screen.getByLabelText("Attach files"), [
+        new File(["seat,price"], "seats.csv", { type: "text/csv" }),
+      ]);
+      await user.click(screen.getByRole("button", { name: "Send message" }));
 
-    await user.upload(screen.getByLabelText("Attach files"), [
-      new File(["seat,price"], "seats.csv", { type: "text/csv" }),
-    ]);
-    await user.click(screen.getByRole("button", { name: "Send message" }));
-
-    // On screen immediately, with the file it carries and no size yet — there
-    // is nothing to report until the read finishes.
-    const chip = (await screen.findByText("reading…")).closest(".attachment-chip");
-    expect(chip).toHaveTextContent("seats.csv");
-    vi.restoreAllMocks();
+      // On screen immediately, with the file it carries and no size yet —
+      // there is nothing to report until the read finishes.
+      const chip = (await screen.findByText("reading…")).closest(".attachment-chip");
+      expect(chip).toHaveTextContent("seats.csv");
+    } finally {
+      // In a finally, or a failed assertion leaves every later test with a
+      // File.arrayBuffer that never resolves.
+      vi.restoreAllMocks();
+    }
   });
 
   it("accumulates tokens across an ask instead of losing the first leg", async () => {

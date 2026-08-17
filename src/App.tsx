@@ -1047,10 +1047,18 @@ export function App() {
     // The message goes up straight away, carrying the files it came with.
     // Reading them is the slow part — a PDF parse, or seconds per page of OCR
     // — and making the user watch their own message wait on that felt broken.
-    const pending = [...files].map((file) => ({
-      name: attachmentName(file.name),
-      bytes: file.size,
-    }));
+    // Names are made unique the way `saveAttachments` will make them unique
+    // anyway: picking one file twice must not render as two identical chips.
+    const claimed = new Set<string>();
+    const pending = [...files].map((file) => {
+      const base = attachmentName(file.name);
+      let name = base;
+      for (let suffix = 1; claimed.has(name); suffix++) {
+        name = `${base}-${suffix}`;
+      }
+      claimed.add(name);
+      return { name, bytes: file.size };
+    });
     const message = userMessage(text, replyTo, pending);
     appendMessage(target.id, message);
     touchActivity(target.id, text.trim() === "" ? pending.map((p) => p.name).join(", ") : text);

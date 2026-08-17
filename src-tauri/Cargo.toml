@@ -81,6 +81,15 @@ dbg_macro = "deny"
 [profile.dev]
 incremental = true
 
+# Optimize dependencies even in dev builds. OCR is number crunching in `ocrs`,
+# `rten` and `image`, and unoptimized it runs ~30x slower — measured on one
+# 800x229 image: 4.4s debug, 150ms release. Our own crate stays unoptimized, so
+# incremental rebuilds and backtraces are unaffected; only the first build after
+# a clean checkout pays for this.
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 codegen-units = 1
 lto = true
