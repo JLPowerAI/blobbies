@@ -29,6 +29,7 @@ import {
 import { blobSystemPrompt, streamBlobTurn, timeNote, trimHistory } from "@/lib/ai";
 import {
   type Attachment,
+  attachmentName,
   attachmentsPrompt,
   rejectionNote,
   saveAttachments,
@@ -105,6 +106,12 @@ export function App() {
   const [detailOpen, setDetailOpen] = useState(false);
   /** Bumped when the Blob's home folder changed, so the Files list re-reads. */
   const [filesKey, setFilesKey] = useState(0);
+  /**
+   * Messages whose attachments are still being read. Transient on purpose:
+   * it describes work in this session, so it must never reach the transcript
+   * on disk and outlive the read it refers to.
+   */
+  const [readingMessages, setReadingMessages] = useState<string[]>([]);
   const [detailView, setDetailView] = useState<
     { kind: "info" } | { kind: "settings" } | { kind: "routine"; routineId: string }
   >({ kind: "info" });
@@ -924,31 +931,53 @@ export function App() {
     activeTurn.current?.abort.abort();
   };
 
-  /**
-   * Put the user's message in the transcript and get a reply going.
-   *
-   * Attachments are already saved in the Blob's home folder by here; the
-   * message carries only their names (see lib/attachments).
-   */
-  const dispatchMessage = (
-    target: Agent,
+  /** The user's message, as it goes into the transcript. */
+  const userMessage = (
     text: string,
     replyTo: string | undefined,
     attachments: Attachment[],
-  ) => {
-    const now = Date.now();
-    const message: Message = {
-      id: `sent-${now}`,
-      kind: "text",
-      author: "user",
-      segments: [{ text }],
-      timestampMs: now,
-      ...(replyTo === undefined ? {} : { replyTo }),
-      ...(attachments.length === 0 ? {} : { attachments }),
-    };
-    appendMessage(target.id, message);
-    const summary = text.trim() === "" ? attachments.map((entry) => entry.name).join(", ") : text;
-    touchActivity(target.id, summary);
+  ): Extract<Message, { kind: "text" }> => ({
+    // Unique rather than time-based: this id addresses the message for the
+    // attachment patch below, and two sends inside the same millisecond would
+    // otherwise collide and patch each other.
+    id: `sent-${crypto.randomUUID()}`,
+    kind: "text",
+    author: "user",
+    segments: [{ text }],
+    timestampMs: Date.now(),
+    ...(replyTo === undefined ? {} : { replyTo }),
+    ...(attachments.length === 0 ? {} : { attachments }),
+  });
+
+  /** Swap placeholder attachments for the ones that actually got saved. */
+  const settleAttachments = (agentId: string, id: string, attachments: Attachment[]) => {
+    setSentByAgent((previous) => {
+      const next = (previous[agentId] ?? []).map((entry) =>
+        entry.id === id && entry.kind === "text" ? { ...entry, attachments } : entry,
+      );
+      store.saveBlobTranscript(agentId, next);
+      return { ...previous, [agentId]: next };
+    });
+  };
+
+  /** Take back a message whose files all turned out to be unreadable. */
+  const dropMessage = (agentId: string, id: string) => {
+    setSentByAgent((previous) => {
+      const next = (previous[agentId] ?? []).filter((entry) => entry.id !== id);
+      store.saveBlobTranscript(agentId, next);
+      return { ...previous, [agentId]: next };
+    });
+  };
+
+  /**
+   * Get a reply going for a message already in the transcript.
+   *
+   * Any attachments are saved in the Blob's home folder by here; the message
+   * carries only their names (see lib/attachments).
+   */
+  const startTurn = (target: Agent, message: Extract<Message, { kind: "text" }>) => {
+    const text = message.segments.map((segment) => segment.text).join("");
+    const attachments = message.attachments ?? [];
     // Follow-up: this Blob is mid-turn, so the message steers the running
     // loop (gg-agent folds it in between tool rounds) — no second turn.
     // The running loop never re-reads history, so a steering message has to
@@ -973,10 +1002,13 @@ export function App() {
     void queueTurn(() => {
       // Read history through the ref: this may run after other queued turns.
       const sent = sentRef.current[target.id] ?? [];
-      // ...but the ref only refreshes on re-render, and saving attachments
-      // defers this call past the append, so the message that started the
-      // turn can still be missing from the snapshot. Fold it in by id.
-      const own = sent.some((entry) => entry.id === message.id) ? sent : [...sent, message];
+      // ...but the ref only refreshes on re-render, so the snapshot can either
+      // be missing this message or still hold its pre-extraction copy, whose
+      // attachments include files that were then rejected. The caller's copy
+      // is the settled one, so it wins.
+      const own = sent.some((entry) => entry.id === message.id)
+        ? sent.map((entry) => (entry.id === message.id ? message : entry))
+        : [...sent, message];
       const history = [...transcriptFor(target), ...own];
       return requestReply(
         target,
@@ -1006,13 +1038,25 @@ export function App() {
     lastSend.current = { text, at: now };
     const target = agent;
     if (!attaching) {
-      dispatchMessage(target, text, replyTo, []);
+      const message = userMessage(text, replyTo, []);
+      appendMessage(target.id, message);
+      touchActivity(target.id, text);
+      startTurn(target, message);
       return;
     }
-    // Save first: what lands in the transcript is what the Blob can actually
-    // read, and anything refused says so on its own line instead of silently
-    // going missing.
+    // The message goes up straight away, carrying the files it came with.
+    // Reading them is the slow part — a PDF parse, or seconds per page of OCR
+    // — and making the user watch their own message wait on that felt broken.
+    const pending = [...files].map((file) => ({
+      name: attachmentName(file.name),
+      bytes: file.size,
+    }));
+    const message = userMessage(text, replyTo, pending);
+    appendMessage(target.id, message);
+    touchActivity(target.id, text.trim() === "" ? pending.map((p) => p.name).join(", ") : text);
+    setReadingMessages((ids) => [...ids, message.id]);
     void saveAttachments(homeFor(target.id), files).then(({ saved, rejected }) => {
+      setReadingMessages((ids) => ids.filter((id) => id !== message.id));
       if (rejected.length > 0) {
         appendMessage(target.id, {
           id: `event-${Date.now()}`,
@@ -1024,10 +1068,14 @@ export function App() {
       if (saved.length > 0) {
         setFilesKey((key) => key + 1);
       }
+      // Nothing readable and nothing said: the message had no content of its
+      // own, so it comes back out rather than sitting there empty.
       if (saved.length === 0 && text.trim() === "") {
+        dropMessage(target.id, message.id);
         return;
       }
-      dispatchMessage(target, text, replyTo, saved);
+      settleAttachments(target.id, message.id, saved);
+      startTurn(target, { ...message, attachments: saved });
     });
   };
 
@@ -1121,6 +1169,7 @@ export function App() {
           onReasoningChange={changeReasoning}
           onSend={sendMessage}
           onStop={stopTurn}
+          readingMessages={readingMessages}
           {...(runsByBlob[agent.id]?.status === "waiting_input" &&
           runsByBlob[agent.id]?.askKind !== undefined
             ? { waitingAsk: runsByBlob[agent.id]?.askKind }

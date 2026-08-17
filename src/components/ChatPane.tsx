@@ -48,6 +48,11 @@ interface ChatPaneProps {
   onReasoningChange: (on: boolean) => void;
   /** Files ride along with the message; the app saves them to the Blob's home. */
   onSend: (text: string, replyTo?: string, files?: readonly File[]) => void;
+  /**
+   * Ids of messages whose attachments are still being extracted — a PDF parse
+   * or an OCR pass runs for seconds after the message is already on screen.
+   */
+  readingMessages?: readonly string[];
   /** Abort the in-flight reply, keeping any partial text. */
   onStop?: () => void;
   /** The Blob paused mid-task and waits on the user (ask_user). */
@@ -90,7 +95,14 @@ function fileSize(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`;
 }
 
-function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }) {
+function TextBubble({
+  message,
+  reading,
+}: {
+  message: Extract<Message, { kind: "text" }>;
+  /** Its files are still being read, so the chips show that instead of a size. */
+  reading: boolean;
+}) {
   // An ask renders as a highlighted card: the Blob paused its task and needs
   // the user — "action" means "do this yourself" (login, click, paste).
   const askClass =
@@ -114,7 +126,9 @@ function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }
             <span key={attachment.name} className="attachment-chip">
               <FileText size={13} strokeWidth={1.8} aria-hidden="true" />
               <span className="attachment-chip-name">{attachment.name}</span>
-              <span className="attachment-chip-size">{fileSize(attachment.bytes)}</span>
+              <span className="attachment-chip-size">
+                {reading ? "reading…" : fileSize(attachment.bytes)}
+              </span>
             </span>
           ))}
         </span>
@@ -166,6 +180,8 @@ interface MessageRowProps {
   fresh: boolean;
   /** The cursor is known to be elsewhere: suppresses a latched :hover. */
   stale: boolean;
+  /** This message's attachments are still being extracted. */
+  reading: boolean;
   onEnter: () => void;
   onTogglePicker: () => void;
   onReact: (emoji: string) => void;
@@ -179,6 +195,7 @@ function MessageRow({
   pickerOpen,
   fresh,
   stale,
+  reading,
   onEnter,
   onTogglePicker,
   onReact,
@@ -250,7 +267,7 @@ function MessageRow({
         </div>
       ) : null}
       {message.kind === "text" ? (
-        <TextBubble message={message} />
+        <TextBubble message={message} reading={reading} />
       ) : (
         <FileBubble message={message} />
       )}
@@ -291,6 +308,7 @@ export function ChatPane({
   onSend,
   onStop,
   waitingAsk,
+  readingMessages = [],
   detailOpen,
   onToggleDetail,
   onOpenSettings,
@@ -785,6 +803,7 @@ export function ChatPane({
               reaction={reactions[message.id]}
               pickerOpen={pickerFor === message.id}
               stale={hoverId !== undefined && hoverId !== message.id}
+              reading={readingMessages.includes(message.id)}
               onEnter={() => setHoverId(message.id)}
               onTogglePicker={() => setPickerFor(pickerFor === message.id ? null : message.id)}
               onReact={(emoji) => toggleReaction(message.id, emoji)}
