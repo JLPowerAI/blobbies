@@ -1,34 +1,14 @@
 import { type FormEvent, useState } from "react";
+import { AvatarPicker } from "@/components/AvatarPicker";
 import { BlobAvatar } from "@/components/BlobAvatar";
-import { type AgentShape, type AvatarTone, MAX_BLOB_NAME_LENGTH } from "@/data/agents";
+import { type AgentShape, type AvatarTone, MAX_BLOB_NAME_LENGTH, MAX_BLOBS } from "@/data/agents";
 
 interface CreatorPaneProps {
   initialName: string;
+  /** Roster is full: the form explains why, instead of failing silently. */
+  atCapacity?: boolean;
   onCreate: (name: string, tone: AvatarTone, shape: AgentShape) => void;
 }
-
-const TONES: readonly AvatarTone[] = [
-  "brown",
-  "red",
-  "orange",
-  "gold",
-  "green",
-  "teal",
-  "blue",
-  "purple",
-  "pink",
-  "gray",
-];
-
-const SHAPES: readonly AgentShape[] = [
-  "sphere",
-  "droplet",
-  "cloud",
-  "egg",
-  "pebble",
-  "triangle",
-  "squircle",
-];
 
 interface Suggestion {
   name: string;
@@ -62,7 +42,7 @@ const SUGGESTIONS: readonly Suggestion[] = [
  * Blob creator: avatar tone/shape picker, name field and starter suggestions.
  * Shown as the first-run screen and when adding another Blob.
  */
-export function CreatorPane({ initialName, onCreate }: CreatorPaneProps) {
+export function CreatorPane({ initialName, atCapacity = false, onCreate }: CreatorPaneProps) {
   const [name, setName] = useState(initialName.slice(0, MAX_BLOB_NAME_LENGTH));
   const [tone, setTone] = useState<AvatarTone>("blue");
   const [shape, setShape] = useState<AgentShape>("sphere");
@@ -71,7 +51,7 @@ export function CreatorPane({ initialName, onCreate }: CreatorPaneProps) {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (trimmed.length === 0) {
+    if (trimmed.length === 0 || atCapacity) {
       return;
     }
     onCreate(trimmed, tone, shape);
@@ -100,47 +80,18 @@ export function CreatorPane({ initialName, onCreate }: CreatorPaneProps) {
           <BlobAvatar tone={tone} shape={shape} size={64} />
         </div>
 
-        <fieldset className="creator-swatches">
-          <legend className="visually-hidden">Color</legend>
-          {TONES.map((option) => (
-            <label
-              key={option}
-              className={tone === option ? "tone-swatch tone-swatch-active" : "tone-swatch"}
-              data-tone={option}
-            >
-              <input
-                type="radio"
-                name="blob-tone"
-                className="visually-hidden"
-                value={option}
-                checked={tone === option}
-                onChange={() => setTone(option)}
-                aria-label={option}
-              />
-            </label>
-          ))}
-        </fieldset>
-
-        <fieldset className="creator-shapes">
-          <legend className="visually-hidden">Shape</legend>
-          {SHAPES.map((option) => (
-            <label
-              key={option}
-              className={shape === option ? "shape-option shape-option-active" : "shape-option"}
-            >
-              <input
-                type="radio"
-                name="blob-shape"
-                className="visually-hidden"
-                value={option}
-                checked={shape === option}
-                onChange={() => setShape(option)}
-                aria-label={option}
-              />
-              <BlobAvatar tone={tone} shape={option} size={26} />
-            </label>
-          ))}
-        </fieldset>
+        <AvatarPicker
+          tone={tone}
+          shape={shape}
+          group="creator"
+          onChange={(patch) => {
+            if ("tone" in patch) {
+              setTone(patch.tone);
+            } else {
+              setShape(patch.shape);
+            }
+          }}
+        />
 
         <div className="creator-field">
           <label className="creator-label" htmlFor="creator-name">
@@ -161,9 +112,18 @@ export function CreatorPane({ initialName, onCreate }: CreatorPaneProps) {
           ) : null}
         </div>
 
-        <button type="submit" className="creator-submit" disabled={trimmed.length === 0}>
+        <button
+          type="submit"
+          className="creator-submit"
+          disabled={trimmed.length === 0 || atCapacity}
+        >
           Get started
         </button>
+        {atCapacity ? (
+          <p className="creator-hint">
+            You have the maximum of {MAX_BLOBS} Blobs. Delete one to make room.
+          </p>
+        ) : null}
       </form>
 
       <section className="creator-suggestions" aria-label="Suggestions">

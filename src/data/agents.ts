@@ -135,6 +135,19 @@ export interface Routine {
 /** Hard cap for Blob names so sidebar rows and headers never truncate oddly. */
 export const MAX_BLOB_NAME_LENGTH = 24;
 
+/**
+ * Ceiling on the roster, enforced on every creation path (+ button, Duplicate,
+ * `spawn_blob`).
+ *
+ * Not a storage limit — a blast radius. A routine that loops on spawn_blob
+ * would otherwise fill the sidebar with junk Blobs the user has to delete one
+ * by one, and every Blob is a scheduler participant.
+ *
+ * Lives here, not in lib/blob-tools: the sidebar and creator must not
+ * statically import that module (startup-bundle budget).
+ */
+export const MAX_BLOBS = 25;
+
 /** Blobs start empty; the first-run creator makes the first one. */
 export const agents: Agent[] = [];
 

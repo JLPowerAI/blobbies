@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_BLOBS } from "@/data/agents";
 import {
   type BlobMemory,
   cleanResults,
   htmlToText,
-  MAX_BLOBS,
   MEMORY_LIMIT,
   MEMORY_PROMPT_CHARS,
   MEMORY_TEXT_LIMIT,

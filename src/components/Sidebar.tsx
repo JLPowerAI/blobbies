@@ -1,6 +1,8 @@
 import {
   Bell,
+  ChevronDown,
   Copy,
+  Eye,
   EyeOff,
   Link,
   Pencil,
@@ -22,7 +24,7 @@ import {
   useState,
 } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
-import type { Agent } from "@/data/agents";
+import { type Agent, MAX_BLOBS } from "@/data/agents";
 import { readPreference, writePreference } from "@/lib/preferences";
 import { isTauri } from "@/lib/tauri";
 import { formatAgentTime } from "@/lib/time";
@@ -93,16 +95,21 @@ function zoneFor(section: string | null): string {
   return section === null ? UNGROUPED_ZONE : `${SECTION_PREFIX}${section}`;
 }
 
-/** Sections the user made, including empty ones the roster cannot imply. */
-function readSections(): string[] {
+/** A string-array preference; `[]` for anything a hand-edit made unreadable. */
+function readNames(key: string): string[] {
   try {
-    const parsed: unknown = JSON.parse(readPreference("pref:sections", "[]"));
+    const parsed: unknown = JSON.parse(readPreference(key, "[]"));
     return Array.isArray(parsed)
       ? parsed.filter((name): name is string => typeof name === "string")
       : [];
   } catch {
     return [];
   }
+}
+
+/** Sections the user made, including empty ones the roster cannot imply. */
+function readSections(): string[] {
+  return readNames("pref:sections");
 }
 
 /** Keep the fixed-position menu inside the viewport. */
@@ -139,10 +146,42 @@ export function Sidebar({
   /** Blob awaiting delete confirmation (window.confirm is a no-op in wry). */
   const [confirmDelete, setConfirmDelete] = useState<Agent | null>(null);
   const [sections, setSections] = useState<string[]>(readSections);
+  /** Hidden Blobs are collapsed behind a toggle — the only way back to one. */
+  const [showHidden, setShowHidden] = useState(false);
+
+  /** Collapsed section names. Order is the section list's, not this one's. */
+  const [collapsedSections, setCollapsedSections] = useState<string[]>(() =>
+    readNames("pref:sectionsCollapsed"),
+  );
 
   const saveSections = (next: string[]) => {
     setSections(next);
     writePreference("pref:sections", JSON.stringify(next));
+  };
+
+  const saveCollapsedSections = (next: string[]) => {
+    setCollapsedSections(next);
+    writePreference("pref:sectionsCollapsed", JSON.stringify(next));
+  };
+
+  const toggleSection = (name: string) => {
+    saveCollapsedSections(
+      collapsedSections.includes(name)
+        ? collapsedSections.filter((candidate) => candidate !== name)
+        : [...collapsedSections, name],
+    );
+  };
+
+  /**
+   * Drop a section, and its collapsed flag with it: `addSection` reuses "New
+   * section", so a leftover flag would make a later section of the same name
+   * open up already shut.
+   */
+  const removeSection = (name: string) => {
+    saveSections(sections.filter((candidate) => candidate !== name));
+    if (collapsedSections.includes(name)) {
+      saveCollapsedSections(collapsedSections.filter((candidate) => candidate !== name));
+    }
   };
 
   /** Apply a drop: pin, unpin into the ungrouped run, or move to a section. */
@@ -163,6 +202,44 @@ export function Sidebar({
         ? { pinned: false, section: zone.slice(SECTION_PREFIX.length) }
         : { pinned: false, section: "" },
     );
+    // Dropping into a shut section would otherwise look like the Blob
+    // vanished; open it so the landing is visible.
+    if (zone.startsWith(SECTION_PREFIX)) {
+      const name = zone.slice(SECTION_PREFIX.length);
+      if (collapsedSections.includes(name)) {
+        saveCollapsedSections(collapsedSections.filter((candidate) => candidate !== name));
+      }
+    }
+  });
+
+  /**
+   * Reordering sections, on the same pointer-drag machinery as Blobs: a
+   * section takes the place of whichever group it is dropped on, and the
+   * ungrouped run (always the topmost) means "move to the top".
+   */
+  const {
+    drag: sectionDrag,
+    start: startSectionDrag,
+    consumeClick: consumeSectionClick,
+  } = useBlobDrag((name, zone) => {
+    const rest = sections.filter((candidate) => candidate !== name);
+    if (zone === UNGROUPED_ZONE) {
+      saveSections([name, ...rest]);
+      return;
+    }
+    if (!zone.startsWith(SECTION_PREFIX)) {
+      return;
+    }
+    const target = zone.slice(SECTION_PREFIX.length);
+    const landing = rest.indexOf(target);
+    if (target === name || landing === -1) {
+      return;
+    }
+    // Dragging downwards lands *after* the target, upwards *before* it — the
+    // section ends up where the cursor is, not one slot short of it.
+    const forwards = sections.indexOf(name) < sections.indexOf(target);
+    rest.splice(forwards ? landing + 1 : landing, 0, name);
+    saveSections(rest);
   });
 
   // Escape dismisses the context menu; clicks are handled by its backdrop.
@@ -317,6 +394,7 @@ export function Sidebar({
   } as CSSProperties;
 
   const listed = agents.filter((candidate) => candidate.hidden !== true);
+  const hidden = agents.filter((candidate) => candidate.hidden === true);
   const pinned = listed.filter((candidate) => candidate.pinned === true);
   const unpinned = listed.filter((candidate) => candidate.pinned !== true);
   // A section name no longer in the list reads as ungrouped, so deleting a
@@ -330,6 +408,57 @@ export function Sidebar({
   }));
   const dragging = drag !== null;
   const dragTarget = agents.find((candidate) => candidate.id === drag?.id);
+
+  /**
+   * One conversation row. Hidden rows are `draggable: false`: their group is
+   * not a drop zone, and a drag out of it would write a `section` on a Blob
+   * that stays invisible.
+   */
+  const agentRow = (agent: Agent, draggable: boolean) => {
+    const selected = agent.id === selectedId;
+    return (
+      <li key={agent.id}>
+        <button
+          type="button"
+          className={[
+            "agent-row",
+            selected ? "agent-row-selected" : "",
+            drag?.id === agent.id ? "agent-row-dragging" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          aria-current={selected ? "true" : undefined}
+          title={collapsed ? agent.name : undefined}
+          onPointerDown={draggable ? (event) => startDrag(event, agent.id) : undefined}
+          onClick={() => {
+            // The click that ends a drag must not also select.
+            if (!consumeClick()) {
+              onSelect(agent.id);
+            }
+          }}
+          onContextMenu={(event) => openContextMenu(event, agent.id)}
+        >
+          <BlobAvatar tone={agent.tone} shape={agent.shape} />
+          <span className="agent-row-text">
+            <span className="agent-row-top">
+              <span className="agent-name">{agent.name}</span>
+              <span className="agent-time">
+                {agent.lastActivityAt === undefined
+                  ? agent.time
+                  : formatAgentTime(agent.lastActivityAt, now)}
+              </span>
+            </span>
+            <span className="agent-row-bottom">
+              <span className="agent-snippet">{agent.snippet}</span>
+              {agent.unread === true ? (
+                <span className="unread-dot" role="status" aria-label="Unread messages" />
+              ) : null}
+            </span>
+          </span>
+        </button>
+      </li>
+    );
+  };
 
   /** Add "New section", then "New section 2", and so on. */
   const addSection = () => {
@@ -455,11 +584,49 @@ export function Sidebar({
         {/* The ungrouped run, then one group per section. */}
         {[{ name: null, rows: ungrouped }, ...sectionGroups].map((group) => {
           const zone = zoneFor(group.name);
+          // Never collapsed in the rail: it hides `.section-header`, so the
+          // only control that could reopen the section is gone and its Blobs
+          // would be unreachable until the sidebar is widened again.
+          const shut = !collapsed && group.name !== null && collapsedSections.includes(group.name);
           return (
-            <li key={group.name ?? UNGROUPED_ZONE} className="agent-group" data-drop={zone}>
+            <li
+              key={group.name ?? UNGROUPED_ZONE}
+              className={[
+                "agent-group",
+                sectionDrag?.id === group.name ? "agent-group-dragging" : "",
+                sectionDrag !== null && sectionDrag.over === zone && sectionDrag.id !== group.name
+                  ? "agent-group-reorder-over"
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              data-drop={zone}
+            >
               {group.name === null ? null : (
-                <span className="section-title">
-                  {group.name}
+                <div className="section-header">
+                  {/* One control: press-and-hold reorders, a plain click
+                      collapses. Sections are the only thing in this list a
+                      user can end up with dozens of. */}
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    aria-expanded={!shut}
+                    onPointerDown={(event) => startSectionDrag(event, group.name)}
+                    onClick={() => {
+                      if (!consumeSectionClick()) {
+                        toggleSection(group.name);
+                      }
+                    }}
+                  >
+                    <span className="section-name">{group.name}</span>
+                    {shut ? <span className="section-count">{group.rows.length}</span> : null}
+                    <ChevronDown
+                      size={15}
+                      strokeWidth={2}
+                      aria-hidden="true"
+                      className={shut ? "section-chevron section-chevron-shut" : "section-chevron"}
+                    />
+                  </button>
                   {/* Only an empty section can be removed: with rows it would be
                     a destructive-looking button next to real conversations. */}
                   {group.rows.length === 0 ? (
@@ -467,74 +634,58 @@ export function Sidebar({
                       type="button"
                       className="section-remove"
                       aria-label={`Remove section ${group.name}`}
-                      onClick={() => saveSections(sections.filter((name) => name !== group.name))}
+                      onClick={() => removeSection(group.name)}
                     >
                       <X size={12} strokeWidth={2} aria-hidden="true" />
                     </button>
                   ) : null}
-                </span>
+                </div>
               )}
-              <ul
-                className={
-                  drag?.over === zone ? "agent-group-rows agent-group-over" : "agent-group-rows"
-                }
-              >
-                {group.rows.length === 0 && group.name !== null ? (
-                  <li className="section-empty">Drag chats here</li>
-                ) : null}
-                {group.rows.map((agent) => {
-                  const selected = agent.id === selectedId;
-                  return (
-                    <li key={agent.id}>
-                      <button
-                        type="button"
-                        className={[
-                          "agent-row",
-                          selected ? "agent-row-selected" : "",
-                          drag?.id === agent.id ? "agent-row-dragging" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ")}
-                        aria-current={selected ? "true" : undefined}
-                        title={collapsed ? agent.name : undefined}
-                        onPointerDown={(event) => startDrag(event, agent.id)}
-                        onClick={() => {
-                          // The click that ends a drag must not also select.
-                          if (!consumeClick()) {
-                            onSelect(agent.id);
-                          }
-                        }}
-                        onContextMenu={(event) => openContextMenu(event, agent.id)}
-                      >
-                        <BlobAvatar tone={agent.tone} shape={agent.shape} />
-                        <span className="agent-row-text">
-                          <span className="agent-row-top">
-                            <span className="agent-name">{agent.name}</span>
-                            <span className="agent-time">
-                              {agent.lastActivityAt === undefined
-                                ? agent.time
-                                : formatAgentTime(agent.lastActivityAt, now)}
-                            </span>
-                          </span>
-                          <span className="agent-row-bottom">
-                            <span className="agent-snippet">{agent.snippet}</span>
-                            {agent.unread === true ? (
-                              <span
-                                className="unread-dot"
-                                role="status"
-                                aria-label="Unread messages"
-                              />
-                            ) : null}
-                          </span>
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
+              {/* Collapses on the same 0fr→1fr grid as the compose slot, and
+                  stays mounted while shut so the group remains a drop target
+                  the Blob drag can hit and expand. `inert` (not `hidden`,
+                  which cannot animate) takes the rows out of the a11y tree
+                  and off the tab order for the duration. */}
+              <div className={shut ? "section-slot section-slot-shut" : "section-slot"}>
+                <ul
+                  inert={shut}
+                  className={
+                    drag?.over === zone ? "agent-group-rows agent-group-over" : "agent-group-rows"
+                  }
+                >
+                  {group.rows.length === 0 && group.name !== null ? (
+                    <li className="section-empty">Drag chats here</li>
+                  ) : null}
+                  {group.rows.map((agent) => agentRow(agent, true))}
+                </ul>
+              </div>
             </li>
           );
         })}
+
+        {/* Hidden Blobs. Not a drop zone: see agentRow. */}
+        {hidden.length > 0 && !collapsed ? (
+          <li className="agent-group">
+            <button
+              type="button"
+              className="section-add"
+              aria-expanded={showHidden}
+              onClick={() => setShowHidden(!showHidden)}
+            >
+              {showHidden ? (
+                <EyeOff size={13} strokeWidth={2} aria-hidden="true" />
+              ) : (
+                <Eye size={13} strokeWidth={2} aria-hidden="true" />
+              )}
+              {showHidden
+                ? `Hidden chats (${hidden.length})`
+                : `Show hidden chats (${hidden.length})`}
+            </button>
+            {showHidden ? (
+              <ul className="agent-group-rows">{hidden.map((agent) => agentRow(agent, false))}</ul>
+            ) : null}
+          </li>
+        ) : null}
 
         {agents.length > 0 && !collapsed ? (
           <li>
@@ -556,6 +707,20 @@ export function Sidebar({
         >
           <BlobAvatar tone={dragTarget.tone} shape={dragTarget.shape} size={44} />
           <span className="pin-tile-name">{dragTarget.name}</span>
+        </div>
+      )}
+
+      {sectionDrag === null ? null : (
+        <div
+          className={
+            sectionDrag.over === null
+              ? "drag-tile section-tile"
+              : "drag-tile section-tile drag-tile-armed"
+          }
+          style={{ left: sectionDrag.x, top: sectionDrag.y }}
+          aria-hidden="true"
+        >
+          {sectionDrag.id}
         </div>
       )}
 
@@ -623,9 +788,12 @@ export function Sidebar({
                   <Pencil size={15} strokeWidth={1.8} aria-hidden="true" />,
                   () => onEditProfile(target.id),
                 )}
-                {item("Duplicate", <Copy size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
-                  onDuplicate(target.id),
-                )}
+                {/* No Duplicate at the cap: the copy would silently not appear. */}
+                {agents.length >= MAX_BLOBS
+                  ? null
+                  : item("Duplicate", <Copy size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
+                      onDuplicate(target.id),
+                    )}
                 <hr className="context-menu-separator" />
                 {item(
                   "Copy conversation ID",
@@ -633,11 +801,15 @@ export function Sidebar({
                   () => void navigator.clipboard?.writeText(target.id),
                 )}
                 <hr className="context-menu-separator" />
-                {item(
-                  "Hide from sidebar",
-                  <EyeOff size={15} strokeWidth={1.8} aria-hidden="true" />,
-                  () => onUpdateBlob(target.id, { hidden: true }),
-                )}
+                {target.hidden === true
+                  ? item("Unhide", <Eye size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
+                      onUpdateBlob(target.id, { hidden: false }),
+                    )
+                  : item(
+                      "Hide from sidebar",
+                      <EyeOff size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      () => onUpdateBlob(target.id, { hidden: true }),
+                    )}
                 {item(
                   "Delete",
                   <Trash2 size={15} strokeWidth={1.8} aria-hidden="true" />,
@@ -675,7 +847,9 @@ export function Sidebar({
           >
             <h2 className="confirm-title">{`Delete \u201c${confirmDelete.name}\u201d`}</h2>
             <p className="confirm-body">
-              This permanently deletes the agent and its chat history. This can't be undone.
+              This removes the Blob and its chat history from Blobbies. Its files sit in the app's
+              trash folder on this computer for 30 days before they're purged. If you may need its
+              work later, hide it instead.
             </p>
             <div className="confirm-actions">
               <button type="button" className="modal-button" onClick={() => setConfirmDelete(null)}>

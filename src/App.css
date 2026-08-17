@@ -1058,8 +1058,12 @@ select:focus:not(:focus-visible) {
   animation: avatar-pop 220ms var(--ease-standard);
 }
 
+/* Wraps because the same picker also renders in the 322px detail panel,
+   where one row of 10 swatches does not fit; no-op in the wide creator. */
 .creator-swatches {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 10px;
   border: 0;
   margin: 0;
@@ -1128,6 +1132,8 @@ select:focus:not(:focus-visible) {
 
 .creator-shapes {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 8px;
   border: 0;
   margin: 0;
@@ -1210,6 +1216,14 @@ select:focus:not(:focus-visible) {
 .creator-submit:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.creator-hint {
+  margin: 0;
+  max-width: min(320px, 80%);
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-secondary);
 }
 
 /* Suggestions collapse smoothly (grid-rows + fade) instead of popping. */
@@ -1411,6 +1425,24 @@ select:focus:not(:focus-visible) {
   gap: 4px;
 }
 
+/* Section collapse, on the same grid trick as the compose slot: a row track
+   animates from 0fr to 1fr, which `height: auto` cannot do. */
+.section-slot {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows var(--duration-panel) var(--ease-standard),
+    margin-bottom var(--duration-panel) var(--ease-standard);
+}
+
+/* The negative margin cancels the group's 4px gap above this slot — as the
+   last flex item its margin box is part of the group's height — so a shut
+   section collapses to exactly its header. */
+.section-slot-shut {
+  grid-template-rows: 0fr;
+  margin-bottom: -4px;
+}
+
 .agent-group-rows {
   display: flex;
   flex-direction: column;
@@ -1425,23 +1457,103 @@ select:focus:not(:focus-visible) {
     transform 220ms var(--ease-squish);
 }
 
+/* The grid track does the shrinking; the list must not push back against it.
+   Declared after .agent-group-rows so the cascade order matches specificity. */
+.section-slot > .agent-group-rows {
+  overflow: hidden;
+  min-height: 0;
+}
+
 /* Same give as the pin tray, so both targets answer a hover the same way. */
 .agent-group-over {
   background: var(--hover-overlay);
   transform: scale(1.01, 0.98);
 }
 
-.section-title {
+/* The header sits over the remove button rather than beside it: the toggle is
+   a full-width row like the Blob rows below it, so a sibling would eat into
+   the width the section name gets. */
+.section-header {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding-inline: 10px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
 }
 
+/* Same box as .agent-row so the hover highlight lines up with the rows below,
+   but transparent at rest: a permanent fill made every header compete with
+   the conversations it is only labelling. */
+.section-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border-radius: 11px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    transform 200ms var(--ease-squish);
+}
+
+.section-toggle:hover {
+  background: var(--hover-overlay);
+  color: var(--text-primary);
+}
+
+/* Matches the row press-squash, so a section picks up like a Blob does. */
+.section-toggle:active {
+  transform: scale(0.985, 0.96);
+}
+
+.section-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Points down when open, right when shut — the arrow is the affordance, so
+   it rotates rather than swapping glyphs. Trails the name, where a
+   disclosure arrow sits in a row this wide. */
+.section-chevron {
+  flex: none;
+  margin-left: auto;
+  transition:
+    transform 180ms var(--ease-squish),
+    opacity var(--duration-fast) var(--ease-standard);
+}
+
+.section-chevron-shut {
+  transform: rotate(-90deg);
+}
+
+/* The remove button takes the chevron's spot while it is showing, so only one
+   control ever occupies the right edge. Keyed to the same `.agent-group:hover`
+   that reveals the button — a narrower scope here would leave the two stacked
+   on top of each other whenever the pointer was over the rows below. Declared
+   after .section-chevron: at equal-or-lower source order it would lose the
+   cascade. */
+.agent-group:hover .section-header:has(.section-remove) .section-chevron {
+  opacity: 0;
+}
+
+/* A shut section still says how much is inside, or collapsing it hides the
+   fact that anything is there at all. */
+.section-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+/* Overlays the toggle's right edge, in front of the chevron it replaces
+   while hovered — an empty section has nothing to disclose. */
 .section-remove {
+  position: absolute;
+  right: 12px;
   display: flex;
   align-items: center;
   color: var(--text-secondary);
@@ -1452,6 +1564,27 @@ select:focus:not(:focus-visible) {
 .agent-group:hover .section-remove,
 .section-remove:focus-visible {
   opacity: 1;
+}
+
+/* The section being reordered stays put and dims, exactly like a dragged
+   row — the list must not reflow while the drop targets are being aimed at. */
+.agent-group-dragging {
+  opacity: 0.35;
+}
+
+/* The section being swapped with. An outline, not an insertion line: a drop
+   takes the target's place, so a line pinned to one edge would claim a
+   direction the drop does not have. */
+.agent-group-reorder-over {
+  outline: 1.5px dashed var(--text-secondary);
+  outline-offset: 2px;
+  border-radius: 11px;
+}
+
+/* Just the name, no avatar — a section has no Blob to carry. */
+.section-tile {
+  font-size: 12px;
+  font-weight: 500;
 }
 
 /* A section with no Blobs still has to be a visible target, or the only way
@@ -3409,7 +3542,9 @@ a.modal-button {
 
 .settings-avatar {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
   padding: 10px 0 6px;
 }
 
@@ -3757,7 +3892,7 @@ a.modal-button {
 /* The rail is 100px of avatars: section labels, the tray's hint and the
    tile captions have nowhere to go, and the rows below still carry the
    grouping via their order. */
-.sidebar-collapsed .section-title,
+.sidebar-collapsed .section-header,
 .sidebar-collapsed .section-remove,
 .sidebar-collapsed .section-empty,
 .sidebar-collapsed .section-add,
@@ -4024,6 +4159,9 @@ a.modal-button {
   .search-field,
   .section-add,
   .section-remove,
+  .section-toggle,
+  .section-chevron,
+  .section-slot,
   .pin-tray,
   .pin-tile,
   .drag-tile,
@@ -4072,6 +4210,7 @@ a.modal-button {
   .pin-tray-over,
   .agent-group-over,
   .agent-row:active,
+  .section-toggle:active,
   .agent-row-dragging,
   .pin-tile:active,
   .drag-tile-armed {

@@ -2,12 +2,48 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
-import { flushRoster, loadRoster, loadUserMemories, saveBlobTranscript } from "@/lib/store";
+import { type Agent, MAX_BLOBS } from "@/data/agents";
+import {
+  flushRoster,
+  loadBlobRoutines,
+  loadRoster,
+  loadUserMemories,
+  saveBlobRoutines,
+  saveBlobTranscript,
+} from "@/lib/store";
 
 /** Completes the first-run creator with the given Blob name. */
 async function createFirstBlob(user: UserEvent, name = "Ken") {
   await user.type(screen.getByLabelText("Name"), name);
   await user.click(screen.getByRole("button", { name: "Get started" }));
+}
+
+/** Roster row with a store-legal id, numbered so ids stay unique. */
+function seedBlob(index: number, name: string, extra: Partial<Agent> = {}): Agent {
+  return {
+    id: `61ec34f1-9ba5-4eff-b8e1-7acefb21${String(index).padStart(4, "0")}`,
+    name,
+    time: "Now",
+    snippet: "New Blob. Say hello",
+    tone: "blue",
+    shape: "sphere",
+    ...extra,
+  };
+}
+
+/** Open a sidebar row's context menu. */
+async function openRowMenu(user: UserEvent, name: RegExp) {
+  const conversations = screen.getByRole("navigation", { name: "Conversations" });
+  await user.pointer({
+    keys: "[MouseRight]",
+    target: within(conversations).getByRole("button", { name }),
+  });
+}
+
+/** Let the store's debounced writes land. */
+async function flushWrites() {
+  window.dispatchEvent(new Event("beforeunload"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe("App", () => {
@@ -530,6 +566,175 @@ describe("App", () => {
     expect(
       within(details).getByText(/Facts this Blob has learned about you show up here/),
     ).toBeInTheDocument();
+  });
+
+  it("hides a Blob from the sidebar and brings it back", async () => {
+    await flushRoster([seedBlob(1, "Ken"), seedBlob(2, "Bob")]);
+    const user = userEvent.setup();
+    render(<App />);
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+
+    await openRowMenu(user, /Bob/);
+    await user.click(screen.getByRole("menuitem", { name: "Hide from sidebar" }));
+    expect(within(conversations).queryByRole("button", { name: /Bob/ })).not.toBeInTheDocument();
+
+    // A hidden Blob must stay reachable, or it is gone from the UI forever.
+    await user.click(within(conversations).getByRole("button", { name: /Show hidden chats/ }));
+    await openRowMenu(user, /Bob/);
+    await user.click(screen.getByRole("menuitem", { name: "Unhide" }));
+
+    expect(within(conversations).getByRole("button", { name: /Bob/ })).toBeInTheDocument();
+    expect(
+      within(conversations).queryByRole("button", { name: /Show hidden chats/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("duplicates a Blob's profile and routines, but not its memories", async () => {
+    const source = seedBlob(1, "Ken", {
+      tone: "pink",
+      shape: "cloud",
+      title: "Inbox triage",
+      description: "Reads the inbox every morning",
+      instructions: "Be terse",
+      memories: [{ id: "m1", text: "Biscuit is a beagle", createdAt: 1 }],
+      usage: { inputTokens: 100, outputTokens: 20, runs: 3 },
+    });
+    await flushRoster([source]);
+    saveBlobRoutines(source.id, [
+      {
+        id: "routine-1",
+        name: "Morning sweep",
+        instruction: "Check the inbox",
+        triggers: ["Every hour"],
+        active: true,
+        schedule: { kind: "interval", minutes: 60 },
+        nextRunAt: 1,
+        lastRunAt: 1,
+        lastRunStatus: "done",
+      },
+    ]);
+    await flushWrites();
+
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Ken", level: 1 });
+
+    // By snippet: "Ken" alone also matches the "Ken Kai" account row.
+    await openRowMenu(user, /Say hello/);
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+
+    // The copy lands in Edit Profile, so it is renamed before anything fires.
+    expect(
+      await screen.findByRole("complementary", { name: "Ken copy settings" }),
+    ).toBeInTheDocument();
+
+    const roster = await loadRoster();
+    const copy = roster?.find((row) => row.name === "Ken copy");
+    expect(copy).toMatchObject({
+      tone: "pink",
+      shape: "cloud",
+      title: "Inbox triage",
+      description: "Reads the inbox every morning",
+      instructions: "Be terse",
+    });
+    // Learned memory and lifetime usage belong to the original.
+    expect(copy?.memories).toBeUndefined();
+    expect(copy?.usage).toBeUndefined();
+
+    await flushWrites();
+    const copied = await loadBlobRoutines(copy?.id ?? "");
+    expect(copied).toHaveLength(1);
+    expect(copied?.[0]).toMatchObject({ name: "Morning sweep", active: true });
+    expect(copied?.[0]?.id).not.toBe("routine-1");
+    expect(copied?.[0]?.lastRunAt).toBeUndefined();
+    expect(copied?.[0]?.lastRunStatus).toBeUndefined();
+    // Re-armed: armRoutines only runs at startup, so a stale nextRunAt would
+    // mean the copy's routine never fires.
+    expect(copied?.[0]?.nextRunAt ?? 0).toBeGreaterThan(Date.now());
+  });
+
+  it("refuses to create or duplicate past the Blob cap", async () => {
+    await flushRoster(
+      Array.from({ length: MAX_BLOBS }, (_, index) => seedBlob(index, `Blob${index}`)),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Blob0", level: 1 });
+
+    // Duplicate is not offered: the copy would silently never appear.
+    await openRowMenu(user, /Blob0/);
+    expect(screen.queryByRole("menuitem", { name: "Duplicate" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("button", { name: "New Blob" }));
+    await user.type(screen.getByLabelText("Search or create Blobs"), "Zed");
+    await user.click(screen.getByRole("button", { name: 'Create new Blob "Zed"' }));
+
+    expect(screen.getByRole("button", { name: "Get started" })).toBeDisabled();
+    expect(
+      screen.getByText(`You have the maximum of ${MAX_BLOBS} Blobs. Delete one to make room.`),
+    ).toBeInTheDocument();
+    expect((await loadRoster())?.length).toBe(MAX_BLOBS);
+  });
+
+  it("collapses a section and keeps its Blobs out of the list", async () => {
+    // Sections live in localStorage, which this jsdom build does not provide.
+    const store = new Map<string, string>([["pref:sections", JSON.stringify(["Work"])]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+    try {
+      await flushRoster([seedBlob(1, "Ken", { section: "Work" })]);
+      const user = userEvent.setup();
+      render(<App />);
+      const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+
+      // The rows animate shut rather than unmounting — the group has to stay a
+      // drop target — so `inert` is what takes them off the tab order.
+      const rows = () =>
+        conversations.querySelector('[data-drop="section:Work"] .agent-group-rows');
+      const toggle = within(conversations).getByRole("button", { name: /Work/ });
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+      expect(rows()).not.toHaveAttribute("inert");
+
+      await user.click(toggle);
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(rows()).toHaveAttribute("inert");
+      expect(store.get("pref:sectionsCollapsed")).toBe('["Work"]');
+
+      await user.click(toggle);
+      expect(rows()).not.toHaveAttribute("inert");
+      expect(within(conversations).getByRole("button", { name: /Say hello/ })).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("opens the compose palette on Cmd+N", async () => {
+    await flushRoster([seedBlob(1, "Ken")]);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Ken", level: 1 });
+
+    await user.keyboard("{Meta>}n{/Meta}");
+    expect(screen.getByLabelText("Search or create Blobs")).toBeInTheDocument();
+  });
+
+  it("changes a Blob's avatar from Edit Profile", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+
+    await user.click(screen.getByRole("button", { name: "Ken settings" }));
+    const panel = screen.getByRole("complementary", { name: "Ken settings" });
+    await user.click(within(panel).getByRole("radio", { name: "red" }));
+    await user.click(within(panel).getByRole("radio", { name: "egg" }));
+
+    await flushWrites();
+    const roster = await loadRoster();
+    expect(roster?.[0]).toMatchObject({ tone: "red", shape: "egg" });
   });
 
   it("keeps the details panel hidden until opened from the chat header", async () => {

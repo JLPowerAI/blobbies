@@ -1,7 +1,7 @@
 import type { AgentTool } from "@kenkaiiii/gg-agent";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { z } from "zod";
-import { MAX_BLOB_NAME_LENGTH } from "@/data/agents";
+import { MAX_BLOB_NAME_LENGTH, MAX_BLOBS } from "@/data/agents";
 import type { HomeBackend } from "@/lib/home";
 import { type BlobMemory, MEMORY_LIMIT, MEMORY_TEXT_LIMIT } from "@/lib/memory";
 import { hostIsPublic, isTauri } from "@/lib/tauri";
@@ -845,15 +845,6 @@ export function makeAskTool(onAsk: (ask: PendingAsk) => void): AgentTool {
   };
   return tool;
 }
-
-/**
- * Ceiling on the roster a Blob can create.
- *
- * Not a storage limit — a blast radius. A routine that loops on spawn_blob
- * would otherwise fill the sidebar with junk Blobs the user has to delete one
- * by one, and every Blob is a scheduler participant.
- */
-export const MAX_BLOBS = 25;
 
 /**
  * The roster, as the routine catalog is allowed to touch it.

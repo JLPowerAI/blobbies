@@ -22,6 +22,7 @@ import {
   type AvatarTone,
   GREETING,
   MAX_BLOB_NAME_LENGTH,
+  MAX_BLOBS,
   type Message,
   type Routine,
   agents as seedAgents,
@@ -79,6 +80,27 @@ function newBlobId(): string {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) =>
     c === "x" ? hex() : (Math.floor(Math.random() * 4) + 8).toString(16),
   );
+}
+
+/**
+ * A duplicated routine: fresh id, no run history, and re-armed.
+ *
+ * `armRoutines` only runs at startup, so a copy that kept the source's
+ * `nextRunAt` (already in the past, or absent) would silently never fire.
+ */
+function copyRoutine(routine: Routine): Routine {
+  const {
+    id: _id,
+    lastRunAt: _lastRunAt,
+    lastRunStatus: _lastRunStatus,
+    nextRunAt: _nextRunAt,
+    ...rest
+  } = routine;
+  return {
+    ...rest,
+    id: newBlobId(),
+    ...(rest.schedule === undefined ? {} : { nextRunAt: nextFireTime(rest.schedule, Date.now()) }),
+  };
 }
 
 export function App() {
@@ -447,13 +469,22 @@ export function App() {
     setDetailView({ kind: "info" });
   };
 
+  /**
+   * Copy a Blob's profile and routines into a new Blob.
+   *
+   * What a copy does NOT carry: learned memories, lifetime usage, the
+   * conversation, and the home folder — those are the original's history, not
+   * its job description. It lands in Edit Profile so the copy is renamed and
+   * re-scoped before its (armed) routines fire.
+   */
   const duplicateBlob = (id: string) => {
     const source = agents.find((candidate) => candidate.id === id);
-    if (source === undefined) {
+    if (source === undefined || agents.length >= MAX_BLOBS) {
       return;
     }
+    const { memories: _memories, usage: _usage, ...profile } = source;
     const copy: Agent = {
-      ...source,
+      ...profile,
       id: newBlobId(),
       name: `${source.name} copy`.slice(0, MAX_BLOB_NAME_LENGTH),
       time: "Now",
@@ -465,7 +496,14 @@ export function App() {
     };
     void store.flushRoster(commitAgents((previous) => [copy, ...previous]));
     store.saveBlobConfig(copy.id, copy);
-    openConversation(copy.id);
+    void (async () => {
+      // The ref only holds Blobs hydrated this session; fall back to disk.
+      const routines = routinesRef.current[id] ?? (await store.loadBlobRoutines(id)) ?? [];
+      if (routines.length > 0) {
+        setAgentRoutines(copy.id, () => routines.map(copyRoutine));
+      }
+    })();
+    editBlobProfile(copy.id);
   };
 
   const deleteBlob = (id: string) => {
@@ -578,6 +616,28 @@ export function App() {
     };
   }, [activeBlobId]);
 
+  // Cmd/Ctrl+N starts a new Blob. Not bound while a modal owns the screen —
+  // the palette would open behind it.
+  useEffect(() => {
+    if (searchOpen || settingsOpen || pluginsOpen) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== "n" ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      event.preventDefault();
+      setMode({ kind: "palette" });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searchOpen, settingsOpen, pluginsOpen]);
+
   const setAgentRoutines = (agentId: string, update: (current: Routine[]) => Routine[]) => {
     setRoutinesByAgent((previous) => {
       const next = update(previous[agentId] ?? []);
@@ -640,6 +700,11 @@ export function App() {
   };
 
   const createBlob = (name: string, tone: AvatarTone, shape: AgentShape) => {
+    // The creator's submit is already disabled at the cap; this is the guard
+    // for every other path into it.
+    if (agents.length >= MAX_BLOBS) {
+      return;
+    }
     const blob: Agent = {
       id: newBlobId(),
       // Defense in depth: the creator already caps input length.
@@ -1267,6 +1332,7 @@ export function App() {
           // Remount when the palette hands over a different prefill.
           key={activeMode.initialName}
           initialName={activeMode.initialName}
+          atCapacity={agents.length >= MAX_BLOBS}
           onCreate={createBlob}
         />
       ) : null}
