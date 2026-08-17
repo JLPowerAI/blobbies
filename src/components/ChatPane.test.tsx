@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatPane } from "@/components/ChatPane";
@@ -121,10 +121,12 @@ describe("ChatPane", () => {
 
     // Files alone are a message: no typing needed for Send to appear.
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    // The file goes with its (jsdom-absent) thumbnail, not bare.
-    expect(onSend).toHaveBeenCalledWith("", undefined, [{ file: keep }]);
-    // Sent means gone from the composer, so the next message can't resend it.
+    // Sent clears the composer on the same frame, however long the thumbnails
+    // take — so the next message cannot resend this file.
     expect(screen.queryByText("data.csv")).not.toBeInTheDocument();
+    // The send waits for the thumbnail (jsdom renders none, so the file goes
+    // on its own) and hands the file over with it, not bare.
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("", undefined, [{ file: keep }]));
   });
 
   it("keeps Send reachable mid-reply, so a follow-up can steer the turn", async () => {

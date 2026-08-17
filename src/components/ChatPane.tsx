@@ -93,6 +93,15 @@ function messagePreview(message: Message): string {
     : text;
 }
 
+/**
+ * How long a send waits for a thumbnail that is still rendering.
+ *
+ * Sending within a moment of picking is normal, and a thumbnail takes tens of
+ * ms; waiting means the picture arrives with the message instead of a beat
+ * later. Past this the message goes without it.
+ */
+const PREVIEW_WAIT_MS = 400;
+
 /** Human-readable file size, matching the Files panel's format. */
 function fileSize(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`;
@@ -358,7 +367,9 @@ export function ChatPane({
   const [draft, setDraft] = useState("");
   /** Files picked but not sent yet; they are saved only once the message goes.
       Keyed by id, not name: picking the same file twice is two chips. */
-  const [attached, setAttached] = useState<{ id: string; file: File; preview?: string }[]>([]);
+  const [attached, setAttached] = useState<
+    { id: string; file: File; preview?: string; pending: Promise<string | undefined> }[]
+  >([]);
   /** True while a drag hovers the composer, so the drop target is visible. */
   const [dragging, setDragging] = useState(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
@@ -601,7 +612,14 @@ export function ChatPane({
     if (picked === null) {
       return;
     }
-    const incoming = [...picked].map((file) => ({ id: crypto.randomUUID(), file }));
+    // The thumbnail promise is started here and kept on the entry, so a send
+    // that lands before it resolves can await it rather than shipping the
+    // message without its picture.
+    const incoming = [...picked].map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      pending: imagePreview(file),
+    }));
     if (incoming.length === 0) {
       return;
     }
@@ -611,7 +629,7 @@ export function ChatPane({
     // they need revoking on every removal path; these are small and the same
     // data URL the sent message will carry.
     for (const entry of incoming) {
-      void imagePreview(entry.file).then((preview) => {
+      void entry.pending.then((preview) => {
         if (preview === undefined) {
           return;
         }
@@ -681,21 +699,34 @@ export function ChatPane({
     if (text.length === 0 && attached.length === 0) {
       return;
     }
-    onSend(
-      text,
-      replyTo !== null && !replyClosing ? replyTo : undefined,
-      // The thumbnail rides along: the composer already made it, and rebuilding
-      // it after the send is what made the picture pop in a beat late.
-      attached.length === 0
-        ? undefined
-        : attached.map(({ file, preview }) => ({
-            file,
-            ...(preview === undefined ? {} : { preview }),
-          })),
-    );
+    const replyingTo = replyTo !== null && !replyClosing ? replyTo : undefined;
+    // Cleared first, so the composer empties on this frame however long the
+    // thumbnails take.
+    const sending = attached;
     setDraft("");
     setAttached([]);
     closeReply();
+
+    if (sending.length === 0) {
+      onSend(text, replyingTo);
+      return;
+    }
+    // The thumbnail rides along: the composer already made it, and rebuilding
+    // it after the send is what made the picture pop in a beat late. Sending
+    // within a few hundred ms of picking is normal, so an unresolved one is
+    // awaited rather than dropped.
+    void Promise.all(
+      sending.map(async ({ file, preview, pending }) => {
+        // A picture is worth a short wait, never a stuck send.
+        const settled =
+          preview ??
+          (await Promise.race([
+            pending.catch(() => undefined),
+            new Promise<undefined>((resolve) => setTimeout(resolve, PREVIEW_WAIT_MS, undefined)),
+          ]));
+        return { file, ...(settled === undefined ? {} : { preview: settled }) };
+      }),
+    ).then((files) => onSend(text, replyingTo, files));
   };
 
   // Animate the chip out; it unmounts when the exit animation finishes.

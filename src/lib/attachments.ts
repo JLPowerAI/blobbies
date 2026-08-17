@@ -179,8 +179,12 @@ async function readText(
     }
     const bytes = new Uint8Array(await file.arrayBuffer());
     // The thumbnail is kept whatever OCR does: a holiday photo has no text in
-    // it, and showing the picture is the right answer there.
-    const preview = madePreview ?? (await imagePreview(bytes));
+    // it, and showing the picture is the right answer there. The composer's
+    // copy is only trusted if it really is an image data URL — this value ends
+    // up in an <img src>, so it is checked where it enters, not only where it
+    // is rendered.
+    const passed = madePreview?.startsWith("data:image/") === true ? madePreview : undefined;
+    const preview = passed ?? (await imagePreview(bytes));
     let text: string;
     try {
       text = await ocrImage(bytes);
