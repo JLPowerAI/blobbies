@@ -18,17 +18,16 @@ const messages: Message[] = [
   { id: "m1", kind: "text", author: "user", segments: [{ text: "So what can you do" }] },
   { id: "m2", kind: "text", author: "agent", segments: [{ text: "Plenty." }] },
 ];
-
 /** ChatPane with everything that is not under test held constant. */
 const pane = (
   thinking: boolean,
   onStop: () => void,
-  withMessages = false,
+  withMessages: Message[] = [],
   onSend: (text: string, replyTo?: string, files?: readonly PickedFile[]) => void = () => {},
 ) => (
   <ChatPane
     agent={agent}
-    messages={withMessages ? messages : []}
+    messages={withMessages}
     thinking={thinking}
     model=""
     onModelChange={() => {}}
@@ -72,10 +71,12 @@ describe("ChatPane", () => {
   });
 
   it("suppresses the latched hover on every row the cursor has left", () => {
-    render(pane(false, vi.fn(), true));
+    render(pane(false, vi.fn(), messages));
     const [first, second] = screen
       .getAllByRole("toolbar", { name: "Message actions" })
-      .map((toolbar) => toolbar.parentElement as HTMLElement);
+      // The bar lives inside .message-line beside its bubble; the state it
+      // asserts (message-row-stale) is on the row above that.
+      .map((toolbar) => toolbar.closest(".message-row") as HTMLElement);
     const move = (over: HTMLElement) => fireEvent.pointerOver(over, { bubbles: true });
 
     // Before the cursor has entered anything, nothing is suppressed: plain
@@ -105,10 +106,57 @@ describe("ChatPane", () => {
     expect(second).toHaveClass("message-row-stale");
   });
 
+  it("marks the transcript with a time divider after a silence or a day change, not every message", () => {
+    // 09:00, a reply seconds later, then 09:20 after a silence, then the next
+    // day — the shape a real conversation takes.
+    const day1 = new Date(2026, 7, 12, 9, 0).getTime();
+    render(
+      pane(false, vi.fn(), [
+        {
+          id: "t1",
+          kind: "text",
+          author: "user",
+          segments: [{ text: "morning" }],
+          timestampMs: day1,
+        },
+        {
+          id: "t2",
+          kind: "text",
+          author: "agent",
+          segments: [{ text: "hi" }],
+          timestampMs: day1 + 4_000,
+        },
+        {
+          id: "t3",
+          kind: "text",
+          author: "user",
+          segments: [{ text: "back now" }],
+          timestampMs: day1 + 20 * 60_000,
+        },
+        {
+          id: "t4",
+          kind: "text",
+          author: "agent",
+          segments: [{ text: "welcome back" }],
+          timestampMs: day1 + 26 * 60 * 60_000,
+        },
+      ]),
+    );
+    const dividers = screen.getAllByText(/AM|PM|August|Wednesday/i, {
+      selector: ".timestamp-divider",
+    });
+    // One above the first message, one after the 20-minute silence, one for
+    // the new day — and none between the seconds-apart pair.
+    expect(dividers).toHaveLength(3);
+    expect(dividers[0]?.textContent).toMatch(/9:00/);
+    expect(dividers[1]?.textContent).toMatch(/9:20/);
+    expect(dividers[2]?.textContent).toMatch(/Wednesday|Thursday/);
+  });
+
   it("attaches picked files to the next message, and lets one be removed", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn();
-    render(pane(false, vi.fn(), false, onSend));
+    render(pane(false, vi.fn(), [], onSend));
 
     const keep = new File(["columns"], "data.csv", { type: "text/csv" });
     const drop = new File(["draft"], "notes.md", { type: "text/markdown" });

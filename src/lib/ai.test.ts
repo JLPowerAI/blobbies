@@ -236,7 +236,7 @@ describe("streamBlobTurn", () => {
       messages: [{ role: "user", content: "Just be my therapist" }],
       forceConfigure: true,
       memory: { list: () => [], save: () => {} },
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: (patch) => configured.push(patch),
     });
     expect(configured).toEqual([{ title: "Therapist", description: "Listens first." }]);
@@ -277,7 +277,7 @@ describe("streamBlobTurn", () => {
           saved = next;
         },
       },
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
       onToolCall: (record) => records.push({ name: record.name, result: record.result }),
     });
@@ -305,14 +305,14 @@ describe("streamBlobTurn", () => {
       model: "llama3.2:latest",
       messages: [{ role: "user", content: "latest models?" }],
       memory: { list: () => [], save: () => {} },
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
     });
     // The user must never be left with the fragment.
     expect(text).toBe("Here are the three latest models, in full.");
   });
 
-  it("keeps preamble said before a tool call as its own paragraph", async () => {
+  it("keeps preamble said before a tool call as its own bubble", async () => {
     let round = 0;
     fetchHandler = async (_input, init) => {
       const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -342,13 +342,14 @@ describe("streamBlobTurn", () => {
       model: "llama3.2:latest",
       messages: [{ role: "user", content: "what is it?" }],
       memory: { list: () => [], save: () => {} },
-      onText: (full) => streamed.push(full),
+      onSegment: (segment) => streamed.push(segment),
       onConfigure: () => {},
     });
     // Blank line between them; never run together ("that.The answer is 42.").
     expect(text).toBe("Let me search for that.\n\nThe answer is 42.");
-    // Nothing the user already read is pulled back off the screen.
-    expect(streamed.every((full) => full.startsWith("Let me search for that."))).toBe(true);
+    // One call per finished segment, in order — never per delta, so a bubble
+    // can appear whole, and nothing already shown is re-sent or pulled back.
+    expect(streamed).toEqual(["Let me search for that.", "The answer is 42."]);
   });
 
   it("clips an oversized description at a sentence boundary, never mid-word", async () => {
@@ -370,7 +371,7 @@ describe("streamBlobTurn", () => {
       messages: [{ role: "user", content: "Be my writer" }],
       forceConfigure: true,
       memory: { list: () => [], save: () => {} },
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: (patch) => configured.push(patch),
     });
     const description = configured[0]?.description ?? "";
@@ -407,7 +408,7 @@ describe("streamBlobTurn routine scope", () => {
         selfName: "Ken",
       },
       memory: { list: () => [], save: () => {} },
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
     });
     expect(text).toBe("Checked.");
@@ -448,7 +449,7 @@ describe("streamBlobTurn routine scope", () => {
         selfName: "Ken",
       },
       memory: { list: () => [], save: () => {} },
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
     });
     expect([...offeredTools].sort()).toEqual(["web_fetch", "web_search"]);
@@ -478,7 +479,7 @@ describe("streamBlobTurn routine scope", () => {
       messages: [{ role: "user", content: "hello" }],
       mcpServers: [{ id: "1", name: "Files", url: "http://127.0.0.1:39917/mcp", enabled: true }],
       memory: { list: () => [], save: () => {} },
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
     });
     expect([...offeredTools].sort()).toEqual(["web_fetch", "web_search"]);
@@ -502,7 +503,7 @@ describe("streamBlobTurn routine scope", () => {
       scope: "routine",
       memory: { list: () => [], save: () => {} },
       onUsage: (usage) => seen.push(usage),
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
     });
     expect(seen).toEqual([{ inputTokens: 900, outputTokens: 40 }]);
@@ -524,7 +525,7 @@ describe("streamBlobTurn routine scope", () => {
       home: memoryHome(),
       memory: { list: () => [], save: () => {} },
       onAsk: (ask) => asks.push(ask),
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
     });
     expect(asks).toEqual([{ question: "Which city?", kind: "question" }]);
@@ -548,7 +549,7 @@ describe("streamBlobTurn routine scope", () => {
       scope: "routine",
       home,
       memory: { list: () => [], save: () => {} },
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
     });
     expect(text).toBe("Saved the summary.");
@@ -599,7 +600,7 @@ describe("streamBlobTurn routine scope", () => {
       mcpServers: [{ id: "1", name: "Files", url: server, enabled: true }],
       memory: { list: () => [], save: () => {} },
       onToolCall: (call) => calls.push(call),
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
     });
     expect(text).toBe("It is 42.");
@@ -643,7 +644,7 @@ describe("streamBlobTurn routine scope", () => {
         selfName: "Ken",
       },
       memory: { list: () => [], save: () => {} },
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
     });
     expect(text).toBe("Scout found it.");
@@ -692,7 +693,7 @@ describe("streamBlobTurn routine scope", () => {
       home: memoryHome(),
       memory: { list: () => [], save: () => {} },
       onToolCall: (call) => calls.push(call),
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: () => {},
     });
     const subagent = calls.find((call) => call.name === "run_subagent");

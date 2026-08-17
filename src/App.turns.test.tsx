@@ -151,6 +151,40 @@ describe("turn wiring", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it("shows each completed speech segment as its own bubble", async () => {
+    // A tool-using turn speaks before each tool call, then answers: every
+    // segment arrives whole from the turn loop, and each must land as a
+    // separate bubble — not one growing message patched in place.
+    const segments = [
+      "I'll look into that now.",
+      "Ah, I've just found something interesting here.",
+      "Here's the answer.",
+    ];
+    script = [
+      (options) => {
+        for (const segment of segments) {
+          options.onSegment?.(segment);
+        }
+        return segments.join("\n\n");
+      },
+    ];
+    const user = userEvent.setup();
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+    await say(user, "look into it");
+
+    await waitFor(() => expect(screen.getByText(segments[2] ?? "")).toBeInTheDocument());
+    const bubbles = segments.map((segment) => screen.getByText(segment).closest(".bubble"));
+    // One distinct bubble per segment, each holding only its own words.
+    expect(new Set(bubbles).size).toBe(segments.length);
+    for (const [index, bubble] of bubbles.entries()) {
+      expect(bubble).toHaveTextContent(segments[index] ?? "");
+      for (const other of segments.slice(0, index)) {
+        expect(bubble).not.toHaveTextContent(other);
+      }
+    }
+  });
+
   it("puts an attached file in the Blob's files and fences its text into the prompt", async () => {
     const user = userEvent.setup();
     script = [() => "Read it."];

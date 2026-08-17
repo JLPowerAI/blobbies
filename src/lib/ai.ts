@@ -708,7 +708,13 @@ export async function streamBlobTurn(options: {
   onAsk?: (ask: PendingAsk) => void;
   /** Safe flush point: assistant text + tool results for a turn are complete. */
   onCheckpoint?: () => void;
-  onText: (fullText: string) => void;
+  /**
+   * One completed speech segment — a banked preamble ("I'll look into that
+   * now.") or the turn's final answer — delivered whole, never per delta, so
+   * the caller can show each as its own bubble. The segments joined with
+   * blank lines are exactly what the turn returns.
+   */
+  onSegment: (segment: string) => void;
   onConfigure: (patch: BlobConfigPatch) => void;
   /** Observes each completed tool call: drives the sim harness and, later, UI. */
   onToolCall?: (call: ToolCallRecord) => void;
@@ -809,10 +815,12 @@ export async function streamBlobTurn(options: {
 
   /**
    * Text the model finished saying before each tool call ("Let me search for
-   * that."). Kept for the whole turn — including across the rescue round — so
-   * nothing the user already read is pulled back off the screen; joined into
-   * the reply as its own paragraph. Only whole segments land here: a fragment
-   * cut off mid-sentence by the round budget is still dropped.
+   * that."). Each entry is emitted as its own bubble the moment it is banked,
+   * and kept for the whole turn — including across the rescue round — so
+   * nothing the user already read is pulled back off the screen and the
+   * return always matches the bubbles on screen. Only whole segments land
+   * here: a fragment cut off mid-sentence by the round budget is still
+   * dropped.
    */
   const said: string[] = [];
 
@@ -865,25 +873,23 @@ export async function streamBlobTurn(options: {
     });
     const pending = new Map<string, { name: string; args: Record<string, unknown> }>();
     for await (const event of loop) {
+      // No per-delta emission: a bubble appears only once its text is whole.
       if (event.type === "text_delta") {
         text += event.text;
-        options.onText(full());
       }
       if (event.type === "tool_call_start") {
         // Anything said before a tool call is preamble, not the answer. A
         // finished thought ("Let me search for that.") is banked as its own
-        // paragraph so it stays on screen; a sentence the model abandoned
-        // mid-way to call a tool ("From your search, here") is dropped, and
-        // an identical lead-in repeated every round is not stacked.
+        // bubble, whole, the moment the tool call starts; a sentence the
+        // model abandoned mid-way to call a tool ("From your search, here")
+        // is dropped, and an identical lead-in repeated every round is not
+        // stacked.
         const segment = text.trim();
         if (isCompleteThought(segment) && said[said.length - 1] !== segment) {
           said.push(segment);
+          options.onSegment(segment);
         }
         text = "";
-        // Re-emit so the screen matches what the reply will actually contain:
-        // a banked paragraph stays put, a dropped fragment goes now rather
-        // than surviving on screen until the next round's first token.
-        options.onText(full());
         pending.set(event.toolCallId, { name: event.name, args: event.args });
       }
       if (event.type === "tool_call_end") {
@@ -926,12 +932,18 @@ export async function streamBlobTurn(options: {
         });
       }
       if (event.type === "error") {
-        // Preserve any streamed text: partial reply beats a retry from zero.
-        if (text !== "") {
+        // Preserve any text already said: partial reply beats a retry from
+        // zero. Mid-sentence is as finished as it will ever be — emit it.
+        if (text.trim() !== "") {
+          options.onSegment(text.trim());
           return { text: full(), latest: text };
         }
         throw event.error;
       }
+    }
+    // The loop settled: the live segment is complete, so it becomes a bubble.
+    if (text.trim() !== "") {
+      options.onSegment(text.trim());
     }
     return { text: full(), latest: text };
   };
@@ -963,7 +975,11 @@ export async function streamBlobTurn(options: {
   if (pendingAsk !== null) {
     const ask: PendingAsk = pendingAsk;
     options.onAsk?.(ask);
-    options.onText(ask.question);
+    // The model often says the question as text right before calling the
+    // tool; that bubble is already up, so ask again only if it is new.
+    if (said[said.length - 1] !== ask.question) {
+      options.onSegment(ask.question);
+    }
     return ask.question;
   }
 
@@ -996,10 +1012,9 @@ export async function streamBlobTurn(options: {
       // Cleared first: this round has no tools, so it cannot hit the budget,
       // and a stale flag would make every later turn pay for a rescue round.
       cutShort = false;
-      // The banked lead-ins introduced an answer that never came ("From your
-      // search, here"), so the rescue reply stands alone rather than trailing
-      // a promise the model already broke.
-      said.length = 0;
+      // Banked bubbles stay: the user already read them, and the rescue
+      // answer follows them as its own bubble instead of trailing them in
+      // one paragraph.
       const finished = await runLoop("none");
       // Keep the fragment only if the retry somehow produced nothing at all.
       text = finished.latest.trim() === "" ? text : finished.text;

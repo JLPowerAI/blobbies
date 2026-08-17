@@ -2067,6 +2067,9 @@ a.modal-button {
 .message-scroll {
   flex: 1;
   overflow-y: auto;
+  /* The side hover bars and long tokens must never open a horizontal
+     scrollbar on a narrow pane — they clip into the edge padding instead. */
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -2122,8 +2125,24 @@ a.modal-button {
   position: relative;
 }
 
+/* The bubble and its hover bar share one line. The line hugs the bubble
+   (fit-content), so the absolutely positioned bar can anchor to the bubble's
+   own edge rather than the pane's — and follows it however wide it is.
+
+   The 72% width cap lives HERE, not on .bubble: the row's width is definite,
+   while a percentage against the line's own fit-content width is circular —
+   engines disagree whether it resolves against the row or the shrunken
+   line, which shows up as bubbles double-shrunk or drifting off their side. */
+.message-line {
+  position: relative;
+  display: flex;
+  width: fit-content;
+  max-width: 72%;
+}
+
 /* Hover/focus actions, hidden until the row is hovered, keyboard-focused, or
-   its reaction picker is open.
+   its reaction picker is open. Beside the bubble, vertically centered on it:
+   right of agent bubbles, left of user ones — the outside edge in both cases.
 
    Hiding is opacity + a visibility flip, and the visibility half lives on
    .message-row-stale (rows ChatPane knows the cursor has left) rather than
@@ -2139,15 +2158,26 @@ a.modal-button {
    which pinned the bar open after the pointer left. pointer-events stay off
    while hidden so an invisible bar can't take clicks. */
 .message-actions {
+  position: absolute;
+  top: 50%;
   display: flex;
   gap: 2px;
   opacity: 0;
-  /* Leaving: drifts back toward the bubble as it fades. */
-  translate: 0 2px;
+  /* The -50% half centers on the bubble; the +2px drifts down while hidden,
+     so the reveal settles up into place. */
+  translate: 0 calc(-50% + 2px);
   pointer-events: none;
   transition:
     opacity var(--duration-hover-out) var(--ease-exit),
     translate var(--duration-hover-out) var(--ease-exit);
+}
+
+.message-row-agent .message-actions {
+  left: calc(100% + 8px);
+}
+
+.message-row-user .message-actions {
+  right: calc(100% + 8px);
 }
 
 /* The fade plays, then visibility flips at the end of it (a 0s transition
@@ -2167,7 +2197,7 @@ a.modal-button {
 .message-actions:has([aria-expanded="true"]) {
   visibility: visible;
   opacity: 1;
-  translate: 0 0;
+  translate: 0 -50%;
   pointer-events: auto;
   /* Arriving is slower and eased out, so the bar settles instead of snapping. */
   transition:
@@ -2253,11 +2283,14 @@ a.modal-button {
 }
 
 .bubble {
-  max-width: 72%;
+  max-width: 100%;
   padding: 10px 14px;
   border-radius: var(--radius-bubble);
   font-size: 14px;
   line-height: 1.42;
+  /* A long URL is one unbreakable token; without this it paints past the
+     bubble (now clipped by the transcript's overflow-x: hidden). */
+  overflow-wrap: anywhere;
 }
 
 .bubble-agent {

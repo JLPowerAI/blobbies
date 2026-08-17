@@ -54,7 +54,7 @@ async function runScenario(turns: { say: string }[], start: SimBlob): Promise<Tu
         // wiring than the app actually runs.
         reconcile: (fact, existing) => reconcileMemories({ model: MODEL, fact, existing }),
       },
-      onText: () => {},
+      onSegment: () => {},
       onConfigure: (patch) => {
         Object.assign(blob, patch);
       },

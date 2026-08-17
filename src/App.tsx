@@ -661,7 +661,9 @@ export function App() {
     turn?: { trigger: RunTrigger; routineId?: string; prompt?: string },
   ): Promise<"done" | "failed" | "cancelled"> => {
     const trigger = turn?.trigger ?? "user";
-    const replyId = `agent-${Date.now()}`;
+    // Unique rather than time-based: bubble ids address individual messages
+    // below, and two turns inside the same millisecond would collide.
+    const replyId = `agent-${crypto.randomUUID()}`;
     // Read once, from the ref: a scheduled routine runs the mount-render
     // closure, where every one of these is still its mount-time value.
     const { model, userName, timezone, reasoning, userMemories, mcpServers } = turnSettings.current;
@@ -765,20 +767,44 @@ export function App() {
     const askBox: { value: { question: string; kind: "question" | "action" } | null } = {
       value: null,
     };
-    const patchReply = (content: string) => {
+    /** Bubbles appended so far; failure notes land on the newest one. */
+    let bubbleCount = 0;
+    /**
+     * One bubble per completed speech segment. Segments arrive whole from
+     * streamBlobTurn (never token by token), so each call appends a finished
+     * bubble rather than patching a growing one.
+     */
+    const appendSegment = (content: string) => {
+      if (content.trim() === "") {
+        return;
+      }
+      text = text === "" ? content : `${text}\n\n${content}`;
+      const id = `${replyId}-${++bubbleCount}`;
       setSentByAgent((previous) => {
-        const current = previous[target.id] ?? [];
-        const reply: Message = {
-          id: replyId,
+        const bubble: Message = {
+          id,
           kind: "text",
           author: "agent",
           segments: [{ text: content }],
           timestampMs: Date.now(),
           ...(askBox.value === null ? {} : { ask: askBox.value.kind }),
         };
-        const next = current.some((entry) => entry.id === replyId)
-          ? current.map((entry) => (entry.id === replyId ? reply : entry))
-          : [...current, reply];
+        return { ...previous, [target.id]: [...(previous[target.id] ?? []), bubble] };
+      });
+    };
+    /** Attach a failure note to the newest bubble, or open one when nothing was said. */
+    const noteStopped = (note: string) => {
+      if (bubbleCount === 0) {
+        appendSegment(note);
+        return;
+      }
+      const id = `${replyId}-${bubbleCount}`;
+      setSentByAgent((previous) => {
+        const next = (previous[target.id] ?? []).map((entry) =>
+          entry.id === id && entry.kind === "text"
+            ? { ...entry, segments: [{ text: `${entry.segments[0]?.text ?? ""}${note}` }] }
+            : entry,
+        );
         return { ...previous, [target.id]: next };
       });
     };
@@ -824,10 +850,7 @@ export function App() {
           // memory reflects the user's life now rather than a pile of history.
           reconcile: (fact, existing) => reconcileMemories({ model, fact, existing }),
         },
-        onText: (fullText) => {
-          text = fullText;
-          patchReply(fullText);
-        },
+        onSegment: (segment) => appendSegment(segment),
         // The Blob configures itself: the same patch path the settings panel
         // uses, so title/description show up there immediately.
         onConfigure: (patch) => updateBlob(target.id, patch),
@@ -850,22 +873,29 @@ export function App() {
         text =
           "I couldn't put a reply together for that. Try asking again, or in " +
           "smaller pieces \u2014 smaller models sometimes stall on broad questions.";
-        patchReply(text);
+        appendSegment(text);
       }
     } catch (error) {
       if (isAbortError(error)) {
-        // Stopped by the user: keep whatever text already streamed.
+        // Stopped by the user: the completed bubbles stay as they are.
         outcome = "cancelled";
-        text = text.trim() === "" ? "(stopped)" : text;
-        patchReply(text);
+        if (text.trim() === "") {
+          text = "(stopped)";
+          appendSegment(text);
+        }
       } else {
         outcome = "failed";
         // Whitespace-only counts as nothing said, matching the check above.
         const unreachable = isTinfoilModel(model)
           ? "I couldn't reach Tinfoil. Check your connection and API key in Settings \u2192 Model."
           : "I couldn't reach the local model. Check that Ollama is running in Settings \u2192 Model.";
-        text = text.trim() === "" ? unreachable : `${text}\u2026 (the model stopped responding)`;
-        patchReply(text);
+        if (text.trim() === "") {
+          text = unreachable;
+          appendSegment(text);
+        } else {
+          text = `${text}\u2026 (the model stopped responding)`;
+          noteStopped("\u2026 (the model stopped responding)");
+        }
       }
     } finally {
       activeTurn.current = null;

@@ -151,6 +151,40 @@ function AttachmentView({ attachment, reading }: { attachment: Attachment; readi
   );
 }
 
+/** How long a silence before the transcript earns a new time divider. */
+const TIME_DIVIDER_GAP_MS = 5 * 60_000;
+
+/** "9:41 AM" — the wall-clock style the transcript dividers use. */
+function clockLabel(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+/** "Tuesday, 12 August" — marks a message from a later day. */
+function dayLabel(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+}
+
+/**
+ * Divider text for a message, or null when it closely follows the previous
+ * one on the same day. Like a messenger transcript, the time appears at the
+ * start of the conversation and again after a silence or an overnight break —
+ * not on every message. Legacy entries without a timestamp never get one and
+ * never break the chain: the previous message's time simply carries forward.
+ */
+function dividerLabel(previous: number | null, ms: number): string | null {
+  if (previous === null) {
+    return clockLabel(ms);
+  }
+  if (new Date(previous).toDateString() !== new Date(ms).toDateString()) {
+    return dayLabel(ms);
+  }
+  return ms - previous >= TIME_DIVIDER_GAP_MS ? clockLabel(ms) : null;
+}
+
 function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }) {
   // An ask renders as a highlighted card: the Blob paused its task and needs
   // the user — "action" means "do this yourself" (login, click, paste).
@@ -261,31 +295,6 @@ function MessageRow({
       // so entering the row anywhere claims it in one delegated listener.
       onPointerOver={onEnter}
     >
-      <div className="message-actions" role="toolbar" aria-label="Message actions">
-        <button type="button" className="icon-button message-action" aria-label="More options">
-          <Ellipsis size={15} strokeWidth={1.8} aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className="icon-button message-action"
-          aria-label="Reply"
-          onClick={onReply}
-        >
-          <CornerUpRight size={15} strokeWidth={1.8} aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className="icon-button message-action"
-          aria-label="React"
-          aria-expanded={pickerOpen}
-          // Without this, the outside-click dismiss fires on pointerdown and
-          // the click then re-toggles the picker straight back open.
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={onTogglePicker}
-        >
-          <Smile size={15} strokeWidth={1.8} aria-hidden="true" />
-        </button>
-      </div>
       {pickerOpen ? (
         <div className="reaction-picker">
           {REACTIONS.map((option) => (
@@ -316,12 +325,42 @@ function MessageRow({
           ))}
         </span>
       )}
-      {/* An attachment-only message has no words, so it gets no empty bubble. */}
-      {message.kind !== "text" ? (
-        <FileBubble message={message} />
-      ) : message.segments.some((segment) => segment.text !== "") ? (
-        <TextBubble message={message} />
-      ) : null}
+      {/* The bubble and its hover bar share one line: the line hugs the
+          bubble, so the bar can sit beside it, vertically centered — right of
+          agent bubbles, left of user ones — instead of above it. */}
+      <div className="message-line">
+        <div className="message-actions" role="toolbar" aria-label="Message actions">
+          <button type="button" className="icon-button message-action" aria-label="More options">
+            <Ellipsis size={15} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button message-action"
+            aria-label="Reply"
+            onClick={onReply}
+          >
+            <CornerUpRight size={15} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button message-action"
+            aria-label="React"
+            aria-expanded={pickerOpen}
+            // Without this, the outside-click dismiss fires on pointerdown and
+            // the click then re-toggles the picker straight back open.
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={onTogglePicker}
+          >
+            <Smile size={15} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        </div>
+        {/* An attachment-only message has no words, so it gets no empty bubble. */}
+        {message.kind !== "text" ? (
+          <FileBubble message={message} />
+        ) : message.segments.some((segment) => segment.text !== "") ? (
+          <TextBubble message={message} />
+        ) : null}
+      </div>
       {reaction === undefined ? null : (
         <span className="bubble-reaction" role="img" aria-label={`Reacted with ${reaction}`}>
           {reaction}
@@ -479,6 +518,25 @@ export function ChatPane({
   // is "fresh" and pops in with the jelly animation — exactly once.
   // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot messages only when the conversation switches
   const initialIds = useMemo(() => new Set(messages.map((entry) => entry.id)), [agent.id]);
+
+  // Time dividers per message id, computed over the WHOLE transcript (not the
+  // visible slice) so paging older messages in keeps each divider anchored to
+  // the message it belongs to.
+  const dividers = useMemo(() => {
+    const byId = new Map<string, string>();
+    let previous: number | null = null;
+    for (const entry of messages) {
+      if (entry.timestampMs === undefined) {
+        continue;
+      }
+      const label = dividerLabel(previous, entry.timestampMs);
+      previous = entry.timestampMs;
+      if (label !== null) {
+        byId.set(entry.id, label);
+      }
+    }
+    return byId;
+  }, [messages]);
 
   /**
    * Load the downloaded models for the header picker.
@@ -886,9 +944,15 @@ export function ChatPane({
           }
         }}
       >
-        <p className="timestamp-divider">9:41 AM</p>
-        {(messages.length > visibleCount ? messages.slice(-visibleCount) : messages).map(
-          (message) => (
+        {(messages.length > visibleCount ? messages.slice(-visibleCount) : messages).flatMap(
+          (message) => [
+            ...(dividers.has(message.id)
+              ? [
+                  <p className="timestamp-divider" key={`${message.id}-divider`}>
+                    {dividers.get(message.id)}
+                  </p>,
+                ]
+              : []),
             <MessageRow
               fresh={!initialIds.has(message.id)}
               key={message.id}
@@ -901,8 +965,8 @@ export function ChatPane({
               onTogglePicker={() => setPickerFor(pickerFor === message.id ? null : message.id)}
               onReact={(emoji) => toggleReaction(message.id, emoji)}
               onReply={() => startReply(message)}
-            />
-          ),
+            />,
+          ],
         )}
         {/* Always mounted: reserves its space (nothing overlaps or jumps) and
             lets the blob fade in/out instead of popping with the DOM. */}
