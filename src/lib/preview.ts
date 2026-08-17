@@ -28,6 +28,16 @@ const QUALITY = 0.7;
 const MAX_PREVIEW_CHARS = 60_000;
 
 /**
+ * Decoded-pixel cap, mirroring `MAX_PIXELS` in `src-tauri/src/ocr.rs`.
+ *
+ * A few hundred KB of PNG can legally claim hundreds of megapixels. Rust checks
+ * this before decoding; here the decode happens first, so the check bounds the
+ * *canvas* — a 50 MP bitmap is ~200 MB of RGBA, and scaling one down would be
+ * the webview's problem rather than the OCR engine's.
+ */
+const MAX_PIXELS = 50_000_000;
+
+/**
  * A small JPEG copy of an image, as a data URL, or `undefined` if this
  * environment cannot render one (jsdom, or an image the decoder refuses).
  *
@@ -45,6 +55,9 @@ export async function imagePreview(source: Uint8Array | Blob): Promise<string | 
     bitmap = await createImageBitmap(
       source instanceof Blob ? source : new Blob([new Uint8Array(source)]),
     );
+    if (bitmap.width * bitmap.height > MAX_PIXELS) {
+      return undefined;
+    }
     const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));

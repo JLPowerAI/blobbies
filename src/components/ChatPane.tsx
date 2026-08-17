@@ -26,7 +26,7 @@ import { BlobAvatar } from "@/components/BlobAvatar";
 import { MarkdownContent } from "@/components/MarkdownContent";
 import { PillSelect } from "@/components/PillSelect";
 import type { Agent, Message } from "@/data/agents";
-import { type Attachment, MAX_ATTACHMENTS } from "@/lib/attachments";
+import { type Attachment, MAX_ATTACHMENTS, type PickedFile } from "@/lib/attachments";
 import { fileBadge, fileKind } from "@/lib/file-kind";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
 import { imagePreview } from "@/lib/preview";
@@ -50,7 +50,7 @@ interface ChatPaneProps {
   reasoning: boolean;
   onReasoningChange: (on: boolean) => void;
   /** Files ride along with the message; the app saves them to the Blob's home. */
-  onSend: (text: string, replyTo?: string, files?: readonly File[]) => void;
+  onSend: (text: string, replyTo?: string, files?: readonly PickedFile[]) => void;
   /**
    * Ids of messages whose attachments are still being extracted — a PDF parse
    * or an OCR pass runs for seconds after the message is already on screen.
@@ -111,15 +111,15 @@ function AttachmentView({ attachment, reading }: { attachment: Attachment; readi
   const label = attachment.label ?? attachment.name;
   const kind = fileKind(label);
 
-  if (attachment.preview !== undefined) {
+  // Only ever a data: image URL. Previews are read back from the plain-JSON
+  // transcript, an editable file on disk, and this value goes straight into
+  // `src` — an edited one must not be able to name any other scheme.
+  const preview =
+    attachment.preview?.startsWith("data:image/") === true ? attachment.preview : undefined;
+
+  if (preview !== undefined) {
     return (
-      <img
-        className="attachment-image"
-        src={attachment.preview}
-        alt={label}
-        title={label}
-        draggable={false}
-      />
+      <img className="attachment-image" src={preview} alt={label} title={label} draggable={false} />
     );
   }
   return (
@@ -296,7 +296,14 @@ function MessageRow({
       {message.kind !== "text" || (message.attachments ?? []).length === 0 ? null : (
         <span className="message-attachments">
           {(message.attachments ?? []).map((attachment) => (
-            <AttachmentView key={attachment.name} attachment={attachment} reading={reading} />
+            // Keyed on the name the user picked, which does not change when the
+            // saved name settles from `photo.png` to `photo.png.txt` — keying on
+            // the saved name would remount the <img> and flash the picture.
+            <AttachmentView
+              key={attachment.label ?? attachment.name}
+              attachment={attachment}
+              reading={reading}
+            />
           ))}
         </span>
       )}
@@ -677,7 +684,14 @@ export function ChatPane({
     onSend(
       text,
       replyTo !== null && !replyClosing ? replyTo : undefined,
-      attached.length === 0 ? undefined : attached.map((entry) => entry.file),
+      // The thumbnail rides along: the composer already made it, and rebuilding
+      // it after the send is what made the picture pop in a beat late.
+      attached.length === 0
+        ? undefined
+        : attached.map(({ file, preview }) => ({
+            file,
+            ...(preview === undefined ? {} : { preview }),
+          })),
     );
     setDraft("");
     setAttached([]);

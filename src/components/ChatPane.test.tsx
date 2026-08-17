@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatPane } from "@/components/ChatPane";
 import type { Agent, Message } from "@/data/agents";
+import type { PickedFile } from "@/lib/attachments";
 
 const agent: Agent = {
   id: "61ec34f1-9ba5-4eff-b8e1-7acefb2148ea",
@@ -23,7 +24,7 @@ const pane = (
   thinking: boolean,
   onStop: () => void,
   withMessages = false,
-  onSend: (text: string, replyTo?: string, files?: readonly File[]) => void = () => {},
+  onSend: (text: string, replyTo?: string, files?: readonly PickedFile[]) => void = () => {},
 ) => (
   <ChatPane
     agent={agent}
@@ -120,7 +121,8 @@ describe("ChatPane", () => {
 
     // Files alone are a message: no typing needed for Send to appear.
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend).toHaveBeenCalledWith("", undefined, [keep]);
+    // The file goes with its (jsdom-absent) thumbnail, not bare.
+    expect(onSend).toHaveBeenCalledWith("", undefined, [{ file: keep }]);
     // Sent means gone from the composer, so the next message can't resend it.
     expect(screen.queryByText("data.csv")).not.toBeInTheDocument();
   });

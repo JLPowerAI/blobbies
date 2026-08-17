@@ -9,10 +9,11 @@ import {
   rejectionNote,
   saveAttachments,
 } from "@/lib/attachments";
-import { memoryHome } from "@/lib/home";
+import { type HomeBackend, memoryHome } from "@/lib/home";
 import { ocrImage } from "@/lib/ocr";
 import { ocrPdf } from "@/lib/pdf-ocr";
 import { extractPdfText } from "@/lib/pdf-text";
+import { imagePreview } from "@/lib/preview";
 
 // pdf.js needs a real Worker and OCR needs the Rust side, neither of which
 // jsdom has. Both are verified for real elsewhere (pdfjs-dist directly, and
@@ -20,6 +21,9 @@ import { extractPdfText } from "@/lib/pdf-text";
 // which files reach which extractor, and what happens when one fails.
 vi.mock("@/lib/pdf-text", () => ({ extractPdfText: vi.fn() }));
 vi.mock("@/lib/pdf-ocr", () => ({ ocrPdf: vi.fn() }));
+// Canvas-based, so jsdom cannot run the real one; it is stubbed to return
+// nothing by default, which matches a plain jsdom render.
+vi.mock("@/lib/preview", () => ({ imagePreview: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/lib/ocr", async (importOriginal) => ({
   // `isImage` is pure byte-sniffing, so the real one is used; only the IPC
   // call is stubbed.
@@ -40,9 +44,20 @@ beforeEach(() => {
   extract.mockReset();
   ocrPdfFile.mockReset();
   ocrImageFile.mockReset();
+  vi.mocked(imagePreview).mockReset().mockResolvedValue(undefined);
   // Undo any vi.stubEnv from a previous test.
   vi.unstubAllEnvs();
 });
+
+/**
+ * `saveAttachments` takes composer entries (file plus the thumbnail the
+ * composer already rendered); these tests deal in plain Files.
+ */
+const save = (home: HomeBackend, files: readonly File[]) =>
+  saveAttachments(
+    home,
+    files.map((file) => ({ file })),
+  );
 
 /** A PNG header, so the sniff routes these bytes to OCR. */
 const png = (name: string, size = 1_000) =>
@@ -66,7 +81,7 @@ describe("attachmentName", () => {
 describe("saveAttachments", () => {
   it("saves text files into the Blob's home under safe names", async () => {
     const home = memoryHome();
-    const { saved, rejected } = await saveAttachments(home, [file("../notes.md", "hello")]);
+    const { saved, rejected } = await save(home, [file("../notes.md", "hello")]);
 
     expect(rejected).toEqual([]);
     expect(saved).toEqual([{ name: "notes.md", bytes: 5 }]);
@@ -76,17 +91,14 @@ describe("saveAttachments", () => {
   it("reports the file's bytes, not its character count", async () => {
     // "café" is 4 characters and 5 UTF-8 bytes; the chip and the Files panel
     // must agree, and the Files panel gets its number from the filesystem.
-    const { saved } = await saveAttachments(memoryHome(), [file("menu.txt", "café")]);
+    const { saved } = await save(memoryHome(), [file("menu.txt", "café")]);
     expect(saved[0]?.bytes).toBe(5);
   });
 
   it("never overwrites a file the Blob already has", async () => {
     const home = memoryHome();
     await home.write("notes.md", "the Blob's own work");
-    const { saved } = await saveAttachments(home, [
-      file("notes.md", "mine"),
-      file("notes.md", "!"),
-    ]);
+    const { saved } = await save(home, [file("notes.md", "mine"), file("notes.md", "!")]);
 
     expect(saved.map((entry) => entry.name)).toEqual(["notes-1.md", "notes-2.md"]);
     expect(await home.read("notes.md")).toBe("the Blob's own work");
@@ -94,7 +106,7 @@ describe("saveAttachments", () => {
 
   it("refuses binaries, oversized and empty files with a reason", async () => {
     const home = memoryHome();
-    const { saved, rejected } = await saveAttachments(home, [
+    const { saved, rejected } = await save(home, [
       // A .docx: a zip underneath, and not something we can read yet.
       file("report.docx", new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00])),
       file("huge.txt", "x".repeat(MAX_ATTACHMENT_BYTES + 1)),
@@ -122,7 +134,7 @@ describe("saveAttachments", () => {
       return "page text";
     });
 
-    const { saved } = await saveAttachments(home, [pdf("a.pdf"), pdf("b.pdf"), pdf("c.pdf")]);
+    const { saved } = await save(home, [pdf("a.pdf"), pdf("b.pdf"), pdf("c.pdf")]);
 
     expect(peak).toBe(3);
     expect(saved.map((entry) => entry.name)).toEqual(["a.pdf.txt", "b.pdf.txt", "c.pdf.txt"]);
@@ -136,7 +148,7 @@ describe("saveAttachments", () => {
     const broken = pdf("gone.pdf");
     vi.spyOn(broken, "arrayBuffer").mockRejectedValue(new Error("NotReadableError"));
 
-    const { saved, rejected } = await saveAttachments(home, [broken, pdf("policy.pdf")]);
+    const { saved, rejected } = await save(home, [broken, pdf("policy.pdf")]);
 
     expect(saved.map((entry) => entry.name)).toEqual(["policy.pdf.txt"]);
     expect(rejected.map((entry) => entry.name)).toEqual(["gone.pdf"]);
@@ -146,7 +158,7 @@ describe("saveAttachments", () => {
     const home = memoryHome();
     extract.mockResolvedValue("Reconcile the seats against the policy.");
 
-    const { saved, rejected } = await saveAttachments(home, [pdf("Policy.PDF")]);
+    const { saved, rejected } = await save(home, [pdf("Policy.PDF")]);
 
     expect(rejected).toEqual([]);
     // Saved as text, because that is what it is now — and the name still says
@@ -162,11 +174,11 @@ describe("saveAttachments", () => {
     extract.mockResolvedValue("from the parser");
 
     // Named .txt, but really a PDF: it still goes to the parser.
-    await saveAttachments(home, [new File(["%PDF-1.4\nbinary"], "notes.txt")]);
+    await save(home, [new File(["%PDF-1.4\nbinary"], "notes.txt")]);
     expect(extract).toHaveBeenCalledTimes(1);
 
     // Named .pdf, but really text: decoded normally, parser never touched.
-    const { saved } = await saveAttachments(home, [file("lies.pdf", "just words")]);
+    const { saved } = await save(home, [file("lies.pdf", "just words")]);
     expect(extract).toHaveBeenCalledTimes(1);
     expect(saved[0]?.name).toBe("lies.pdf");
   });
@@ -175,7 +187,7 @@ describe("saveAttachments", () => {
     const home = memoryHome();
     extract.mockRejectedValue(new Error("password required"));
 
-    const { saved, rejected } = await saveAttachments(home, [pdf("locked.pdf")]);
+    const { saved, rejected } = await save(home, [pdf("locked.pdf")]);
 
     expect(saved).toEqual([]);
     expect(rejected[0]?.reason).toContain("encrypted or damaged");
@@ -187,7 +199,7 @@ describe("saveAttachments", () => {
     extract.mockResolvedValue("   \n  "); // a scan: no text layer
     ocrPdfFile.mockResolvedValue("Signed on the 3rd of March");
 
-    const { rejected } = await saveAttachments(home, [pdf("scan.pdf")]);
+    const { rejected } = await save(home, [pdf("scan.pdf")]);
 
     expect(rejected).toEqual([]);
     expect(await home.read("scan.pdf.txt")).toContain("Signed on the 3rd");
@@ -195,7 +207,7 @@ describe("saveAttachments", () => {
 
   it("only rasterizes once the cheap text path comes back empty", async () => {
     extract.mockResolvedValue("the text layer");
-    await saveAttachments(memoryHome(), [pdf("digital.pdf")]);
+    await save(memoryHome(), [pdf("digital.pdf")]);
     // OCR is seconds of CPU per page; a PDF that already has text must never
     // pay for it.
     expect(ocrPdfFile).not.toHaveBeenCalled();
@@ -204,7 +216,7 @@ describe("saveAttachments", () => {
   it("says so when a scan yields no text at all", async () => {
     extract.mockResolvedValue("");
     ocrPdfFile.mockResolvedValue("");
-    const { rejected } = await saveAttachments(memoryHome(), [pdf("blank.pdf")]);
+    const { rejected } = await save(memoryHome(), [pdf("blank.pdf")]);
     expect(rejected[0]?.reason).toContain("no text could be found");
   });
 
@@ -215,7 +227,7 @@ describe("saveAttachments", () => {
     extract.mockResolvedValue("");
     ocrPdfFile.mockRejectedValue(new TypeError("DOMMatrix is not defined"));
 
-    const { rejected } = await saveAttachments(memoryHome(), [pdf("scan.pdf")]);
+    const { rejected } = await save(memoryHome(), [pdf("scan.pdf")]);
 
     expect(rejected[0]?.reason).not.toContain("DOMMatrix");
     expect(rejected[0]?.reason).toContain("couldn't be read");
@@ -227,7 +239,7 @@ describe("saveAttachments", () => {
     // the only place the actual error can surface.
     extract.mockRejectedValue(new TypeError("DOMMatrix is not defined"));
 
-    const { rejected } = await saveAttachments(memoryHome(), [pdf("scan.pdf")]);
+    const { rejected } = await save(memoryHome(), [pdf("scan.pdf")]);
 
     expect(rejected[0]?.reason).toContain("dev detail");
     expect(rejected[0]?.reason).toContain("DOMMatrix");
@@ -237,7 +249,7 @@ describe("saveAttachments", () => {
     const home = memoryHome();
     ocrImageFile.mockResolvedValue("WEDNESDAY 14:00 DENTIST");
 
-    const { saved, rejected } = await saveAttachments(home, [png("photo.png")]);
+    const { saved, rejected } = await save(home, [png("photo.png")]);
 
     expect(rejected).toEqual([]);
     expect(saved[0]?.name).toBe("photo.png.txt");
@@ -246,24 +258,44 @@ describe("saveAttachments", () => {
     expect(extract).not.toHaveBeenCalled();
   });
 
-  it("says an image has no text rather than saving an empty file", async () => {
+  it("refuses a textless image only when it cannot be shown either", async () => {
+    // jsdom has no canvas, so `imagePreview` returns undefined here — which is
+    // exactly the "nothing to read and nothing to show" case.
     const home = memoryHome();
     ocrImageFile.mockResolvedValue("  ");
-    const { rejected } = await saveAttachments(home, [png("sunset.png")]);
+    const { rejected } = await save(home, [png("sunset.png")]);
     expect(rejected[0]?.reason).toContain("no text could be found");
     expect(await home.list()).toEqual([]);
+  });
+
+  it("keeps a textless photo when there is a thumbnail to show", async () => {
+    const home = memoryHome();
+    ocrImageFile.mockResolvedValue("");
+    vi.mocked(imagePreview).mockResolvedValue("data:image/jpeg;base64,AAAA");
+
+    const { saved, rejected } = await save(home, [png("sunset.png")]);
+
+    // A holiday photo has no text in it; showing the picture is the answer.
+    expect(rejected).toEqual([]);
+    expect(saved[0]?.preview).toBe("data:image/jpeg;base64,AAAA");
+    // The name shown is the one the user picked, not our `.txt` storage name.
+    expect(saved[0]?.name).toBe("sunset.png.txt");
+    expect(saved[0]?.label).toBe("sunset.png");
+    // And what the model reads says plainly that there is nothing to quote,
+    // rather than looking like an empty document.
+    expect(await home.read("sunset.png.txt")).toContain("no readable text");
   });
 
   it("passes the OCR engine's own wording through, since it is written for the user", async () => {
     // Rust already phrases these (ocr::describe); re-wording them here would
     // lose the distinction between "too big" and "unreadable".
     ocrImageFile.mockRejectedValue(new Error("image is too large to read"));
-    const { rejected } = await saveAttachments(memoryHome(), [png("huge.png")]);
+    const { rejected } = await save(memoryHome(), [png("huge.png")]);
     expect(rejected[0]?.reason).toContain("image is too large to read");
   });
 
   it("refuses an oversized PDF before the parser ever sees it", async () => {
-    const { rejected } = await saveAttachments(memoryHome(), [pdf("huge.pdf", MAX_PDF_BYTES + 1)]);
+    const { rejected } = await save(memoryHome(), [pdf("huge.pdf", MAX_PDF_BYTES + 1)]);
     // The size cap is worth nothing if the parse happens anyway.
     expect(extract).not.toHaveBeenCalled();
     expect(rejected[0]?.reason).toContain("MB");
@@ -273,7 +305,7 @@ describe("saveAttachments", () => {
     const home = memoryHome();
     extract.mockResolvedValue("p".repeat(400_000));
 
-    const { saved, rejected } = await saveAttachments(home, [pdf("long.pdf")]);
+    const { saved, rejected } = await save(home, [pdf("long.pdf")]);
 
     // Refusing a file whose text we already have would be the worse trade;
     // it is kept, cut, and says so.
@@ -287,7 +319,7 @@ describe("saveAttachments", () => {
     const picked = Array.from({ length: MAX_ATTACHMENTS + 2 }, (_, index) =>
       file(`f${index}.txt`, "body"),
     );
-    const { saved, rejected } = await saveAttachments(home, picked);
+    const { saved, rejected } = await save(home, picked);
 
     expect(saved).toHaveLength(MAX_ATTACHMENTS);
     expect(rejected).toHaveLength(2);

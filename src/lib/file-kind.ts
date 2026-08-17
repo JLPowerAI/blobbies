@@ -95,7 +95,8 @@ const BY_EXTENSION: Readonly<Record<string, FileKind>> = {
  */
 export function fileKind(name: string): FileKind {
   const parts = name.toLowerCase().split(".");
-  // `report.pdf.txt` → try "txt", then "pdf". Last wins only if it is known.
+  // `report.pdf.txt` → try "txt" (unknown, so it falls through), then "pdf".
+  // A real `.txt` matches neither and lands on the "text" default below.
   for (const extension of [parts.at(-1), parts.at(-2)]) {
     const kind = extension === undefined ? undefined : BY_EXTENSION[extension];
     if (kind !== undefined) {
@@ -107,13 +108,16 @@ export function fileKind(name: string): FileKind {
 
 /** Short label for the icon badge, e.g. the "PDF" on a red tile. */
 export function fileBadge(name: string): string {
-  const kind = fileKind(name);
-  if (kind === "text") {
-    return "TXT";
-  }
   const parts = name.toLowerCase().split(".");
-  // Prefer the real extension over the family name: "XLSX" beats "SHEET", and
-  // the `.txt` we appended is never what the user attached.
+  // No dot at all (a `Makefile`, a `LICENSE`): the whole name is not an
+  // extension, and printing it across a 38px tile would be a smear.
+  if (parts.length < 2) {
+    return "FILE";
+  }
+  // Prefer the real extension over the family name — "XLSX" beats "SHEET" — and
+  // skip the `.txt` we appended, which is never what the user attached.
   const extension = parts.at(-1) === "txt" && parts.length > 2 ? parts.at(-2) : parts.at(-1);
-  return (extension ?? kind).slice(0, 4).toUpperCase();
+  return (extension === undefined || extension === "" ? "FILE" : extension)
+    .slice(0, 4)
+    .toUpperCase();
 }

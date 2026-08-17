@@ -2710,6 +2710,13 @@ a.modal-button {
   gap: 1px;
 }
 
+/* Both halves need the min-width:0 escape hatch, or a long filename refuses to
+   ellipsize and pushes the card past its max-width instead. */
+.composer-file-text .attachment-card-name,
+.attachment-card-text .attachment-card-name {
+  min-width: 0;
+}
+
 /* The X sits on the tile's corner, half outside it, as in the reference. */
 .attachment-remove {
   position: absolute;
@@ -2745,7 +2752,9 @@ a.modal-button {
   /* Tall images stay a bubble, not a column the size of the viewport. */
   max-height: 320px;
   border-radius: var(--radius-bubble);
-  object-fit: cover;
+  /* `contain`, not `cover`: a phone screenshot is far taller than 320px, and
+     cover would silently crop the half the user is asking about. */
+  object-fit: contain;
 }
 
 .attachment-card {

@@ -39,6 +39,18 @@ export interface Attachment {
   preview?: string;
 }
 
+/**
+ * A file on its way from the composer to a message.
+ *
+ * Carries the thumbnail the composer already rendered, so the sent message can
+ * show the picture on its first paint instead of swapping a card for an image
+ * a moment later.
+ */
+export interface PickedFile {
+  file: File;
+  preview?: string;
+}
+
 /** Attachments per message. Matches what a small model can actually hold. */
 export const MAX_ATTACHMENTS = 6;
 
@@ -154,6 +166,8 @@ function memoize<T>(load: () => Promise<T>): () => Promise<T> {
  */
 async function readText(
   file: File,
+  /** The thumbnail the composer already made; re-rendering it wastes a decode. */
+  madePreview?: string,
 ): Promise<{ text: string; extracted?: true; preview?: string } | { reason: string }> {
   // Only the magic number is read up front: a dropped video must hit its size
   // cap before anything allocates a buffer the size of the whole file.
@@ -164,9 +178,9 @@ async function readText(
       return { reason: `it is larger than ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)} MB` };
     }
     const bytes = new Uint8Array(await file.arrayBuffer());
-    // The thumbnail is made first and kept whatever OCR does: a holiday photo
-    // has no text in it, and showing the picture is the right answer there.
-    const preview = await imagePreview(bytes);
+    // The thumbnail is kept whatever OCR does: a holiday photo has no text in
+    // it, and showing the picture is the right answer there.
+    const preview = madePreview ?? (await imagePreview(bytes));
     let text: string;
     try {
       text = await ocrImage(bytes);
@@ -181,11 +195,13 @@ async function readText(
     }
     return {
       extracted: true,
-      // An image with no readable text still gets a file, so the Blob's own
-      // tools see something coherent where the transcript shows a picture.
+      // An image with no readable text still gets a file, so the Blob's tools
+      // see something coherent where the transcript shows a picture — and it
+      // says plainly that there is no text, rather than looking like an empty
+      // document the model should reason about.
       text:
         text.trim() === ""
-          ? `[image: ${attachmentName(file.name)}, no text found]`
+          ? `The user attached the image ${attachmentName(file.name)}. It contains no readable text, so there is nothing here to quote. The models in this app cannot see images.`
           : clip(text, "image's text"),
       ...(preview === undefined ? {} : { preview }),
     };
@@ -290,8 +306,9 @@ function reasonFrom(error: unknown): string {
  */
 export async function saveAttachments(
   home: HomeBackend,
-  files: readonly File[],
+  picked: readonly PickedFile[],
 ): Promise<{ saved: Attachment[]; rejected: RejectedAttachment[] }> {
+  const files = picked.map((entry) => entry.file);
   const saved: Attachment[] = [];
   const rejected: RejectedAttachment[] = [];
   // Existing names are claimed up front so an attachment never overwrites a
@@ -312,7 +329,9 @@ export async function saveAttachments(
   // `allSettled`, not `all`: a file whose bytes cannot even be fetched (a USB
   // stick pulled out mid-read) rejects, and with `all` that one failure would
   // throw away the other five files' finished work.
-  const results = await Promise.allSettled(files.slice(0, MAX_ATTACHMENTS).map(readText));
+  const results = await Promise.allSettled(
+    picked.slice(0, MAX_ATTACHMENTS).map((entry) => readText(entry.file, entry.preview)),
+  );
 
   for (const [index, file] of files.slice(0, MAX_ATTACHMENTS).entries()) {
     const label = attachmentName(file.name);

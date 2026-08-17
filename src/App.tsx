@@ -31,6 +31,7 @@ import {
   type Attachment,
   attachmentName,
   attachmentsPrompt,
+  type PickedFile,
   rejectionNote,
   saveAttachments,
 } from "@/lib/attachments";
@@ -1023,7 +1024,7 @@ export function App() {
     });
   };
 
-  const sendMessage = (text: string, replyTo?: string, files?: readonly File[]) => {
+  const sendMessage = (text: string, replyTo?: string, files?: readonly PickedFile[]) => {
     if (agent === undefined) {
       return;
     }
@@ -1050,14 +1051,17 @@ export function App() {
     // Names are made unique the way `saveAttachments` will make them unique
     // anyway: picking one file twice must not render as two identical chips.
     const claimed = new Set<string>();
-    const pending = [...files].map((file) => {
+    const pending = files.map(({ file, preview }) => {
       const base = attachmentName(file.name);
       let name = base;
       for (let suffix = 1; claimed.has(name); suffix++) {
         name = `${base}-${suffix}`;
       }
       claimed.add(name);
-      return { name, bytes: file.size };
+      // The composer's thumbnail rides along, so an image is a picture from the
+      // first paint — it animates in with the message rather than replacing a
+      // file card a moment later.
+      return { name, bytes: file.size, ...(preview === undefined ? {} : { preview }) };
     });
     const message = userMessage(text, replyTo, pending);
     appendMessage(target.id, message);
