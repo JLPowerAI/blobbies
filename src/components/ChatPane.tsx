@@ -5,6 +5,7 @@ import {
   Download,
   Ellipsis,
   FileText,
+  Image as ImageIcon,
   Monitor,
   Plus,
   Smile,
@@ -25,8 +26,10 @@ import { BlobAvatar } from "@/components/BlobAvatar";
 import { MarkdownContent } from "@/components/MarkdownContent";
 import { PillSelect } from "@/components/PillSelect";
 import type { Agent, Message } from "@/data/agents";
-import { MAX_ATTACHMENTS } from "@/lib/attachments";
+import { type Attachment, MAX_ATTACHMENTS } from "@/lib/attachments";
+import { fileBadge, fileKind } from "@/lib/file-kind";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
+import { imagePreview } from "@/lib/preview";
 import {
   configureTinfoilFromKeychain,
   isTinfoilModel,
@@ -95,14 +98,51 @@ function fileSize(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`;
 }
 
-function TextBubble({
-  message,
-  reading,
-}: {
-  message: Extract<Message, { kind: "text" }>;
-  /** Its files are still being read, so the chips show that instead of a size. */
-  reading: boolean;
-}) {
+/**
+ * One attached file, shown as the thing it is: a picture for an image, a card
+ * with icon and size for everything else.
+ *
+ * Rendered outside the text bubble (a sibling in the message row), because an
+ * image wants no padding, no background and its own width — nesting it in a
+ * bubble boxes every photo in a grey frame.
+ */
+function AttachmentView({ attachment, reading }: { attachment: Attachment; reading: boolean }) {
+  // The name the user picked; `photo.png.txt` is our storage detail.
+  const label = attachment.label ?? attachment.name;
+  const kind = fileKind(label);
+
+  if (attachment.preview !== undefined) {
+    return (
+      <img
+        className="attachment-image"
+        src={attachment.preview}
+        alt={label}
+        title={label}
+        draggable={false}
+      />
+    );
+  }
+  return (
+    <span className={`attachment-card attachment-kind-${kind}`}>
+      <span className="attachment-card-icon" aria-hidden="true">
+        {kind === "image" ? (
+          <ImageIcon size={18} strokeWidth={1.8} />
+        ) : (
+          <FileText size={18} strokeWidth={1.8} />
+        )}
+        <span className="attachment-card-badge">{fileBadge(label)}</span>
+      </span>
+      <span className="attachment-card-text">
+        <span className="attachment-card-name">{label}</span>
+        <span className="attachment-card-size">
+          {reading ? "reading…" : fileSize(attachment.bytes)}
+        </span>
+      </span>
+    </span>
+  );
+}
+
+function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }) {
   // An ask renders as a highlighted card: the Blob paused its task and needs
   // the user — "action" means "do this yourself" (login, click, paste).
   const askClass =
@@ -119,19 +159,6 @@ function TextBubble({
     >
       {message.replyTo === undefined ? null : (
         <span className="bubble-quote">{message.replyTo}</span>
-      )}
-      {(message.attachments ?? []).length === 0 ? null : (
-        <span className="bubble-attachments">
-          {(message.attachments ?? []).map((attachment) => (
-            <span key={attachment.name} className="attachment-chip">
-              <FileText size={13} strokeWidth={1.8} aria-hidden="true" />
-              <span className="attachment-chip-name">{attachment.name}</span>
-              <span className="attachment-chip-size">
-                {reading ? "reading…" : fileSize(attachment.bytes)}
-              </span>
-            </span>
-          ))}
-        </span>
       )}
       {message.author === "user" ? (
         // The user's own words render verbatim; only the agent speaks markdown.
@@ -266,11 +293,19 @@ function MessageRow({
           ))}
         </div>
       ) : null}
-      {message.kind === "text" ? (
-        <TextBubble message={message} reading={reading} />
-      ) : (
-        <FileBubble message={message} />
+      {message.kind !== "text" || (message.attachments ?? []).length === 0 ? null : (
+        <span className="message-attachments">
+          {(message.attachments ?? []).map((attachment) => (
+            <AttachmentView key={attachment.name} attachment={attachment} reading={reading} />
+          ))}
+        </span>
       )}
+      {/* An attachment-only message has no words, so it gets no empty bubble. */}
+      {message.kind !== "text" ? (
+        <FileBubble message={message} />
+      ) : message.segments.some((segment) => segment.text !== "") ? (
+        <TextBubble message={message} />
+      ) : null}
       {reaction === undefined ? null : (
         <span className="bubble-reaction" role="img" aria-label={`Reacted with ${reaction}`}>
           {reaction}
@@ -316,7 +351,7 @@ export function ChatPane({
   const [draft, setDraft] = useState("");
   /** Files picked but not sent yet; they are saved only once the message goes.
       Keyed by id, not name: picking the same file twice is two chips. */
-  const [attached, setAttached] = useState<{ id: string; file: File }[]>([]);
+  const [attached, setAttached] = useState<{ id: string; file: File; preview?: string }[]>([]);
   /** True while a drag hovers the composer, so the drop target is visible. */
   const [dragging, setDragging] = useState(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
@@ -565,6 +600,19 @@ export function ChatPane({
     }
     setAttached((previous) => [...previous, ...incoming].slice(0, MAX_ATTACHMENTS));
     textareaRef.current?.focus();
+    // Thumbnails fill in behind the tiles. Object URLs would be faster, but
+    // they need revoking on every removal path; these are small and the same
+    // data URL the sent message will carry.
+    for (const entry of incoming) {
+      void imagePreview(entry.file).then((preview) => {
+        if (preview === undefined) {
+          return;
+        }
+        setAttached((previous) =>
+          previous.map((item) => (item.id === entry.id ? { ...item, preview } : item)),
+        );
+      });
+    }
   };
 
   /** The circle shows Stop only with an empty composer: a draft typed mid-turn
@@ -891,19 +939,34 @@ export function ChatPane({
       >
         {attached.length === 0 ? null : (
           <ul className="composer-attachments" aria-label="Attached files">
-            {attached.map(({ id, file }) => (
-              <li key={id} className="attachment-chip">
-                <FileText size={13} strokeWidth={1.8} aria-hidden="true" />
-                <span className="attachment-chip-name">{file.name}</span>
+            {attached.map(({ id, file, preview }) => (
+              <li key={id} className={preview === undefined ? "composer-file" : "composer-thumb"}>
+                {preview === undefined ? (
+                  <>
+                    <span
+                      className={`attachment-card-icon attachment-kind-${fileKind(file.name)}`}
+                      aria-hidden="true"
+                    >
+                      <FileText size={16} strokeWidth={1.8} />
+                      <span className="attachment-card-badge">{fileBadge(file.name)}</span>
+                    </span>
+                    <span className="composer-file-text">
+                      <span className="attachment-card-name">{file.name}</span>
+                      <span className="attachment-card-size">{fileSize(file.size)}</span>
+                    </span>
+                  </>
+                ) : (
+                  <img src={preview} alt={file.name} title={file.name} draggable={false} />
+                )}
                 <button
                   type="button"
-                  className="icon-button attachment-chip-remove"
+                  className="icon-button attachment-remove"
                   aria-label={`Remove ${file.name}`}
                   onClick={() =>
                     setAttached((previous) => previous.filter((entry) => entry.id !== id))
                   }
                 >
-                  <X size={12} strokeWidth={2} aria-hidden="true" />
+                  <X size={12} strokeWidth={2.2} aria-hidden="true" />
                 </button>
               </li>
             ))}

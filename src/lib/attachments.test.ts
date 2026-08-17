@@ -107,6 +107,41 @@ describe("saveAttachments", () => {
     expect(await home.list()).toEqual([]);
   });
 
+  it("extracts every file at once, but still saves them in order", async () => {
+    const home = memoryHome();
+    // Counting overlap directly beats timing it: a wall-clock assertion is a
+    // flaky test on a loaded machine. The *saved* order must still follow the
+    // order the files were picked in, however the reads interleave.
+    let inFlight = 0;
+    let peak = 0;
+    extract.mockImplementation(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight--;
+      return "page text";
+    });
+
+    const { saved } = await saveAttachments(home, [pdf("a.pdf"), pdf("b.pdf"), pdf("c.pdf")]);
+
+    expect(peak).toBe(3);
+    expect(saved.map((entry) => entry.name)).toEqual(["a.pdf.txt", "b.pdf.txt", "c.pdf.txt"]);
+  });
+
+  it("keeps the readable files when one cannot be read at all", async () => {
+    const home = memoryHome();
+    extract.mockResolvedValue("the policy");
+    // A file whose bytes are unreachable mid-read (a pulled USB stick) rejects
+    // rather than returning a reason — it must not discard the other results.
+    const broken = pdf("gone.pdf");
+    vi.spyOn(broken, "arrayBuffer").mockRejectedValue(new Error("NotReadableError"));
+
+    const { saved, rejected } = await saveAttachments(home, [broken, pdf("policy.pdf")]);
+
+    expect(saved.map((entry) => entry.name)).toEqual(["policy.pdf.txt"]);
+    expect(rejected.map((entry) => entry.name)).toEqual(["gone.pdf"]);
+  });
+
   it("extracts a PDF and saves the text beside its original name", async () => {
     const home = memoryHome();
     extract.mockResolvedValue("Reconcile the seats against the policy.");

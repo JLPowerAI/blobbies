@@ -21,6 +21,7 @@ import type { HomeBackend } from "@/lib/home";
 // sniff plus an IPC call, so there is no payload worth deferring — the OCR
 // engine itself lives in Rust.
 import { IMAGE_MAGIC_BYTES, isImage, ocrImage } from "@/lib/ocr";
+import { imagePreview } from "@/lib/preview";
 
 /** An attached file, as recorded on the message that carried it. */
 export interface Attachment {
@@ -28,6 +29,14 @@ export interface Attachment {
   name: string;
   /** Size of the saved text in bytes. */
   bytes: number;
+  /**
+   * The name the user picked, when the saved one differs — an extracted file
+   * is saved as `photo.png.txt`, but the transcript should still say
+   * "photo.png", which is the thing they attached.
+   */
+  label?: string;
+  /** Thumbnail data URL for an image, so the bubble shows the picture. */
+  preview?: string;
 }
 
 /** Attachments per message. Matches what a small model can actually hold. */
@@ -121,6 +130,22 @@ function isPdf(bytes: Uint8Array): boolean {
 const NOT_TEXT = "it isn't a text, PDF or image file (Office files aren't readable yet)";
 
 /**
+ * Load pdf.js on first use and share that one load.
+ *
+ * Memoized because files are read concurrently: six PDFs would otherwise fire
+ * six `import()` calls for the same module. ESM would dedupe them, but the
+ * promise is the thing worth sharing — and one load is easier to reason about
+ * than six racing ones.
+ */
+const loadPdfText = memoize(() => import("@/lib/pdf-text"));
+const loadPdfOcr = memoize(() => import("@/lib/pdf-ocr"));
+
+function memoize<T>(load: () => Promise<T>): () => Promise<T> {
+  let pending: Promise<T> | undefined;
+  return () => (pending ??= load());
+}
+
+/**
  * Get a file's text — extracted from a PDF, read off an image by OCR, or
  * decoded — or say why it is not usable.
  *
@@ -129,7 +154,7 @@ const NOT_TEXT = "it isn't a text, PDF or image file (Office files aren't readab
  */
 async function readText(
   file: File,
-): Promise<{ text: string; extracted?: true } | { reason: string }> {
+): Promise<{ text: string; extracted?: true; preview?: string } | { reason: string }> {
   // Only the magic number is read up front: a dropped video must hit its size
   // cap before anything allocates a buffer the size of the whole file.
   const head = new Uint8Array(await file.slice(0, IMAGE_MAGIC_BYTES).arrayBuffer());
@@ -138,16 +163,32 @@ async function readText(
     if (file.size > MAX_IMAGE_BYTES) {
       return { reason: `it is larger than ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)} MB` };
     }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    // The thumbnail is made first and kept whatever OCR does: a holiday photo
+    // has no text in it, and showing the picture is the right answer there.
+    const preview = await imagePreview(bytes);
     let text: string;
     try {
-      text = await ocrImage(new Uint8Array(await file.arrayBuffer()));
+      text = await ocrImage(bytes);
     } catch (error) {
-      return { reason: `its text couldn't be read (${reasonFrom(error)})` };
+      if (preview === undefined) {
+        return { reason: `its text couldn't be read (${reasonFrom(error)})` };
+      }
+      text = "";
     }
-    if (text.trim() === "") {
+    if (text.trim() === "" && preview === undefined) {
       return { reason: "no text could be found in it" };
     }
-    return { extracted: true, text: clip(text, "image's text") };
+    return {
+      extracted: true,
+      // An image with no readable text still gets a file, so the Blob's own
+      // tools see something coherent where the transcript shows a picture.
+      text:
+        text.trim() === ""
+          ? `[image: ${attachmentName(file.name)}, no text found]`
+          : clip(text, "image's text"),
+      ...(preview === undefined ? {} : { preview }),
+    };
   }
 
   if (isPdf(head)) {
@@ -158,7 +199,7 @@ async function readText(
     let text: string;
     try {
       // Loaded on demand: pdf.js is ~500 KB that most sessions never need.
-      const { extractPdfText } = await import("@/lib/pdf-text");
+      const { extractPdfText } = await loadPdfText();
       text = await extractPdfText(bytes);
     } catch (error) {
       return {
@@ -170,7 +211,7 @@ async function readText(
       // which is slow enough that it is worth doing only once the cheap path
       // has come back empty.
       try {
-        const { ocrPdf } = await import("@/lib/pdf-ocr");
+        const { ocrPdf } = await loadPdfOcr();
         text = await ocrPdf(bytes);
       } catch (error) {
         // Fixed wording: failures here are rasterizer internals, and a raw
@@ -268,11 +309,15 @@ export async function saveAttachments(
   // long for no reason — they do not touch each other's state. The *saving*
   // below stays sequential, because `taken` is what stops two files claiming
   // one name.
-  const results = await Promise.all(files.slice(0, MAX_ATTACHMENTS).map(readText));
+  // `allSettled`, not `all`: a file whose bytes cannot even be fetched (a USB
+  // stick pulled out mid-read) rejects, and with `all` that one failure would
+  // throw away the other five files' finished work.
+  const results = await Promise.allSettled(files.slice(0, MAX_ATTACHMENTS).map(readText));
 
   for (const [index, file] of files.slice(0, MAX_ATTACHMENTS).entries()) {
     const label = attachmentName(file.name);
-    const result = results[index];
+    const settled = results[index];
+    const result = settled?.status === "fulfilled" ? settled.value : undefined;
     if (result === undefined || "reason" in result) {
       rejected.push({ name: label, reason: result?.reason ?? "it couldn't be read" });
       continue;
@@ -291,7 +336,14 @@ export async function saveAttachments(
     taken.add(name);
     // Size of what was actually written, so the chip and the Files panel agree
     // (they differ for a PDF, and for any non-ASCII text file).
-    saved.push({ name, bytes: new TextEncoder().encode(result.text).length });
+    saved.push({
+      name,
+      bytes: new TextEncoder().encode(result.text).length,
+      // The user attached `photo.png`; calling it `photo.png.txt` back at them
+      // names our storage detail rather than their file.
+      ...(name === label ? {} : { label }),
+      ...(result.preview === undefined ? {} : { preview: result.preview }),
+    });
   }
   if (files.length > MAX_ATTACHMENTS) {
     for (const extra of files.slice(MAX_ATTACHMENTS)) {

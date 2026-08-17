@@ -1063,28 +1063,40 @@ export function App() {
     appendMessage(target.id, message);
     touchActivity(target.id, text.trim() === "" ? pending.map((p) => p.name).join(", ") : text);
     setReadingMessages((ids) => [...ids, message.id]);
-    void saveAttachments(homeFor(target.id), files).then(({ saved, rejected }) => {
-      setReadingMessages((ids) => ids.filter((id) => id !== message.id));
-      if (rejected.length > 0) {
+    void saveAttachments(homeFor(target.id), files)
+      .then(({ saved, rejected }) => {
+        setReadingMessages((ids) => ids.filter((id) => id !== message.id));
+        if (rejected.length > 0) {
+          appendMessage(target.id, {
+            id: `event-${Date.now()}`,
+            kind: "event",
+            text: rejectionNote(rejected),
+            timestampMs: Date.now(),
+          });
+        }
+        if (saved.length > 0) {
+          setFilesKey((key) => key + 1);
+        }
+        // Nothing readable and nothing said: the message had no content of its
+        // own, so it comes back out rather than sitting there empty.
+        if (saved.length === 0 && text.trim() === "") {
+          dropMessage(target.id, message.id);
+          return;
+        }
+        settleAttachments(target.id, message.id, saved);
+        startTurn(target, { ...message, attachments: saved });
+      })
+      .catch(() => {
+        // saveAttachments is written not to throw, but if it ever does the chips
+        // must not read "reading…" forever.
+        setReadingMessages((ids) => ids.filter((id) => id !== message.id));
         appendMessage(target.id, {
           id: `event-${Date.now()}`,
           kind: "event",
-          text: rejectionNote(rejected),
+          text: "Those files couldn't be read.",
           timestampMs: Date.now(),
         });
-      }
-      if (saved.length > 0) {
-        setFilesKey((key) => key + 1);
-      }
-      // Nothing readable and nothing said: the message had no content of its
-      // own, so it comes back out rather than sitting there empty.
-      if (saved.length === 0 && text.trim() === "") {
-        dropMessage(target.id, message.id);
-        return;
-      }
-      settleAttachments(target.id, message.id, saved);
-      startTurn(target, { ...message, attachments: saved });
-    });
+      });
   };
 
   /**

@@ -2658,68 +2658,199 @@ a.modal-button {
   border-color: var(--accent-blue);
 }
 
+/* ---- Attachments -------------------------------------------------------- */
+
+/* Picked-but-not-sent files: image thumbnails and file cards side by side. */
 .composer-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 8px;
+  gap: 8px;
+  margin: 0 0 10px;
   padding: 0;
   list-style: none;
 }
 
-.attachment-chip {
-  display: inline-flex;
+.composer-thumb,
+.composer-file {
+  position: relative;
+  border-radius: 12px;
+}
+
+.composer-thumb {
+  width: 62px;
+  height: 62px;
+}
+
+.composer-thumb img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  /* Photos are often light-on-light; the hairline keeps the tile's edge. */
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 12%);
+}
+
+.composer-file {
+  display: flex;
+  gap: 8px;
   align-items: center;
-  gap: 6px;
   max-width: 240px;
-  padding: 4px 6px 4px 9px;
-  border-radius: 13px;
+  padding: 8px 10px;
   background: var(--surface-control);
-  color: var(--text-secondary);
-  font-size: 12.5px;
 }
 
-/* Same pair as .composer-reply: the composer surface needs a lighter chip
-   than --surface-control gives. Scoped to the composer so bubble chips keep
-   the translucent fill below. */
-:root[data-theme="dark"] .composer-attachments .attachment-chip {
+:root[data-theme="dark"] .composer-file {
   background: #3b3b3b;
-  color: #aeaeae;
 }
 
-.attachment-chip-name {
+.composer-file-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* The X sits on the tile's corner, half outside it, as in the reference. */
+.attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #4a4a4a;
+  color: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 35%);
+}
+
+.attachment-remove:hover {
+  background: #5c5c5c;
+}
+
+/* Sent attachments sit outside the bubble: an image needs no frame, and a
+   card carries its own. Both align to the message's own side. */
+.message-attachments {
+  display: flex;
+  max-width: 72%;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.message-row-user .message-attachments {
+  justify-content: flex-end;
+}
+
+.attachment-image {
+  max-width: 100%;
+  /* Tall images stay a bubble, not a column the size of the viewport. */
+  max-height: 320px;
+  border-radius: var(--radius-bubble);
+  object-fit: cover;
+}
+
+.attachment-card {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  padding: 9px 13px 9px 10px;
+  border-radius: var(--radius-bubble);
+  background: var(--bubble-agent);
+  color: var(--text-primary);
+  gap: 10px;
+}
+
+.attachment-card-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.attachment-card-name {
   overflow: hidden;
+  font-size: 13.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.attachment-chip-size {
-  flex-shrink: 0;
-  opacity: 0.75;
+.attachment-card-size {
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
-.attachment-chip-remove {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  border-radius: 50%;
-}
-
-/* Chips inside a sent bubble sit above the text and take its colors. */
-.bubble-attachments {
+/* Icon tile: a neutral glyph tinted per file family, with the extension
+   printed across it — the same shape whatever the type, so an unknown
+   extension still looks deliberate rather than broken. */
+.attachment-card-icon {
+  position: relative;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 6px;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  /* Fallback in the `var()` rather than a default declaration: declaring
+     --file-accent here would shadow the value inherited from the kind class on
+     the card, and every sent file would render grey. */
+  background: color-mix(in srgb, var(--file-accent, #8a8a8e) 16%, transparent);
+  color: var(--file-accent, #8a8a8e);
 }
 
-.bubble-attachments .attachment-chip {
-  background: rgb(255 255 255 / 18%);
-  color: inherit;
+.attachment-card-badge {
+  position: absolute;
+  bottom: 5px;
+  left: 0;
+  right: 0;
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-align: center;
+  text-transform: uppercase;
 }
 
-.bubble-agent .bubble-attachments .attachment-chip {
-  background: var(--surface-control);
+/* One accent per family. Colours follow the conventions people already read:
+   red for PDF, blue for documents, green for spreadsheets. The kind class goes
+   on the card in a sent message and on the icon in the composer, so these must
+   only ever *set* the variable, never be scoped to one of the two. */
+.attachment-kind-pdf {
+  --file-accent: #e5484d;
+}
+
+.attachment-kind-doc {
+  --file-accent: #3b82f6;
+}
+
+.attachment-kind-sheet {
+  --file-accent: #22a06b;
+}
+
+.attachment-kind-slides {
+  --file-accent: #f76808;
+}
+
+.attachment-kind-code {
+  --file-accent: #8e4ec6;
+}
+
+.attachment-kind-data {
+  --file-accent: #0e9aa7;
+}
+
+.attachment-kind-archive {
+  --file-accent: #b8860b;
+}
+
+.attachment-kind-audio {
+  --file-accent: #d6409f;
+}
+
+.attachment-kind-video {
+  --file-accent: #5b5bd6;
+}
+
+.attachment-kind-image {
+  --file-accent: #0ea5e9;
 }
 
 .composer-input {

@@ -206,7 +206,7 @@ describe("turn wiring", () => {
 
       // On screen immediately, with the file it carries and no size yet —
       // there is nothing to report until the read finishes.
-      const chip = (await screen.findByText("reading…")).closest(".attachment-chip");
+      const chip = (await screen.findByText("reading…")).closest(".attachment-card");
       expect(chip).toHaveTextContent("seats.csv");
     } finally {
       // In a finally, or a failed assertion leaves every later test with a
