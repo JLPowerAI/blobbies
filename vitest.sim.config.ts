@@ -18,6 +18,11 @@ export default defineConfig({
         find: /^openai$/,
         replacement: fileURLToPath(new URL("./src/lib/openai-browser.ts", import.meta.url)),
       },
+      // Same stub as the app: Anthropic is not a model path here either.
+      {
+        find: /^@anthropic-ai\/sdk$/,
+        replacement: fileURLToPath(new URL("./src/lib/anthropic-stub.ts", import.meta.url)),
+      },
     ],
   },
 

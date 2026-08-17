@@ -2,9 +2,9 @@ import { ChevronLeft, ChevronsRight, Trash2 } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
 import { type Agent, MAX_BLOB_NAME_LENGTH } from "@/data/agents";
-import { blobSystemPrompt, type UserContext } from "@/lib/ai";
-import type { BlobMemory } from "@/lib/blob-tools";
 import { connect, type McpServerConfig, namespaceToolName, parseLoopbackUrl } from "@/lib/mcp";
+import type { BlobMemory } from "@/lib/memory";
+import { blobSystemPrompt, type UserContext } from "@/lib/prompt";
 import { exportBlob } from "@/lib/store";
 
 /**

@@ -49,6 +49,9 @@
   --ease-standard: cubic-bezier(0.3, 0, 0.2, 1);
   --ease-entrance: cubic-bezier(0.16, 1, 0.3, 1); /* decelerates into place */
   --ease-exit: cubic-bezier(0.4, 0, 1, 1); /* accelerates away */
+  /* Overshoots and settles back — the Blobs are soft, so picking one up and
+     dropping it should land with a little give rather than a hard stop. */
+  --ease-squish: cubic-bezier(0.34, 1.56, 0.64, 1);
 
   --sidebar-width: 292px;
   --detail-width: 322px;
@@ -122,6 +125,7 @@ body {
 .creator-pane,
 .modal-content,
 .plugins-body,
+.search-results,
 .trigger-menu,
 .composer-input {
   overscroll-behavior: none;
@@ -339,6 +343,20 @@ select:focus:not(:focus-visible) {
   margin-inline-end: 2px;
 }
 
+/* The sidebar field is a button that opens the palette, so it has to read as
+   an empty field: placeholder colour, text hard left, no button centering. */
+.search-trigger {
+  display: flex;
+  align-items: center;
+  text-align: start;
+  color: var(--text-secondary);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.search-trigger:hover {
+  background: var(--surface-selected);
+}
+
 .agent-list {
   flex: 1;
   overflow-y: auto;
@@ -363,7 +381,11 @@ select:focus:not(:focus-visible) {
   padding: 8px 10px;
   border-radius: 11px;
   text-align: start;
-  transition: background-color var(--duration-fast) var(--ease-standard);
+  /* transform is here so the press-squash and the drag-deflate below actually
+     animate rather than snapping. */
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    transform 200ms var(--ease-squish);
 }
 
 .agent-row:hover {
@@ -1278,6 +1300,244 @@ select:focus:not(:focus-visible) {
   color: var(--text-secondary);
 }
 
+/* ------------------------------------------------- pin tray + sections */
+/* Pinned Blobs leave the list entirely for a tray of avatar tiles: a pin is a
+   "this one, always" shortcut, and a tile reads faster than another row in a
+   list of rows. */
+.pin-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-block-end: 4px;
+  border-radius: 12px;
+  transform-origin: top center;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    transform 220ms var(--ease-squish);
+}
+
+/* Empty, it exists only while dragging, so it must state its own purpose.
+   It unfurls rather than appearing: the list below is pushed down either way,
+   and an instant 84px jump reads as the layout breaking. */
+.pin-tray-empty {
+  align-items: center;
+  justify-content: center;
+  min-height: 84px;
+  border: 1px dashed var(--border-strong);
+  animation: tray-unfurl 260ms var(--ease-squish);
+}
+
+@keyframes tray-unfurl {
+  0% {
+    min-height: 0;
+    opacity: 0;
+    transform: scaleY(0.7);
+  }
+
+  100% {
+    min-height: 84px;
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+/* Squish on hit: the tray takes the weight of what is about to land in it. */
+.pin-tray-over {
+  background: var(--hover-overlay);
+  transform: scale(1.02, 0.97);
+}
+
+.pin-tray-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* A tile that just landed bounces in; one already there is untouched, because
+   the animation is keyed to mount. */
+.pin-tile {
+  display: flex;
+  width: 78px;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px;
+  border-radius: 12px;
+  animation: tile-land 300ms var(--ease-squish);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    transform 200ms var(--ease-squish);
+}
+
+@keyframes tile-land {
+  0% {
+    opacity: 0;
+    transform: scale(0.6, 0.75);
+  }
+
+  60% {
+    opacity: 1;
+    transform: scale(1.06, 0.94);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.pin-tile:active {
+  transform: scale(0.94, 0.9);
+}
+
+.pin-tile:hover {
+  background: var(--hover-overlay);
+}
+
+.pin-tile-selected,
+.pin-tile-selected:hover {
+  background: var(--surface-selected);
+}
+
+.pin-tile-name {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-group-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border-radius: 11px;
+  list-style: none;
+  transform-origin: top center;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    transform 220ms var(--ease-squish);
+}
+
+/* Same give as the pin tray, so both targets answer a hover the same way. */
+.agent-group-over {
+  background: var(--hover-overlay);
+  transform: scale(1.01, 0.98);
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-inline: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.section-remove {
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.agent-group:hover .section-remove,
+.section-remove:focus-visible {
+  opacity: 1;
+}
+
+/* A section with no Blobs still has to be a visible target, or the only way
+   to fill it would be to guess where it is. */
+.section-empty {
+  padding: 12px 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.section-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 11px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.section-add:hover {
+  background: var(--hover-overlay);
+  color: var(--text-primary);
+}
+
+/* The row stays in place while its copy follows the cursor, so the list never
+   reflows mid-drag and the drop targets hold still. It deflates rather than
+   just fading — the weight has visibly moved to the tile. */
+.agent-row-dragging {
+  opacity: 0.35;
+  transform: scale(0.97, 0.94);
+}
+
+/* Picking a row up: the press squashes it before the drag begins. */
+.agent-row:active {
+  transform: scale(0.985, 0.96);
+}
+
+.drag-tile {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--surface-modal-card);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
+  /* Centered on the cursor, and never its own drop target. */
+  translate: -50% -50%;
+  pointer-events: none;
+  /* Scale only — position is set per-frame from the pointer, so animating
+     `left`/`top` would make the tile lag behind the cursor. */
+  animation: tile-lift 260ms var(--ease-squish);
+  /* On the base, not on -armed: a transition declared only by the added class
+     disappears with it, so leaving a target would snap instead of easing. */
+  transition: scale 180ms var(--ease-squish);
+}
+
+@keyframes tile-lift {
+  0% {
+    opacity: 0.6;
+    scale: 0.7 0.85;
+  }
+
+  55% {
+    opacity: 1;
+    scale: 1.08 0.95;
+  }
+
+  100% {
+    scale: 1;
+  }
+}
+
+/* Held over a target, the tile tucks in slightly — the drop is armed. */
+.drag-tile-armed {
+  scale: 0.92 1.05;
+}
+
 /* ---------------------------------------------------------- settings modal */
 .modal-backdrop {
   position: fixed;
@@ -2140,6 +2400,72 @@ a.modal-button {
   max-width: 72%;
 }
 
+/* One message can be several bubbles (prose, table, prose). They stack and
+   each hugs its own content rather than stretching to the widest sibling.
+   The gap is .message-scroll's, not .message-row's: these read as separate
+   bubbles, so spacing them tighter than two ordinary messages makes the same
+   transcript use two different rhythms. */
+.bubble-stack {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+/* The table's own card. It is exactly as wide as any other bubble — a table
+   is not a reason for one message to be wider than its neighbours — and the
+   columns it cannot fit are reached by scrolling it sideways instead.
+
+   `min-width: 0` is what makes that scroll happen: the inner table is sized
+   `max-content`, and a flex item defaults to `min-width: auto`, refusing to
+   shrink below its content — so the card grew to the table's full width and
+   the overflow never engaged.
+
+   The class is doubled because `.bubble` is declared further down this file at
+   the same specificity: a single `.bubble-table` loses the padding cascade to
+   it and none of this applies. */
+.bubble.bubble-table {
+  box-sizing: border-box;
+  min-width: 0;
+  /* The stack is `align-items: flex-start`, so without this the card shrinks
+     to its content and a narrow table would not fill the bubble width. */
+  width: 100%;
+  /* The extra block-end is the scrollbar's strip. macOS uses overlay
+     scrollbars — zero layout thickness, painted on top of whatever is at the
+     bottom of the scroll box — so without it the bar sits across the last
+     row's text. Padding is inside the scroll box, so the bar lands on it. */
+  padding: 4px 14px 12px;
+  overflow-x: auto;
+}
+
+/* The stack must span the line, or the `width: 100%` above resolves against
+   the widest sibling bubble rather than the message's own width. */
+.bubble-stack:has(.bubble-table) {
+  width: 100%;
+}
+
+/* And when the platform does give the bar real thickness (or the user has
+   "always show scrollbars" on), style it to match the card rather than
+   letting a default grey trough cut across the bubble. */
+.bubble-table::-webkit-scrollbar {
+  height: 8px;
+}
+
+.bubble-table::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--border-strong);
+}
+
+.bubble-table::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Track stays transparent so the strip reads as part of the bubble. */
+.bubble-table::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* Hover/focus actions, hidden until the row is hovered, keyboard-focused, or
    its reaction picker is open. Beside the bubble, vertically centered on it:
    right of agent bubbles, left of user ones — the outside edge in both cases.
@@ -2503,9 +2829,15 @@ a.modal-button {
   margin-block: 10px;
 }
 
+/* Rules, not a grid. A full box around every cell turns a six-row table into
+   graph paper and the vertical rules fight the columns the eye already reads
+   from alignment; one hairline per row is what separates them. */
 .bubble-markdown table {
-  /* Scrolls sideways instead of blowing past the bubble's max-width. */
+  /* Block so it can scroll sideways instead of blowing past the bubble's
+     max-width, and max-content so columns size to their text rather than
+     being squeezed — that squeeze is what wraps a "Date" header to "Dat/e". */
   display: block;
+  width: max-content;
   max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
@@ -2514,13 +2846,35 @@ a.modal-button {
 
 .bubble-markdown th,
 .bubble-markdown td {
-  border: 1px solid var(--border-hairline);
-  padding: 4px 8px;
+  padding: 8px 22px 8px 0;
   text-align: left;
+  /* Cells keep their own line and the table scrolls sideways instead: wrapping
+     is what squashes a Notes column into a two-line block beside one-line
+     rows, and a table is read across, not down. */
+  white-space: nowrap;
+}
+
+/* The gutter is between columns, so the last one must not add a trailing one. */
+.bubble-markdown th:last-child,
+.bubble-markdown td:last-child {
+  padding-inline-end: 0;
 }
 
 .bubble-markdown th {
-  font-weight: 600;
+  /* A label, not a heading: weight would compete with bold cells below it. */
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.bubble-markdown thead tr,
+.bubble-markdown tbody tr + tr {
+  border-top: 1px solid var(--border-hairline);
+}
+
+/* The header's own rule sits under it, drawn by the first body row above. */
+.bubble-markdown thead tr {
+  border-top: none;
+  border-bottom: 1px solid var(--border-hairline);
 }
 
 .bubble-file {
@@ -2851,6 +3205,19 @@ a.modal-button {
   text-transform: uppercase;
 }
 
+/* Row-scale tile (search palette): the same anatomy, scaled off 38px so the
+   badge keeps sitting across the same part of the glyph. */
+.attachment-card-icon-sm {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
+.attachment-card-icon-sm .attachment-card-badge {
+  bottom: 3px;
+  font-size: 5.5px;
+}
+
 /* One accent per family. Colours follow the conventions people already read:
    red for PDF, blue for documents, green for spreadsheets. The kind class goes
    on the card in a sent message and on the icon in the composer, so these must
@@ -3016,6 +3383,10 @@ a.modal-button {
      panes share one uniform top bar. */
   box-sizing: border-box;
   height: 48px;
+  /* This panel is the scroll container itself (unlike the chat pane, which
+     scrolls an inner element), so without this the strip is squeezed below
+     48px by tall content and the icons ride up out of line with the others. */
+  flex-shrink: 0;
   padding: 0 12px;
   -webkit-user-select: none;
   user-select: none;
@@ -3382,8 +3753,30 @@ a.modal-button {
 .sidebar-collapsed .compose-slot,
 .sidebar-collapsed .sidebar-empty,
 .sidebar-collapsed .row-label,
-.sidebar-collapsed .compose-row .agent-name {
+.sidebar-collapsed .compose-row .agent-name,
+/* The rail is 100px of avatars: section labels, the tray's hint and the
+   tile captions have nowhere to go, and the rows below still carry the
+   grouping via their order. */
+.sidebar-collapsed .section-title,
+.sidebar-collapsed .section-remove,
+.sidebar-collapsed .section-empty,
+.sidebar-collapsed .section-add,
+.sidebar-collapsed .pin-tray-hint,
+.sidebar-collapsed .pin-tile-name {
   display: none;
+}
+
+.sidebar-collapsed .pin-tray {
+  justify-content: center;
+}
+
+.sidebar-collapsed .pin-tray-empty {
+  min-height: 60px;
+}
+
+.sidebar-collapsed .pin-tile {
+  width: 44px;
+  padding: 8px 0;
 }
 
 .sidebar-collapsed .agent-list {
@@ -3419,6 +3812,167 @@ a.modal-button {
   flex-direction: column;
   align-items: stretch;
   gap: 2px;
+}
+
+/* ------------------------------------------------------ search palette */
+/* One query across Blobs, messages, files, links, routines and actions.
+   Centered in the window like every other dialog — it inherits the backdrop's
+   centering and only lightens the scrim, because the palette is a quick
+   detour and the conversation behind it should stay legible. */
+.search-backdrop {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.search-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 88vw);
+  height: min(520px, 66vh);
+  overflow: hidden;
+  border: 1px solid var(--border-hairline);
+  border-radius: 16px;
+  background: var(--surface-modal);
+  box-shadow: 0 24px 68px rgba(0, 0, 0, 0.3);
+  animation: palette-in 200ms var(--ease-standard);
+}
+
+.search-modal-closing {
+  animation: palette-out 200ms var(--ease-standard) forwards;
+}
+
+.search-modal:focus {
+  outline: none;
+}
+
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 18px;
+  border-block-end: 1px solid var(--border-hairline);
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.search-field:focus-within {
+  border-block-end-color: var(--border-strong);
+}
+
+.search-modal-glyph {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.search-modal-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.search-modal-input::placeholder {
+  color: var(--text-secondary);
+}
+
+.search-modal-input:focus {
+  /* The field's own border carries focus; a second ring inside it reads as
+     two focused things. */
+  outline: none;
+}
+
+.search-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 10px 12px;
+}
+
+.search-results {
+  flex: 1;
+  margin: 0;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.search-row {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-family: inherit;
+  text-align: start;
+  cursor: default;
+}
+
+.search-row:focus-visible {
+  /* Inside the ring, so the outline is not clipped by the scroll container. */
+  outline-offset: -2px;
+}
+
+.search-row-active {
+  background: var(--surface-modal-control);
+}
+
+.search-row-text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.search-row-title,
+.search-row-subtitle {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.search-row-title {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.search-row-subtitle {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.search-row-glyph {
+  display: flex;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--surface-modal-card);
+  color: var(--text-secondary);
+}
+
+.search-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.search-empty-glyph {
+  color: var(--text-secondary);
+  opacity: 0.65;
+}
+
+.search-empty-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 /* ----------------------------------------------- dark-only recolors */
@@ -3467,6 +4021,13 @@ a.modal-button {
   .sidebar,
   .creator-suggestions,
   .plugins-tab,
+  .search-field,
+  .section-add,
+  .section-remove,
+  .pin-tray,
+  .pin-tile,
+  .drag-tile,
+  .agent-group-rows,
   .plugin-open,
   .plugins-show-more,
   .connectors-chevron,
@@ -3487,6 +4048,8 @@ a.modal-button {
   .modal-backdrop-closing,
   .settings-modal,
   .settings-modal-closing,
+  .search-modal,
+  .search-modal-closing,
   .trigger-menu,
   .trigger-menu-closing,
   .filter-menu,
@@ -3497,8 +4060,23 @@ a.modal-button {
   .blob-shine,
   .blob-avatar-thinking,
   .blob-avatar-thinking .blob-face,
-  .message-fresh {
+  .message-fresh,
+  .pin-tray-empty,
+  .pin-tile,
+  .drag-tile {
     animation: none;
+  }
+
+  /* The squish is the whole point of these; with motion reduced they simply
+     change colour, and the drag still works. */
+  .pin-tray-over,
+  .agent-group-over,
+  .agent-row:active,
+  .agent-row-dragging,
+  .pin-tile:active,
+  .drag-tile-armed {
+    transform: none;
+    scale: none;
   }
 
   .thinking-row {
@@ -3515,6 +4093,7 @@ a.modal-button {
   .creator-pane,
   .modal-content,
   .plugins-body,
+  .search-results,
   .trigger-menu,
   .composer-input {
     scroll-behavior: auto;

@@ -70,6 +70,14 @@ export default defineConfig({
         find: /^openai$/,
         replacement: fileURLToPath(new URL("./src/lib/openai-browser.ts", import.meta.url)),
       },
+      // gg-ai statically imports @anthropic-ai/sdk for a provider Blobbies can
+      // never select (Ollama + Tinfoil only); the stub keeps its ~104 KB
+      // minified out of the startup bundle. Must stay in sync with both vitest
+      // configs.
+      {
+        find: /^@anthropic-ai\/sdk$/,
+        replacement: fileURLToPath(new URL("./src/lib/anthropic-stub.ts", import.meta.url)),
+      },
     ],
   },
 

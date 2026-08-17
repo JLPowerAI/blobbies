@@ -39,8 +39,14 @@ export interface Agent {
   tone: AvatarTone;
   shape: AgentShape;
   unread?: boolean;
-  /** Pinned Blobs sort to the top of the sidebar. */
+  /** Pinned Blobs leave the list for the tray of avatar tiles at the top. */
   pinned?: boolean;
+  /**
+   * Name of the sidebar section this Blob sits under. Anything that is not a
+   * current section name — absent, empty, or a deleted section — reads as the
+   * ungrouped run above them, so removing a section never strands its Blobs.
+   */
+  section?: string;
   /** Hidden Blobs stay in the roster but are not listed in the sidebar. */
   hidden?: boolean;
   /** Lasting facts the Blob saved via its remember tool. */

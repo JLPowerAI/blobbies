@@ -1,4 +1,3 @@
-import { isAbortError } from "@kenkaiiii/gg-agent";
 import type { Message as AiMessage } from "@kenkaiiii/gg-ai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatPane } from "@/components/ChatPane";
@@ -7,9 +6,11 @@ import { CreatorPane } from "@/components/CreatorPane";
 import { DetailPanel } from "@/components/DetailPanel";
 import { PluginsModal } from "@/components/PluginsModal";
 import { RoutinePanel } from "@/components/RoutinePanel";
+import { SearchModal } from "@/components/SearchModal";
 import {
   MAX_USER_NAME_LENGTH,
   SettingsModal,
+  type SettingsTab,
   type ThemePreference,
 } from "@/components/SettingsModal";
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -26,7 +27,6 @@ import {
   agents as seedAgents,
   transcriptFor,
 } from "@/data/agents";
-import { blobSystemPrompt, streamBlobTurn, timeNote, trimHistory } from "@/lib/ai";
 import {
   type Attachment,
   attachmentName,
@@ -37,17 +37,31 @@ import {
 } from "@/lib/attachments";
 import type { BlobMemory, RosterAccess } from "@/lib/blob-tools";
 import { homeFor } from "@/lib/home";
-import { reconcileMemories } from "@/lib/intent";
 import { type McpServerConfig, parseLoopbackUrl } from "@/lib/mcp";
 import { notify, shouldNotify } from "@/lib/notify";
 import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
+import { blobSystemPrompt, timeNote, trimHistory } from "@/lib/prompt";
 import { type ActiveRun, assertTransition, isTerminal, type RunTrigger } from "@/lib/run-state";
 import { nextFireTime } from "@/lib/schedule";
 import { startScheduler } from "@/lib/scheduler";
+import type { SearchResult } from "@/lib/search";
 import * as store from "@/lib/store";
-import { configureTinfoilFromKeychain, isTinfoilModel } from "@/lib/tinfoil";
+import { openExternal } from "@/lib/tauri";
+import { isTinfoilModel } from "@/lib/tinfoil-model";
 import "./App.css";
+
+// The provider stack (`@/lib/ai` → gg-ai + the OpenAI SDK + zod + Tinfoil,
+// several hundred KB minified) is only needed once a turn actually runs;
+// loading it lazily keeps it out of the startup chunk. Memoized so every
+// await shares one promise. Same shape for the intent router and Tinfoil's
+// keychain probe, which pull the same lazy chunk.
+let aiModule: Promise<typeof import("@/lib/ai")> | undefined;
+const loadAi = () => (aiModule ??= import("@/lib/ai"));
+let intentModule: Promise<typeof import("@/lib/intent")> | undefined;
+const loadIntent = () => (intentModule ??= import("@/lib/intent"));
+let tinfoilModule: Promise<typeof import("@/lib/tinfoil")> | undefined;
+const loadTinfoil = () => (tinfoilModule ??= import("@/lib/tinfoil"));
 
 type Mode = { kind: "chat" } | { kind: "palette" } | { kind: "creator"; initialName: string };
 
@@ -123,6 +137,8 @@ export function App() {
   sentRef.current = sentByAgent;
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [searchOpen, setSearchOpen] = useState(false);
   /** Memories shared by every Blob ("All Blobs" scope), from the `user` slice. */
   const [userMemories, setUserMemories] = useState<BlobMemory[]>([]);
   /** Blob currently generating a reply; drives the thinking indicator. */
@@ -204,7 +220,7 @@ export function App() {
   // app after every rebuild), so local-only setups must never touch it.
   useEffect(() => {
     if (isTinfoilModel(model)) {
-      void configureTinfoilFromKeychain();
+      void loadTinfoil().then((tinfoil) => tinfoil.configureTinfoilFromKeychain());
     }
   }, [model]);
 
@@ -475,6 +491,52 @@ export function App() {
   const openSettings = () => {
     setDetailView({ kind: "settings" });
     setDetailOpen(true);
+  };
+
+  const openSettingsModal = (tab: SettingsTab) => {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+  };
+
+  /** Perform whatever a search palette row points at, then close the palette. */
+  const openSearchResult = (result: SearchResult) => {
+    setSearchOpen(false);
+    switch (result.kind) {
+      case "message":
+      case "blob":
+        openConversation(result.blobId);
+        break;
+      case "file":
+        openConversation(result.blobId);
+        setDetailOpen(true);
+        break;
+      case "routine":
+        openConversation(result.blobId);
+        setDetailView({ kind: "routine", routineId: result.routineId });
+        setDetailOpen(true);
+        break;
+      case "link":
+        // Same hand-off as clicking the link in a transcript: the OS browser,
+        // never this webview. `opener`'s scope allowlist has the final say and
+        // rejects anything outside it, which leaves the user where they are.
+        openExternal(result.url).catch(() => {});
+        break;
+      case "action":
+        if (result.action === "plugins") {
+          setPluginsOpen(true);
+        } else if (result.action === "chat-settings") {
+          openSettings();
+        } else {
+          openSettingsModal(
+            result.action === "settings-model"
+              ? "model"
+              : result.action === "settings-updates"
+                ? "updates"
+                : "general",
+          );
+        }
+        break;
+    }
   };
 
   // Hydrate the Blob that is actually on screen — which is `agent`, not
@@ -820,6 +882,12 @@ export function App() {
     // no-tools retry, the rescue round) and each reports its own total.
     const spent = { inputTokens: 0, outputTokens: 0 };
     setThinkingFor(target.id);
+    // First turn pays one lazy chunk fetch for the provider stack; after
+    // that the memoized import resolves from the module cache.
+    const [{ isAbortError, streamBlobTurn }, { reconcileMemories }] = await Promise.all([
+      loadAi(),
+      loadIntent(),
+    ]);
     try {
       text = await streamBlobTurn({
         model,
@@ -1186,8 +1254,9 @@ export function App() {
         userName={userName}
         onSelect={openConversation}
         onStartCompose={() => setMode({ kind: "palette" })}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => openSettingsModal("general")}
         onOpenPlugins={() => setPluginsOpen(true)}
+        onOpenSearch={() => setSearchOpen(true)}
         onUpdateBlob={updateBlob}
         onEditProfile={editBlobProfile}
         onDuplicate={duplicateBlob}
@@ -1304,8 +1373,19 @@ export function App() {
           onClose={() => setPluginsOpen(false)}
         />
       ) : null}
+      {searchOpen ? (
+        <SearchModal
+          agents={agents}
+          transcripts={sentByAgent}
+          routines={routinesByAgent}
+          hasChat={agent !== undefined}
+          onSelect={openSearchResult}
+          onClose={() => setSearchOpen(false)}
+        />
+      ) : null}
       {settingsOpen ? (
         <SettingsModal
+          initialTab={settingsTab}
           userName={userName}
           onUserNameChange={changeUserName}
           theme={theme}

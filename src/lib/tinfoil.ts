@@ -17,23 +17,18 @@ import { getSecret, setSecret } from "@/lib/secrets";
  * client-side against a Sigstore transparency log before the first byte is
  * sent. `SecureClient` does all of that; this module only routes gg-ai's
  * existing OpenAI provider through its verified transport.
+ *
+ * The id helpers below live in the leaf `tinfoil-model.ts` so UI modules can
+ * check a model id without loading this stack; re-exported for back-compat.
  */
+import { TINFOIL_BASE_URL, tinfoilModelId } from "@/lib/tinfoil-model";
 
-/** Namespace prefix marking a model id as Tinfoil's in `settings.model`. */
-export const TINFOIL_MODEL_PREFIX = "tinfoil:";
-
-/** Public inference endpoint (also serves the unauthenticated model list). */
-export const TINFOIL_BASE_URL = "https://inference.tinfoil.sh/v1";
-
-/** True when the Settings model choice names a Tinfoil model. */
-export function isTinfoilModel(model: string): boolean {
-  return model.startsWith(TINFOIL_MODEL_PREFIX);
-}
-
-/** Bare Tinfoil model id, with the `tinfoil:` namespace stripped. */
-export function tinfoilModelId(model: string): string {
-  return isTinfoilModel(model) ? model.slice(TINFOIL_MODEL_PREFIX.length) : model;
-}
+export {
+  isTinfoilModel,
+  TINFOIL_BASE_URL,
+  TINFOIL_MODEL_PREFIX,
+  tinfoilModelId,
+} from "@/lib/tinfoil-model";
 
 interface TinfoilState {
   apiKey: string;

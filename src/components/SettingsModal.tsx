@@ -10,14 +10,10 @@ import {
   startOllama,
 } from "@/lib/ollama";
 import { deleteSecret, setSecret } from "@/lib/secrets";
-import {
-  configureTinfoil,
-  configureTinfoilFromKeychain,
-  isTinfoilModel,
-  listTinfoilModels,
-  TINFOIL_MODEL_PREFIX,
-  type TinfoilModel,
-} from "@/lib/tinfoil";
+// Tinfoil's real module (attestation stack) is a lazy chunk: only the pure
+// id helpers are imported statically; handlers `import()` the rest on use.
+import type { TinfoilModel } from "@/lib/tinfoil";
+import { isTinfoilModel, TINFOIL_MODEL_PREFIX } from "@/lib/tinfoil-model";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 export const MAX_USER_NAME_LENGTH = 32;
@@ -26,7 +22,12 @@ export type ThemePreference = "system" | "light" | "dark";
 
 const APP_VERSION = "0.1.0";
 
+/** The dialog's tabs; also what the search palette can jump straight to. */
+export type SettingsTab = "general" | "model" | "updates";
+
 interface SettingsModalProps {
+  /** Tab to open on, for callers that jump to one. Defaults to General. */
+  initialTab?: SettingsTab;
   userName: string;
   onUserNameChange: (name: string) => void;
   theme: ThemePreference;
@@ -124,8 +125,9 @@ async function probeTinfoil(
   force = false,
 ): Promise<void> {
   setStatus({ kind: "checking" });
-  if (await configureTinfoilFromKeychain(force)) {
-    setStatus({ kind: "configured", models: await listTinfoilModels() });
+  const tinfoil = await import("@/lib/tinfoil");
+  if (await tinfoil.configureTinfoilFromKeychain(force)) {
+    setStatus({ kind: "configured", models: await tinfoil.listTinfoilModels() });
     return;
   }
   setStatus({ kind: "none" });
@@ -144,6 +146,7 @@ async function probeOllama(setStatus: (status: OllamaStatus) => void): Promise<v
 
 /** Settings dialog: General (account, appearance, agent), Model, and Updates tabs. */
 export function SettingsModal({
+  initialTab = "general",
   userName,
   onUserNameChange,
   theme,
@@ -154,7 +157,7 @@ export function SettingsModal({
   onModelChange,
   onClose,
 }: SettingsModalProps) {
-  const [tab, setTab] = useState<"general" | "model" | "updates">("general");
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [updateStatus, setUpdateStatus] = useState("You're up to date");
   const [track, setTrack] = useState("stable");
   const [ollama, setOllama] = useState<OllamaStatus>({ kind: "idle" });
@@ -191,8 +194,9 @@ export function SettingsModal({
     await deleteSecret("tinfoil-api-key");
     // Refresh the session probe so pickers stop offering Tinfoil models.
     // Awaited before the clear below: an in-flight probe must not land after.
-    await configureTinfoilFromKeychain(true);
-    configureTinfoil({ apiKey: null });
+    const tinfoil = await import("@/lib/tinfoil");
+    await tinfoil.configureTinfoilFromKeychain(true);
+    tinfoil.configureTinfoil({ apiKey: null });
     setTinfoil({ kind: "none" });
     // A selected Tinfoil model is unusable without the key: back to unset.
     if (isTinfoilModel(model)) {

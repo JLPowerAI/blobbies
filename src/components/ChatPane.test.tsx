@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatPane } from "@/components/ChatPane";
@@ -175,6 +175,43 @@ describe("ChatPane", () => {
     // The send waits for the thumbnail (jsdom renders none, so the file goes
     // on its own) and hands the file over with it, not bare.
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("", undefined, [{ file: keep }]));
+  });
+
+  it("gives a table its own bubble, so it is not squeezed by the prose around it", () => {
+    const reply = [
+      "Here you go:",
+      "",
+      "| Date | Model |",
+      "| --- | --- |",
+      "| Aug 14 | GLM-5.3 |",
+      "",
+      "Anything else?",
+    ].join("\n");
+    render(
+      pane(false, vi.fn(), [
+        { id: "t1", kind: "text", author: "agent", segments: [{ text: reply }] },
+      ]),
+    );
+
+    // One message, three bubbles: prose, the table on its own, prose.
+    const stack = document.querySelector(".bubble-stack") as HTMLElement;
+    expect(stack.querySelectorAll(":scope > .bubble")).toHaveLength(3);
+    expect(stack.querySelectorAll(".bubble-table")).toHaveLength(1);
+    // The table bubble holds the table and nothing else.
+    const table = stack.querySelector(".bubble-table") as HTMLElement;
+    expect(within(table).getByRole("table")).toBeInTheDocument();
+    expect(table.textContent).not.toMatch(/Anything else/);
+  });
+
+  it("leaves a reply without a table as a single bubble", () => {
+    render(
+      pane(false, vi.fn(), [
+        { id: "t1", kind: "text", author: "agent", segments: [{ text: "Just words." }] },
+      ]),
+    );
+    const stack = document.querySelector(".bubble-stack") as HTMLElement;
+    expect(stack.querySelectorAll(":scope > .bubble")).toHaveLength(1);
+    expect(stack.querySelector(".bubble-table")).toBeNull();
   });
 
   it("keeps Send reachable mid-reply, so a follow-up can steer the turn", async () => {

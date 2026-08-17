@@ -1,8 +1,8 @@
 import { ChevronsRight, Clock, FileText, Plus, Settings, Trash2, User, Users } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Agent, Routine } from "@/data/agents";
-import { type BlobMemory, MEMORY_LIMIT, MEMORY_TEXT_LIMIT } from "@/lib/blob-tools";
 import { type HomeEntry, homeFor } from "@/lib/home";
+import { type BlobMemory, MEMORY_LIMIT, MEMORY_TEXT_LIMIT } from "@/lib/memory";
 
 /** "12.4k", "380k", "1.2M" — a glance, not an invoice. */
 function formatTokens(count: number): string {

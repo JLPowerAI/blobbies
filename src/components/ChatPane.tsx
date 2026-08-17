@@ -28,16 +28,24 @@ import { PillSelect } from "@/components/PillSelect";
 import type { Agent, Message } from "@/data/agents";
 import { type Attachment, MAX_ATTACHMENTS, type PickedFile } from "@/lib/attachments";
 import { fileBadge, fileKind } from "@/lib/file-kind";
+import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
 import { imagePreview } from "@/lib/preview";
-import {
-  configureTinfoilFromKeychain,
-  isTinfoilModel,
-  listTinfoilModels,
-  TINFOIL_MODEL_PREFIX,
-  type TinfoilModel,
-} from "@/lib/tinfoil";
+// Tinfoil's real module (attestation stack) is a lazy chunk; only the pure
+// id helpers are static. The probe/model-list go through `import()`.
+import type { TinfoilModel } from "@/lib/tinfoil";
+import { isTinfoilModel, TINFOIL_MODEL_PREFIX } from "@/lib/tinfoil-model";
 
+/**
+ * Keychain probe + Tinfoil catalog load, module-scope so effects and
+ * `useCallback`s can reference it without a dependency. The real tinfoil
+ * module is only loaded when a probe actually runs (lazy provider chunk).
+ */
+const probeTinfoilModels = (set: (models: TinfoilModel[]) => void) =>
+  void import("@/lib/tinfoil").then(async (tinfoil) => {
+    const hasKey = await tinfoil.configureTinfoilFromKeychain();
+    set(hasKey ? await tinfoil.listTinfoilModels() : []);
+  });
 interface ChatPaneProps {
   agent: Agent;
   messages: Message[];
@@ -194,18 +202,15 @@ function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }
       : message.ask === "action"
         ? " bubble-ask bubble-ask-action"
         : " bubble-ask";
-  return (
-    <div
-      className={
-        message.author === "user" ? "bubble bubble-user" : `bubble bubble-agent${askClass}`
-      }
-    >
-      {message.replyTo === undefined ? null : (
-        <span className="bubble-quote">{message.replyTo}</span>
-      )}
-      {message.author === "user" ? (
-        // The user's own words render verbatim; only the agent speaks markdown.
-        message.segments.map((segment) =>
+  const quote =
+    message.replyTo === undefined ? null : <span className="bubble-quote">{message.replyTo}</span>;
+
+  if (message.author === "user") {
+    return (
+      <div className="bubble bubble-user">
+        {quote}
+        {/* The user's own words render verbatim; only the agent speaks markdown. */}
+        {message.segments.map((segment) =>
           segment.accent === true ? (
             <span key={segment.text} className="bubble-accent">
               {segment.text}
@@ -213,10 +218,29 @@ function TextBubble({ message }: { message: Extract<Message, { kind: "text" }> }
           ) : (
             <span key={segment.text}>{segment.text}</span>
           ),
-        )
-      ) : (
-        <MarkdownContent text={message.segments.map((segment) => segment.text).join("")} />
-      )}
+        )}
+      </div>
+    );
+  }
+
+  // Each table becomes its own block: a bubble hugs its text and caps at a
+  // fraction of the pane, which squeezes columns until headers wrap mid-word.
+  const blocks = splitMarkdownBlocks(message.segments.map((segment) => segment.text).join(""));
+  return (
+    <div className="bubble-stack">
+      {blocks.map((block, position) => (
+        <div
+          key={block.line}
+          className={
+            block.kind === "table"
+              ? "bubble bubble-agent bubble-table"
+              : `bubble bubble-agent${askClass}`
+          }
+        >
+          {position === 0 ? quote : null}
+          <MarkdownContent text={block.text} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -550,9 +574,7 @@ export function ChatPane({
     // The keychain probe is memoized per session (see tinfoil.ts): reading
     // the keychain can prompt for the device password, so it happens at most
     // once, and never at mount unless a Tinfoil model is already selected.
-    void configureTinfoilFromKeychain().then((hasKey) =>
-      hasKey ? listTinfoilModels().then(setTinfoilModels) : setTinfoilModels([]),
-    );
+    probeTinfoilModels(setTinfoilModels);
   }, []);
 
   // On mount, list local models always but only probe the keychain when the
@@ -561,9 +583,7 @@ export function ChatPane({
   useEffect(() => {
     void listOllamaModels().then(setAvailableModels);
     if (isTinfoilModel(model)) {
-      void configureTinfoilFromKeychain().then((hasKey) =>
-        hasKey ? listTinfoilModels().then(setTinfoilModels) : setTinfoilModels([]),
-      );
+      probeTinfoilModels(setTinfoilModels);
     }
   }, []);
 

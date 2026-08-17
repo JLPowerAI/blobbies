@@ -11,6 +11,7 @@ import {
   Search,
   Settings,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   type CSSProperties,
@@ -25,6 +26,7 @@ import type { Agent } from "@/data/agents";
 import { readPreference, writePreference } from "@/lib/preferences";
 import { isTauri } from "@/lib/tauri";
 import { formatAgentTime } from "@/lib/time";
+import { useBlobDrag } from "@/lib/useBlobDrag";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 /** Resize limits: the rail collapses below MIN, and can't grow past MAX. */
@@ -67,6 +69,7 @@ interface SidebarProps {
   onStartCompose: () => void;
   onOpenSettings: () => void;
   onOpenPlugins: () => void;
+  onOpenSearch: () => void;
   onUpdateBlob: (id: string, patch: Partial<Agent>) => void;
   onEditProfile: (id: string) => void;
   onDuplicate: (id: string) => void;
@@ -78,6 +81,28 @@ interface MenuTarget {
   agentId: string;
   x: number;
   y: number;
+}
+
+/** Drop zone ids. Sections use `section:<name>`, so these cannot collide. */
+const PIN_ZONE = "pin";
+const UNGROUPED_ZONE = "ungrouped";
+const SECTION_PREFIX = "section:";
+
+/** The drop zone a group answers to; null is the ungrouped run. */
+function zoneFor(section: string | null): string {
+  return section === null ? UNGROUPED_ZONE : `${SECTION_PREFIX}${section}`;
+}
+
+/** Sections the user made, including empty ones the roster cannot imply. */
+function readSections(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(readPreference("pref:sections", "[]"));
+    return Array.isArray(parsed)
+      ? parsed.filter((name): name is string => typeof name === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Keep the fixed-position menu inside the viewport. */
@@ -103,6 +128,7 @@ export function Sidebar({
   onStartCompose,
   onOpenSettings,
   onOpenPlugins,
+  onOpenSearch,
   onUpdateBlob,
   onEditProfile,
   onDuplicate,
@@ -112,6 +138,32 @@ export function Sidebar({
   const [contextMenu, setContextMenu] = useState<MenuTarget | null>(null);
   /** Blob awaiting delete confirmation (window.confirm is a no-op in wry). */
   const [confirmDelete, setConfirmDelete] = useState<Agent | null>(null);
+  const [sections, setSections] = useState<string[]>(readSections);
+
+  const saveSections = (next: string[]) => {
+    setSections(next);
+    writePreference("pref:sections", JSON.stringify(next));
+  };
+
+  /** Apply a drop: pin, unpin into the ungrouped run, or move to a section. */
+  const {
+    drag,
+    start: startDrag,
+    consumeClick,
+  } = useBlobDrag((id, zone) => {
+    if (zone === PIN_ZONE) {
+      onUpdateBlob(id, { pinned: true });
+      return;
+    }
+    // Anything that is not the pin tray unpins: a Blob lives in one place.
+    // The ungrouped run clears `section` rather than setting one.
+    onUpdateBlob(
+      id,
+      zone.startsWith(SECTION_PREFIX)
+        ? { pinned: false, section: zone.slice(SECTION_PREFIX.length) }
+        : { pinned: false, section: "" },
+    );
+  });
 
   // Escape dismisses the context menu; clicks are handled by its backdrop.
   useEffect(() => {
@@ -264,6 +316,30 @@ export function Sidebar({
     "--sidebar-width": collapsed && !resizing ? `${RAIL_WIDTH}px` : `${width}px`,
   } as CSSProperties;
 
+  const listed = agents.filter((candidate) => candidate.hidden !== true);
+  const pinned = listed.filter((candidate) => candidate.pinned === true);
+  const unpinned = listed.filter((candidate) => candidate.pinned !== true);
+  // A section name no longer in the list reads as ungrouped, so deleting a
+  // section never strands the Blobs that were in it.
+  const inSection = (candidate: Agent) =>
+    candidate.section !== undefined && sections.includes(candidate.section);
+  const ungrouped = unpinned.filter((candidate) => !inSection(candidate));
+  const sectionGroups = sections.map((name) => ({
+    name,
+    rows: unpinned.filter((candidate) => candidate.section === name),
+  }));
+  const dragging = drag !== null;
+  const dragTarget = agents.find((candidate) => candidate.id === drag?.id);
+
+  /** Add "New section", then "New section 2", and so on. */
+  const addSection = () => {
+    let name = "New section";
+    for (let suffix = 2; sections.includes(name); suffix += 1) {
+      name = `New section ${suffix}`;
+    }
+    saveSections([...sections, name]);
+  };
+
   return (
     <nav
       className={[
@@ -300,12 +376,11 @@ export function Sidebar({
 
       <div className="sidebar-search">
         <Search size={13} strokeWidth={2} aria-hidden="true" className="search-glyph" />
-        <input
-          type="search"
-          className="search-input"
-          placeholder="Search"
-          aria-label="Search conversations"
-        />
+        {/* Looks like a field, acts as the door to the palette: searching spans
+            messages, files, links and routines, not just this list. */}
+        <button type="button" className="search-input search-trigger" onClick={onOpenSearch}>
+          Search
+        </button>
       </div>
 
       <ul className="agent-list">
@@ -338,44 +413,151 @@ export function Sidebar({
             No Blobs yet
           </li>
         ) : null}
-        {[...agents]
-          .filter((candidate) => candidate.hidden !== true)
-          // Stable sort: pinned rise to the top, everything else keeps order.
-          .sort((a, b) => (b.pinned === true ? 1 : 0) - (a.pinned === true ? 1 : 0))
-          .map((agent) => {
-            const selected = agent.id === selectedId;
-            return (
-              <li key={agent.id}>
+
+        {/* Pin tray. Always a drop target while dragging, even when empty —
+            that empty state is the only thing that teaches the gesture. */}
+        {pinned.length > 0 || dragging ? (
+          <li
+            data-drop={PIN_ZONE}
+            className={[
+              "pin-tray",
+              pinned.length === 0 ? "pin-tray-empty" : "",
+              drag?.over === PIN_ZONE ? "pin-tray-over" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            {pinned.length === 0 ? (
+              <span className="pin-tray-hint">Drag here to pin</span>
+            ) : (
+              pinned.map((agent) => (
                 <button
+                  key={agent.id}
                   type="button"
-                  className={selected ? "agent-row agent-row-selected" : "agent-row"}
-                  aria-current={selected ? "true" : undefined}
-                  title={collapsed ? agent.name : undefined}
-                  onClick={() => onSelect(agent.id)}
+                  className={agent.id === selectedId ? "pin-tile pin-tile-selected" : "pin-tile"}
+                  aria-current={agent.id === selectedId ? "true" : undefined}
+                  onPointerDown={(event) => startDrag(event, agent.id)}
+                  onClick={() => {
+                    if (!consumeClick()) {
+                      onSelect(agent.id);
+                    }
+                  }}
                   onContextMenu={(event) => openContextMenu(event, agent.id)}
                 >
-                  <BlobAvatar tone={agent.tone} shape={agent.shape} />
-                  <span className="agent-row-text">
-                    <span className="agent-row-top">
-                      <span className="agent-name">{agent.name}</span>
-                      <span className="agent-time">
-                        {agent.lastActivityAt === undefined
-                          ? agent.time
-                          : formatAgentTime(agent.lastActivityAt, now)}
-                      </span>
-                    </span>
-                    <span className="agent-row-bottom">
-                      <span className="agent-snippet">{agent.snippet}</span>
-                      {agent.unread === true ? (
-                        <span className="unread-dot" role="status" aria-label="Unread messages" />
-                      ) : null}
-                    </span>
-                  </span>
+                  <BlobAvatar tone={agent.tone} shape={agent.shape} size={44} />
+                  <span className="pin-tile-name">{agent.name}</span>
                 </button>
-              </li>
-            );
-          })}
+              ))
+            )}
+          </li>
+        ) : null}
+
+        {/* The ungrouped run, then one group per section. */}
+        {[{ name: null, rows: ungrouped }, ...sectionGroups].map((group) => {
+          const zone = zoneFor(group.name);
+          return (
+            <li key={group.name ?? UNGROUPED_ZONE} className="agent-group" data-drop={zone}>
+              {group.name === null ? null : (
+                <span className="section-title">
+                  {group.name}
+                  {/* Only an empty section can be removed: with rows it would be
+                    a destructive-looking button next to real conversations. */}
+                  {group.rows.length === 0 ? (
+                    <button
+                      type="button"
+                      className="section-remove"
+                      aria-label={`Remove section ${group.name}`}
+                      onClick={() => saveSections(sections.filter((name) => name !== group.name))}
+                    >
+                      <X size={12} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </span>
+              )}
+              <ul
+                className={
+                  drag?.over === zone ? "agent-group-rows agent-group-over" : "agent-group-rows"
+                }
+              >
+                {group.rows.length === 0 && group.name !== null ? (
+                  <li className="section-empty">Drag chats here</li>
+                ) : null}
+                {group.rows.map((agent) => {
+                  const selected = agent.id === selectedId;
+                  return (
+                    <li key={agent.id}>
+                      <button
+                        type="button"
+                        className={[
+                          "agent-row",
+                          selected ? "agent-row-selected" : "",
+                          drag?.id === agent.id ? "agent-row-dragging" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        aria-current={selected ? "true" : undefined}
+                        title={collapsed ? agent.name : undefined}
+                        onPointerDown={(event) => startDrag(event, agent.id)}
+                        onClick={() => {
+                          // The click that ends a drag must not also select.
+                          if (!consumeClick()) {
+                            onSelect(agent.id);
+                          }
+                        }}
+                        onContextMenu={(event) => openContextMenu(event, agent.id)}
+                      >
+                        <BlobAvatar tone={agent.tone} shape={agent.shape} />
+                        <span className="agent-row-text">
+                          <span className="agent-row-top">
+                            <span className="agent-name">{agent.name}</span>
+                            <span className="agent-time">
+                              {agent.lastActivityAt === undefined
+                                ? agent.time
+                                : formatAgentTime(agent.lastActivityAt, now)}
+                            </span>
+                          </span>
+                          <span className="agent-row-bottom">
+                            <span className="agent-snippet">{agent.snippet}</span>
+                            {agent.unread === true ? (
+                              <span
+                                className="unread-dot"
+                                role="status"
+                                aria-label="Unread messages"
+                              />
+                            ) : null}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </li>
+          );
+        })}
+
+        {agents.length > 0 && !collapsed ? (
+          <li>
+            <button type="button" className="section-add" onClick={addSection}>
+              <Plus size={13} strokeWidth={2} aria-hidden="true" />
+              New section
+            </button>
+          </li>
+        ) : null}
       </ul>
+
+      {/* The dragged Blob follows the cursor. Fixed-position and
+          pointer-events: none so it never becomes its own drop target. */}
+      {drag === null || dragTarget === undefined ? null : (
+        <div
+          className={drag.over === null ? "drag-tile" : "drag-tile drag-tile-armed"}
+          style={{ left: drag.x, top: drag.y }}
+          aria-hidden="true"
+        >
+          <BlobAvatar tone={dragTarget.tone} shape={dragTarget.shape} size={44} />
+          <span className="pin-tile-name">{dragTarget.name}</span>
+        </div>
+      )}
 
       {contextMenu !== null &&
         (() => {

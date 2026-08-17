@@ -12,6 +12,11 @@ export default defineConfig({
         find: /^openai$/,
         replacement: fileURLToPath(new URL("./src/lib/openai-browser.ts", import.meta.url)),
       },
+      // Mirror vite.config.ts: keeps the Anthropic SDK out of the module graph.
+      {
+        find: /^@anthropic-ai\/sdk$/,
+        replacement: fileURLToPath(new URL("./src/lib/anthropic-stub.ts", import.meta.url)),
+      },
     ],
   },
   test: {

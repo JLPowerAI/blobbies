@@ -16,6 +16,12 @@ if (typeof Element.prototype.scrollTo !== "function") {
   } as Element["scrollTo"];
 }
 
+// Same gap: jsdom has no scrollIntoView, and keeping a highlighted row in
+// view is a no-op in a zero-height layout anyway.
+if (typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
+
 afterEach(() => {
   cleanup();
   // The store's in-memory fallback survives module reuse between tests;

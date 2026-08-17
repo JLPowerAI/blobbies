@@ -251,6 +251,39 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "Ken", level: 1 })).toBeInTheDocument();
   });
 
+  it("searches across Blobs and jumps to the one it finds", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+    // A second Blob, so picking one is a real choice rather than the only row.
+    await user.click(screen.getByRole("button", { name: "New Blob" }));
+    await user.type(screen.getByLabelText("Search or create Blobs"), "Zed");
+    await user.click(screen.getByRole("button", { name: 'Create new Blob "Zed"' }));
+    await user.click(screen.getByRole("button", { name: "Get started" }));
+
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    const palette = screen.getByRole("dialog", { name: "Search" });
+    await user.type(within(palette).getByRole("textbox", { name: "Search" }), "ken");
+    await user.click(await within(palette).findByRole("button", { name: /Ken/ }));
+
+    // Picking a row closes the palette and opens that conversation.
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Ken", level: 1 })).toBeInTheDocument();
+  });
+
+  it("opens Settings on the tab the palette asked for", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(await screen.findByRole("button", { name: /Settings: Updates/ }));
+
+    // Straight to Updates, not the General tab the dialog otherwise opens on.
+    const settings = await screen.findByRole("dialog", { name: "Settings" });
+    expect(within(settings).getByRole("button", { name: "Check for Updates" })).toBeInTheDocument();
+  });
+
   it("opens Blob settings from the chat header identity", async () => {
     const user = userEvent.setup();
     render(<App />);
