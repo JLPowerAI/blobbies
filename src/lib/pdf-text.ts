@@ -35,12 +35,6 @@ const MAX_PAGES = 200;
 const TIMEOUT_MS = 20_000;
 
 /**
- * Extract a PDF's text, or throw if it is unreadable.
- *
- * Callers treat a throw as "this file is not attachable" and say so; nothing
- * here is trusted enough to be worth a partial result on a parser error.
- */
-/**
  * One page's text, read off pdf.js's stream by hand.
  *
  * `page.getTextContent()` would be the obvious call, but it async-iterates a
@@ -70,6 +64,12 @@ async function pageText(page: PDFPageProxy): Promise<string> {
   return parts.join("");
 }
 
+/**
+ * Extract a PDF's text, or throw if it is unreadable.
+ *
+ * Callers treat a throw as "this file is not attachable" and say so; nothing
+ * here is trusted enough to be worth a partial result on a parser error.
+ */
 export async function extractPdfText(bytes: Uint8Array): Promise<string> {
   // A fresh worker per document, terminated below. We construct it ourselves
   // so pdf.js never calls `new Worker` and so never reaches its blob:-URL
