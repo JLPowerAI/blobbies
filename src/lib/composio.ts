@@ -166,25 +166,85 @@ export interface ComposioAccount {
   id: string;
   /** User-chosen name for a second account on the same app, else empty. */
   alias: string;
+  /** Address or username on the account, once resolved; "" until then. */
+  identity?: string;
   /** Raw CLI status: ACTIVE, EXPIRED, INITIALIZING, … */
   status: string;
   active: boolean;
 }
 
 /**
+ * The in-flight or finished account list, shared by every caller.
+ *
+ * `connections list` is a 1.7s CLI round trip (measured), and three things ask
+ * for it: the prompt's app list at startup, the Plugins tiles, and the detail
+ * panel. Without this they each pay the 1.7s, and opening Plugins right after
+ * launch pays it twice concurrently. Cleared whenever a connection changes.
+ */
+let accountsPromise: Promise<ComposioAccount[]> | null = null;
+
+/** Forget the cached account list, after connecting or disconnecting. */
+export function forgetComposioAccounts(): void {
+  accountsPromise = null;
+}
+
+/**
  * Every connected account, across every app.
  *
- * Includes broken ones on purpose — the detail view cannot offer to fix an
- * account it will not show. `active` carries the judgement.
+ * Includes broken ones on purpose — callers decide what an inactive one means.
  */
 export async function composioAccounts(): Promise<ComposioAccount[]> {
   if (!isTauri()) {
     return [];
   }
+  accountsPromise ??= invoke<ComposioAccount[]>("composio_accounts").catch(() => {
+    // A failure must not be remembered: the CLI may simply not be installed
+    // yet, and the next open should ask again.
+    accountsPromise = null;
+    return [] as ComposioAccount[];
+  });
+  return accountsPromise;
+}
+
+/**
+ * Identities, kept for the life of the app run.
+ *
+ * An address costs a 3.1s CLI round trip (measured) and never changes for a
+ * given account handle — Composio mints a new handle rather than moving an
+ * address between them. Re-fetching it every time the Plugins panel opens
+ * spends three seconds to learn what it already knew.
+ *
+ * Deliberately not persisted: a run is long enough to matter, and a stale
+ * address surviving a restart would outlive the account it named.
+ */
+const identities = new Map<string, string>();
+
+/**
+ * The address or username behind one account, or "" when unknown.
+ *
+ * `connections list` names accounts only by an internal handle
+ * (`gmail_casava-tst`), which tells the person who connected them nothing and
+ * cannot distinguish two Gmail accounts. This costs one CLI call per account,
+ * so callers fetch it once per panel open and fall back to the handle.
+ */
+export async function composioAccountIdentity(toolkit: string, account: string): Promise<string> {
+  if (!isTauri()) {
+    return "";
+  }
+  const hit = identities.get(account);
+  if (hit !== undefined) {
+    return hit;
+  }
   try {
-    return await invoke<ComposioAccount[]>("composio_accounts");
+    const found = await invoke<string>("composio_account_identity", { toolkit, account });
+    // Only a real answer is cached: an empty one means the call failed or the
+    // toolkit has no profile tool, and both are worth retrying next open.
+    if (found !== "") {
+      identities.set(account, found);
+    }
+    return found;
   } catch {
-    return [];
+    return "";
   }
 }
 
@@ -242,6 +302,9 @@ export async function waitForComposioLink(
   const known = new Set(before.filter((account) => account.active).map((account) => account.id));
   const deadline = Date.now() + LINK_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    // Each pass must ask the CLI again: polling a cached answer would wait out
+    // the whole five minutes on a snapshot taken before the browser opened.
+    forgetComposioAccounts();
     const now = await composioAccounts();
     if (now.some((a) => a.toolkit === toolkit && a.active && !known.has(a.id))) {
       return true;

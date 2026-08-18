@@ -56,7 +56,12 @@ const MAX_REPLY_TOKENS = 4096;
 
 // Chat temperature stays at the model's default on purpose: the sim measured
 // restraint at 50% (default), 63% (0.3) and 38% (0.1) — noise, not a lever.
-// Tool discipline comes from the router's `needsWeb` verdict instead.
+// Tools are offered on every chat turn. An earlier build gated them on a
+// router verdict (`needs_web`) because qwen3.5:2b googled the user's own facts
+// in up to half of runs — but nobody runs a 2b model for this, and the gate
+// silently stripped every tool from "summarise my inbox", leaving a Blob
+// apologising that it could not reach Gmail. A leash for a model class we do
+// not support is not worth a capability that disappears.
 
 /**
  * Chat streaming through one of the two providers registered above: local
@@ -533,7 +538,7 @@ export async function streamBlobTurn(options: {
   const intent: Intent =
     options.intent ??
     (scope === "routine"
-      ? { action: "none", needsWeb: true }
+      ? { action: "none" }
       : await routeIntent({
           model: options.model,
           messages: conversation,
@@ -645,7 +650,8 @@ export async function streamBlobTurn(options: {
     // connected, so it costs a chat turn the same as a routine — and "read my
     // email" is a chat request far more often than a scheduled one. Offered
     // only once something is connected: with no account the model would spend
-    // rounds discovering there is nothing to call.
+    // rounds discovering there is nothing to call. Deliberately outside the
+    // router's web verdict — see the `tools` line below.
     const appTools = options.hasConnectedApps === true ? makeComposioTools() : [];
     // Routine turns run unattended, so they get the full autonomous catalog;
     // chat turns keep the tuned web-only pair (see the scope option docs).
@@ -679,6 +685,7 @@ export async function streamBlobTurn(options: {
       provider: providerFor(options.model),
       model: options.model,
       ...(options.thinking === true ? {} : { thinking: NO_THINKING }),
+      // `none` is the retry after a tool failure, not a routing decision.
       ...(toolScope === "none" ? {} : { tools }),
       maxTokens: MAX_REPLY_TOKENS,
       maxTurns: MAX_TOOL_ROUNDS,
@@ -774,13 +781,7 @@ export async function streamBlobTurn(options: {
   // what those tools returned, instead of starting over empty-handed.
   const gathered: ToolCallRecord[] = [];
   try {
-    // The router (grammar-constrained, temperature 0) decides whether this
-    // turn may touch the web at all. Offered the tools unconditionally,
-    // qwen3.5:2b googled the user's own facts in up to half of runs; with
-    // the verdict gating the catalog, a turn that needs no tools has none
-    // to misuse. needsWeb fails open to true, so a router failure only ever
-    // restores the old always-offered behaviour.
-    result = await runLoop(intent.needsWeb ? "web" : "none");
+    result = await runLoop("web");
   } catch (error) {
     // simplification: any failure before text retries once without tools —
     // Ollama reports "does not support tools" as a plain 400.

@@ -36,6 +36,7 @@ pub fn run() {
             composio::composio_login_start,
             composio::composio_login_poll,
             composio::composio_accounts,
+            composio::composio_account_identity,
             composio::composio_link_start,
             composio::composio_search,
             composio::composio_schema,

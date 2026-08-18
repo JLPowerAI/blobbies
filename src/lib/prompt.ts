@@ -6,7 +6,12 @@
  * painting. `ai.ts` re-exports everything here; existing imports keep working.
  */
 import type { Message } from "@kenkaiiii/gg-ai";
-import { type BlobMemory, MEMORY_PROMPT_CHARS, renderMemories } from "@/lib/memory";
+import {
+  type BlobMemory,
+  MEMORY_DATA_NOTE,
+  MEMORY_PROMPT_CHARS,
+  renderMemories,
+} from "@/lib/memory";
 
 /** Who the Blob is talking to: name goes in the (cached) system prompt, timezone feeds `timeNote`. */
 export interface UserContext {
@@ -159,8 +164,11 @@ export function blobSystemPrompt(
   // call. Add a line here only after measuring that it changes behaviour.
   const capabilities = section(
     "Tools",
-    "- Never search the web for anything about the user; what you know about " +
-      "them is above.\n" +
+    // No "above"/"below": the memory sections sit at the END of this prompt
+    // (they change most often, so they cost the least cached prefix there),
+    // and the line used to say "above", pointing the model at nothing.
+    "- Never search the web for anything about the user \u2014 what you know about " +
+      "them is in this prompt.\n" +
       "- After web_search you have only snippets: call web_fetch on the best " +
       "result and answer from the page.\n" +
       // Named unconditionally though only routine turns carry these: the
@@ -303,7 +311,11 @@ export function blobSystemPrompt(
     budget: MEMORY_PROMPT_CHARS - shared.length,
   });
 
-  return `${identity}${role}${capabilities}${skills}${mcp}${apps}${group}${who}${shared}${memories}`;
+  // One closing note under whichever memory blocks rendered, never one each:
+  // they are always adjacent, and the duplicate spent a line of the
+  // most-often-rewritten section saying what the line above it already said.
+  const factsNote = shared === "" && memories === "" ? "" : `\n${MEMORY_DATA_NOTE}`;
+  return `${identity}${role}${capabilities}${skills}${mcp}${apps}${group}${who}${shared}${memories}${factsNote}`;
 }
 
 /**

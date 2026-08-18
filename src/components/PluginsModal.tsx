@@ -1,11 +1,12 @@
-import { ArrowUpRight, Check, ChevronLeft, ListFilter, Plus, Search, X } from "lucide-react";
+import { Check, ChevronLeft, ListFilter, Plus, Search, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { ExternalLink } from "@/components/ExternalLink";
 import { PLUGIN_CATEGORIES, type PluginDef, plugins } from "@/data/plugins";
 import {
   COMPOSIO_DASHBOARD_URL,
   type ComposioAccount,
+  composioAccountIdentity,
   composioAccounts,
+  forgetComposioAccounts,
   startComposioLink,
   waitForComposioLink,
 } from "@/lib/composio";
@@ -79,8 +80,40 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
   const [ownershipFilter, setOwnershipFilter] = useState<"all" | "team" | "public">("all");
   const filterRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * Two stages, because they cost very different amounts.
+   *
+   * Measured: `connections list` is 1.7s and answers *which apps are
+   * connected* — everything the tiles need. `GMAIL_GET_PROFILE` is another
+   * 3.1s per account and answers only *which address*, which is needed one
+   * click deeper. Waiting for both before painting anything made every tile
+   * sit blank for ~5 seconds.
+   *
+   * So the tiles unblock at stage one, and the addresses arrive at stage two.
+   * That is not the flicker this replaced: a row never contradicts itself,
+   * because a row without its address does not render at all — `namesLoaded`
+   * gates the account list the same way `loaded` gates the tiles.
+   */
+  const [loaded, setLoaded] = useState(false);
+  const [namesLoaded, setNamesLoaded] = useState(false);
+
   useEffect(() => {
-    void composioAccounts().then(setAccounts);
+    void composioAccounts().then(async (found) => {
+      // Only accounts that work. An expired one cannot be repaired from here
+      // (composio link only ever creates) and cannot even name itself, so its
+      // row was a dead handle the user could neither read nor act on.
+      const usable = found.filter((account) => account.active);
+      setAccounts(usable);
+      setLoaded(true);
+      const named = await Promise.all(
+        usable.map(async (account) => ({
+          ...account,
+          identity: await composioAccountIdentity(account.toolkit, account.id),
+        })),
+      );
+      setAccounts(named);
+      setNamesLoaded(true);
+    });
   }, []);
 
   const accountsFor = (toolkit: string) =>
@@ -108,7 +141,9 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
         // user's shortlist rather than making them add it twice.
         onSetInstalled(plugin.id, true);
       }
-      setAccounts(await composioAccounts());
+      // A fresh connection is exactly the thing the cache does not know about.
+      forgetComposioAccounts();
+      setAccounts((await composioAccounts()).filter((account) => account.active));
       setAddingTo("");
     } catch (error) {
       setConnectError(error instanceof Error ? error.message : String(error));
@@ -198,7 +233,10 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
             </span>
           </span>
         </button>
-        {isConnected(plugin.id) ? (
+        {/* Nothing until the probe answers: rendering Connect first meant every
+            already-connected app flashed the wrong state before correcting
+            itself, which reads as the app not knowing what it is doing. */}
+        {!loaded ? null : isConnected(plugin.id) ? (
           <span className="plugin-added">Connected</span>
         ) : (
           <button
@@ -402,15 +440,8 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
             <PluginTile plugin={plugin} size={52} />
             <div className="plugin-hero-text">
               <h3 className="plugin-hero-name">{plugin.name}</h3>
-              {/* Not a raw anchor: the webview must never navigate away from
-                  the bundled app, since a navigated webview keeps the IPC
-                  bridge and remote content could then call commands. */}
-              <ExternalLink className="plugin-source" href={plugin.sourceUrl}>
-                View Source
-                <ArrowUpRight size={13} strokeWidth={2} aria-hidden="true" />
-              </ExternalLink>
             </div>
-            {isConnected(plugin.id) ? (
+            {!loaded ? null : isConnected(plugin.id) ? (
               <span className="plugin-added">Connected</span>
             ) : (
               <button
@@ -431,10 +462,15 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
 
           <p className="modal-section-label">Accounts</p>
           <div className="modal-card">
-            {accountsFor(plugin.id).length === 0 ? (
+            {/* Also reached when every account for this app has expired: they
+                are filtered out, so "no account connected" is the honest state
+                — none of them can do anything. */}
+            {!namesLoaded || accountsFor(plugin.id).length === 0 ? (
               <div className="modal-row">
                 <span className="modal-row-blurb">
-                  No account connected yet. Connecting opens {plugin.name} in your browser.
+                  {!namesLoaded
+                    ? "Checking\u2026"
+                    : `No account connected yet. Connecting opens ${plugin.name} in your browser.`}
                 </span>
               </div>
             ) : (
@@ -442,30 +478,17 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
                 <Fragment key={account.id}>
                   {position === 0 ? null : <div className="modal-divider" />}
                   <div className="modal-row">
-                    {/* The alias is what the user named it; the CLI's word_id
-                        is the fallback, since it is what they would type to
-                        manage the account themselves. */}
-                    <span className="modal-row-label">{account.alias || account.id}</span>
+                    {/* The address on the account, or the name the user gave
+                        it. Composio's internal handle ("gmail_casava-tst") is
+                        never shown: it names nothing the user has ever seen.
+                        Every row here is a working account — unusable ones are
+                        filtered out above — so there is no status to render
+                        either, only the identity and a Connected pill. */}
+                    <span className="modal-row-label">
+                      {account.identity || account.alias || plugin.name}
+                    </span>
                     <span className="plugin-auth">
-                      {account.active ? (
-                        <span className="plugin-added">Connected</span>
-                      ) : (
-                        <>
-                          {/* The raw status, not a euphemism: EXPIRED and
-                              INITIALIZING need different actions from the
-                              user, and flattening both to "Needs auth" hides
-                              which one they are looking at. */}
-                          <span className="plugin-needs-auth">{account.status.toLowerCase()}</span>
-                          <button
-                            type="button"
-                            className="modal-button"
-                            disabled={connecting !== ""}
-                            onClick={() => void connect(plugin)}
-                          >
-                            Reconnect
-                          </button>
-                        </>
-                      )}
+                      <span className="plugin-added">Connected</span>
                     </span>
                   </div>
                 </Fragment>
@@ -474,12 +497,14 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
             <div className="modal-divider" />
             {addingTo === plugin.id ? (
               <div className="modal-row">
+                {/* Literal characters in JSX attributes: they are not JS
+                    strings, so a \u2026 escape renders as those six chars. */}
                 <input
                   className="modal-name-input"
                   autoComplete="off"
                   spellCheck={false}
                   aria-label="Name for the new account"
-                  placeholder="work, personal\u2026"
+                  placeholder="work, personal…"
                   value={alias}
                   onChange={(event) => setAlias(event.currentTarget.value)}
                   onKeyDown={(event) => {
@@ -518,16 +543,19 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
             <p className="modal-row-blurb">{connectError}</p>
           ) : null}
 
-          <p className="modal-section-label">Removing an account</p>
+          <p className="modal-section-label">Managing accounts</p>
           <div className="modal-card">
             <div className="modal-row modal-row-multiline">
               <span className="modal-row-text">
-                {/* Honest rather than a button that cannot work: the CLI's
-                    remove command is an arrow-key menu with no non-interactive
-                    flag (measured — piping and a pseudo-terminal both fail),
-                    so driving it from here would mean scraping a TUI. */}
+                {/* Honest rather than buttons that cannot work. Removing: the
+                    CLI's remove command is an arrow-key menu with no
+                    non-interactive flag (measured — piping and a pseudo-terminal
+                    both fail), so driving it would mean scraping a TUI.
+                    Repairing: `composio link` only creates, and demands a fresh
+                    alias once an account exists, so a "Reconnect" button added a
+                    row instead of fixing one. */}
                 <span className="modal-row-blurb">
-                  Removing an account is done on Composio's dashboard.
+                  Removing an account, or repairing an expired one, is done on Composio's dashboard.
                 </span>
               </span>
               <button

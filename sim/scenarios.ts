@@ -313,7 +313,7 @@ export const scenarios: Scenario[] = [
   },
   {
     // The mirror of restraint: web tools are gated behind the router's
-    // needs_web verdict, so this proves the gate opens — a misrouted `false`
+    // No verdict gates the catalog now, so this proves the tools are reachable
     // here would silently amputate search from every Blob.
     name: "web: an explicit search request still reaches the web",
     start: { ...newBlob("Ken"), title: "Assistant", description: "Helps Ken." },

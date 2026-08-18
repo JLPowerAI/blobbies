@@ -30,19 +30,7 @@ export type Intent = (
   | { action: "save_fact"; fact: string }
   | { action: "delete_fact"; memoryNumber: number }
   | { action: "change_job" }
-) & {
-  /**
-   * Whether answering needs the public internet. Decides if the chat loop
-   * gets the web tools at all: offered unconditionally, qwen3.5:2b googled
-   * "Ken Kai training schedule" instead of reading its own memory in 4/8
-   * runs — sampling tweaks moved that between 38% and 63%, never to 100%.
-   * The same model answering a required boolean under a grammar is the
-   * mechanism this file exists for. True on any router failure: wrongly
-   * offered tools are the old behaviour, wrongly withheld ones are a
-   * capability silently gone.
-   */
-  needsWeb: boolean;
-};
+) & {};
 
 /**
  * Hard ceiling on the router call. It runs before every reply, so a stalled
@@ -89,12 +77,11 @@ const INTENT_SCHEMA = {
   // every run (the mapping then had to discard the delete), with it required
   // the same model filled it correctly 3/3. Fields that don't apply to the
   // chosen action are emitted anyway and ignored (0 / '' by convention).
-  required: ["action", "needs_web", "memory_number", "fact"],
+  required: ["action", "memory_number", "fact"],
   properties: {
     action: { type: "string", enum: ["none", "save_fact", "delete_fact", "change_job"] },
     fact: { type: "string" },
     memory_number: { type: "integer" },
-    needs_web: { type: "boolean" },
   },
   // Required by OpenAI strict structured outputs (Tinfoil); Ollama ignores it.
   additionalProperties: false,
@@ -121,31 +108,25 @@ const ROUTER_PROMPT =
   "YOU do changes. If the change is about the USER's own life or about a fact " +
   "you saved, it is save_fact, never change_job.\n" +
   "none -> questions, greetings, thanks, or a request to do a task.\n\n" +
-  "Separately, set `needs_web`: true when answering could use PUBLIC " +
-  "information — news, weather, prices, documentation, books, people, facts " +
-  "about the world — or the user asks to search or read a page. false when " +
-  "the answer is about the user or the conversation itself: their own " +
-  "schedule, preferences, memories, or what was said earlier. The web does " +
-  "not know the user.\n\n" +
   "Examples:\n" +
-  "'Remember I train Mondays' -> save_fact, fact='the user trains on Mondays', needs_web=false\n" +
-  "'I moved training to Tuesdays' -> save_fact, fact='the user trains on Tuesdays', needs_web=false\n" +
+  "'Remember I train Mondays' -> save_fact, fact='the user trains on Mondays'\n" +
+  "'I moved training to Tuesdays' -> save_fact, fact='the user trains on Tuesdays'\n" +
   "'Actually I train Fridays now. Update what you remember.' -> save_fact, " +
-  "fact='the user trains on Fridays', needs_web=false\n" +
-  "'My sister is called Mia' -> save_fact, fact=\"the user's sister is called Mia\", needs_web=false\n" +
+  "fact='the user trains on Fridays'\n" +
+  "'My sister is called Mia' -> save_fact, fact=\"the user's sister is called Mia\"\n" +
   "'Rough week, Mia and I broke up' (saved: [1] the user's girlfriend is " +
-  "called Mia) -> save_fact, fact='the user and Mia broke up', needs_web=false\n" +
+  "called Mia) -> save_fact, fact='the user and Mia broke up'\n" +
   "'Delete what you saved about my address' (saved: [2] the user's address...) " +
-  "-> delete_fact, memory_number=2, needs_web=false\n" +
-  "'Be my writing coach instead' -> change_job, needs_web=false\n" +
-  "'What day do I train?' -> none, needs_web=false\n" +
-  "'What's the weather in Lisbon tomorrow?' -> none, needs_web=true\n" +
-  "'Who wrote that book?' -> none, needs_web=true\n" +
-  "'Search for the latest Node.js release notes' -> none, needs_web=true\n" +
+  "-> delete_fact, memory_number=2\n" +
+  "'Be my writing coach instead' -> change_job\n" +
+  "'What day do I train?' -> none\n" +
+  "'What's the weather in Lisbon tomorrow?' -> none\n" +
+  "'Who wrote that book?' -> none\n" +
+  "'Search for the latest Node.js release notes' -> none\n" +
   "'I moved to Lisbon — what's the weather there?' -> save_fact, " +
-  "fact='the user lives in Lisbon', needs_web=true\n" +
-  "'Can you help me plan the week?' -> none, needs_web=false\n" +
-  "'thanks' -> none, needs_web=false\n\n" +
+  "fact='the user lives in Lisbon'\n" +
+  "'Can you help me plan the week?' -> none\n" +
+  "'thanks' -> none\n\n" +
   "A message ending in '?' is almost always none.";
 
 /**
@@ -541,7 +522,7 @@ export async function routeIntent(options: {
 }): Promise<Intent> {
   const text = lastUserText(options.messages);
   if (text.trim() === "") {
-    return { action: "none", needsWeb: true };
+    return { action: "none" };
   }
   // Chain the caller's abort with our own deadline, so cancelling the turn
   // cancels the router too and neither can outlive the other.
@@ -555,21 +536,25 @@ export async function routeIntent(options: {
       options.signal.addEventListener("abort", onParentAbort, { once: true });
     }
   }
+  // The per-message hint rides on the USER turn, never the system one. Ollama's
+  // prefix cache is exact-match from token zero, so a system prompt that gains
+  // and loses a sentence depending on the words in the message re-prefills the
+  // whole router prompt on every flip — and flips back on the next message.
+  // Kept here, the system half changes only when a memory is written.
+  const hint = MEMORY_WORDS.test(text)
+    ? "\n\n(This message mentions your memory, so it is about a saved fact: " +
+      "choose save_fact or delete_fact, never change_job.)"
+    : "";
   const routerMessages = [
     {
       role: "system",
       // The memory list is numbered exactly as the Blob sees it, so
       // `memory_number` lines up with what the user is referring to.
-      content:
-        `${ROUTER_PROMPT}\n\nYour saved memories:${
-          renderMemories(options.memories) || "\n(none)"
-        }` +
-        (MEMORY_WORDS.test(text)
-          ? "\n\nThis message mentions your memory, so it is about a saved " +
-            "fact: choose save_fact or delete_fact, never change_job."
-          : ""),
+      content: `${ROUTER_PROMPT}\n\nYour saved memories:${
+        renderMemories(options.memories) || "\n(none)"
+      }`,
     },
-    { role: "user", content: text },
+    { role: "user", content: `${text}${hint}` },
   ];
   try {
     let content: string;
@@ -584,7 +569,7 @@ export async function routeIntent(options: {
         signal: deadline.signal,
       });
       if (result === null) {
-        return { action: "none", needsWeb: true };
+        return { action: "none" };
       }
       content = result;
     } else {
@@ -603,42 +588,39 @@ export async function routeIntent(options: {
         }),
       });
       if (!response.ok) {
-        return { action: "none", needsWeb: true };
+        return { action: "none" };
       }
       const payload = (await response.json()) as { message?: { content?: string } };
       content = payload.message?.content ?? "{}";
     }
     const parsed: unknown = JSON.parse(content);
     if (parsed === null || typeof parsed !== "object") {
-      return { action: "none", needsWeb: true };
+      return { action: "none" };
     }
     const record = parsed as Record<string, unknown>;
     // Fail open: anything but an explicit false keeps the web tools.
-    const needsWeb = record.needs_web !== false;
     switch (record.action) {
       case "save_fact": {
         const fact = typeof record.fact === "string" ? record.fact.trim() : "";
-        return fact === "" ? { action: "none", needsWeb } : { action: "save_fact", fact, needsWeb };
+        return fact === "" ? { action: "none" } : { action: "save_fact", fact };
       }
       case "delete_fact": {
         const number = record.memory_number;
         return typeof number === "number" && Number.isInteger(number) && number >= 1
-          ? { action: "delete_fact", memoryNumber: number, needsWeb }
-          : { action: "none", needsWeb };
+          ? { action: "delete_fact", memoryNumber: number }
+          : { action: "none" };
       }
       case "change_job":
         // Belt and braces: a memory-flavoured message is never a job change,
         // whatever the classifier says.
-        return MEMORY_WORDS.test(text)
-          ? { action: "none", needsWeb }
-          : { action: "change_job", needsWeb };
+        return MEMORY_WORDS.test(text) ? { action: "none" } : { action: "change_job" };
       default:
-        return { action: "none", needsWeb };
+        return { action: "none" };
     }
   } catch {
     // Timeout, abort, offline server, malformed JSON: the turn continues with
     // the tools, which is exactly the behaviour before the router existed.
-    return { action: "none", needsWeb: true };
+    return { action: "none" };
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", onParentAbort);

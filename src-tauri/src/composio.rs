@@ -554,6 +554,86 @@ async fn run_cli(args: Vec<String>) -> Result<String> {
     .map_err(|error| Error::Io(error.to_string()))?
 }
 
+/// The address or username behind one connected account.
+///
+/// `connections list` names accounts only by an internal handle
+/// (`gmail_casava-tst`) — unguessable to the person who connected them, and
+/// useless for telling two Gmail accounts apart. The identity lives one call
+/// deeper, so the Plugins panel asks for it per account and falls back to the
+/// handle when a toolkit has no such tool.
+///
+/// Best-effort by design: this runs for every connected account when a panel
+/// opens, so a toolkit that cannot answer, or an expired account that no
+/// longer can, must cost one empty string rather than an error.
+#[tauri::command]
+pub(crate) async fn composio_account_identity(toolkit: String, account: String) -> String {
+    // `GMAIL_GET_PROFILE`-style tools are per-toolkit; only the ones we know
+    // return an identity are worth a call.
+    let tool = match toolkit.as_str() {
+        "gmail" => "GMAIL_GET_PROFILE",
+        _ => return String::new(),
+    };
+    if !is_safe_account(&account) {
+        return String::new();
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(binary) = find_composio_binary() else {
+            return String::new();
+        };
+        let Ok(text) = capture_with_timeout(
+            Command::new(binary).args(["execute", tool, "--account", &account, "-d", "{}"]),
+            PROBE_TIMEOUT,
+        ) else {
+            return String::new();
+        };
+        identity_from(&text)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Pull the human-readable identity out of a profile result.
+///
+/// Split out so the observed JSON shape is pinned by a test rather than by a
+/// live account — the mistake that had `composio_signed_in` reading the wrong
+/// file for a whole session.
+fn identity_from(text: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return String::new();
+    };
+    if value.get("successful").and_then(serde_json::Value::as_bool) != Some(true) {
+        return String::new();
+    }
+    for key in ["emailAddress", "email", "username", "login"] {
+        if let Some(found) = value
+            .get("data")
+            .and_then(|data| data.get(key))
+            .and_then(serde_json::Value::as_str)
+            .filter(|found| !found.trim().is_empty())
+        {
+            return found.chars().take(120).collect();
+        }
+    }
+    String::new()
+}
+
+/// Account handles are `slug_word-word`: lowercase, digits, `_` and `-`.
+///
+/// Checked because it reaches argv from the webview, same as a toolkit slug.
+fn is_safe_account(value: &str) -> bool {
+    // Must *start* alphanumeric: `-` is legal inside a handle
+    // (`gmail_casava-tst`), so allowing it anywhere let `--account` pass the
+    // check and reach argv as a flag. Caught by its own test.
+    value.len() <= 128
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
+        })
+}
+
 /// Whether a webview-supplied string is safe to pass as one argv entry.
 ///
 /// Composio slugs and aliases are lowercase words with digits and underscores.
@@ -892,6 +972,38 @@ mod tests {
         // Anything that fits is returned byte-for-byte: no note, no noise.
         let small = r#"{"messages":[]}"#.to_owned();
         assert_eq!(cap_result(small.clone()), small);
+    }
+
+    #[test]
+    fn an_identity_is_read_from_a_real_profile_result() {
+        // Captured from `composio execute GMAIL_GET_PROFILE`. The panel showed
+        // `gmail_casava-tst` before this — Composio's internal handle, which
+        // tells the person who connected the account nothing.
+        let real = r#"{"successful":true,"data":{"emailAddress":"someone@gmail.com","messagesTotal":8499},"error":null}"#;
+        assert_eq!(identity_from(real), "someone@gmail.com");
+
+        // Best-effort: a failed call, a toolkit with no identity field, and
+        // junk all yield nothing, and the caller keeps showing the handle.
+        assert_eq!(identity_from(r#"{"successful":false,"data":{}}"#), "");
+        assert_eq!(
+            identity_from(r#"{"successful":true,"data":{"threadsTotal":3}}"#),
+            ""
+        );
+        assert_eq!(identity_from("not json"), "");
+        assert_eq!(
+            identity_from(r#"{"successful":true,"data":{"email":"  "}}"#),
+            ""
+        );
+    }
+
+    #[test]
+    fn an_account_handle_cannot_smuggle_a_flag() {
+        // Reaches argv, so it is shaped-checked like every other such value.
+        assert!(is_safe_account("gmail_casava-tst"));
+        assert!(!is_safe_account("--account"));
+        assert!(!is_safe_account("-x"));
+        assert!(!is_safe_account("gmail; ls"));
+        assert!(!is_safe_account(""));
     }
 
     #[test]

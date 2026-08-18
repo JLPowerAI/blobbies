@@ -23,7 +23,7 @@ describe("routeIntent", () => {
       "fetch",
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         body = JSON.parse(String(init?.body));
-        return reply({ action: "save_fact", fact: "the user trains on Mondays", needs_web: false });
+        return reply({ action: "save_fact", fact: "the user trains on Mondays" });
       }),
     );
     try {
@@ -34,7 +34,6 @@ describe("routeIntent", () => {
       expect(intent).toEqual({
         action: "save_fact",
         fact: "the user trains on Mondays",
-        needsWeb: false,
       });
       // A classifier must be reproducible and must not ramble.
       const options = body.options as Record<string, unknown>;
@@ -49,12 +48,7 @@ describe("routeIntent", () => {
       // optional field is exactly what a small model omits (measured —
       // optional memory_number zeroed deletes; see CLAUDE.md).
       const format = body.format as { required?: string[] };
-      expect([...(format.required ?? [])].sort()).toEqual([
-        "action",
-        "fact",
-        "memory_number",
-        "needs_web",
-      ]);
+      expect([...(format.required ?? [])].sort()).toEqual(["action", "fact", "memory_number"]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -72,8 +66,7 @@ describe("routeIntent", () => {
         ...base,
         messages: [{ role: "user", content: "Forget my allergies" }],
       });
-      // needsWeb fails open: a router failure must never remove a capability.
-      expect(intent).toEqual({ action: "none", needsWeb: true });
+      expect(intent).toEqual({ action: "none" });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -97,7 +90,7 @@ describe("routeIntent", () => {
         signal: controller.signal,
       });
       controller.abort();
-      await expect(pending).resolves.toEqual({ action: "none", needsWeb: true });
+      await expect(pending).resolves.toEqual({ action: "none" });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -121,7 +114,7 @@ describe("routeIntent", () => {
         messages: [{ role: "user", content: "hello" }],
       });
       await vi.advanceTimersByTimeAsync(5_000);
-      await expect(pending).resolves.toEqual({ action: "none", needsWeb: true });
+      await expect(pending).resolves.toEqual({ action: "none" });
     } finally {
       vi.unstubAllGlobals();
       vi.useRealTimers();
@@ -131,14 +124,14 @@ describe("routeIntent", () => {
   it("rejects a malformed delete without a usable memory number", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => reply({ action: "delete_fact", needs_web: false })),
+      vi.fn(async () => reply({ action: "delete_fact" })),
     );
     try {
       const intent = await routeIntent({
         ...base,
         messages: [{ role: "user", content: "forget that" }],
       });
-      expect(intent).toEqual({ action: "none", needsWeb: false });
+      expect(intent).toEqual({ action: "none" });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -151,7 +144,6 @@ describe("routeIntent", () => {
       JSON.stringify({
         action: "save_fact",
         fact: "the user trains on Mondays",
-        needs_web: false,
         memory_number: 0,
       }),
     );
@@ -164,7 +156,6 @@ describe("routeIntent", () => {
       expect(intent).toEqual({
         action: "save_fact",
         fact: "the user trains on Mondays",
-        needsWeb: false,
       });
       // User content must not touch the local Ollama endpoint on this path.
       expect(fetchSpy).not.toHaveBeenCalled();
@@ -185,20 +176,20 @@ describe("routeIntent", () => {
       memories: [],
       messages: [{ role: "user", content: "Remember this" }],
     });
-    expect(intent).toEqual({ action: "none", needsWeb: true });
+    expect(intent).toEqual({ action: "none" });
   });
 
   it("never treats a message about memory as a job change", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => reply({ action: "change_job", needs_web: false })),
+      vi.fn(async () => reply({ action: "change_job" })),
     );
     try {
       const intent = await routeIntent({
         ...base,
         messages: [{ role: "user", content: "Update what you remember about my training" }],
       });
-      expect(intent).toEqual({ action: "none", needsWeb: false });
+      expect(intent).toEqual({ action: "none" });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -216,7 +207,7 @@ describe("applyGroupIntent", () => {
     );
     try {
       const next = await applyGroupIntent(
-        { action: "save_fact", fact: "the user lives in Lisbon", needsWeb: false },
+        { action: "save_fact", fact: "the user lives in Lisbon" },
         { model: base.model, memories },
       );
       // One list, returned once — the caller writes it to the shared scope.
@@ -236,7 +227,7 @@ describe("applyGroupIntent", () => {
     vi.stubGlobal("fetch", fetchSpy);
     try {
       const next = await applyGroupIntent(
-        { action: "save_fact", fact: "The user trains on Mondays", needsWeb: false },
+        { action: "save_fact", fact: "The user trains on Mondays" },
         { model: base.model, memories },
       );
       expect(next).toBeNull();
@@ -250,13 +241,13 @@ describe("applyGroupIntent", () => {
   it("deletes by position, and ignores a position that is not there", async () => {
     expect(
       await applyGroupIntent(
-        { action: "delete_fact", memoryNumber: 1, needsWeb: false },
+        { action: "delete_fact", memoryNumber: 1 },
         { model: base.model, memories },
       ),
     ).toEqual([]);
     expect(
       await applyGroupIntent(
-        { action: "delete_fact", memoryNumber: 9, needsWeb: false },
+        { action: "delete_fact", memoryNumber: 9 },
         { model: base.model, memories },
       ),
     ).toBeNull();
@@ -266,10 +257,7 @@ describe("applyGroupIntent", () => {
     // "Be my writing coach instead" has one subject in a 1-to-1 chat and none
     // in a room — rewriting whichever Blob answered would be a silent guess.
     expect(
-      await applyGroupIntent(
-        { action: "change_job", needsWeb: false },
-        { model: base.model, memories },
-      ),
+      await applyGroupIntent({ action: "change_job" }, { model: base.model, memories }),
     ).toBeNull();
   });
 });

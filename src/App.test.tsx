@@ -624,18 +624,24 @@ describe("App", () => {
     await user.click(within(dialog).getByRole("button", { name: /Add Another Account/ }));
     expect(within(dialog).getByLabelText("Name for the new account")).toBeInTheDocument();
 
-    // View Source must not navigate the webview: a navigated webview keeps the
-    // IPC bridge, so remote content could call commands. ExternalLink hands the
-    // URL to the OS browser and cancels the navigation instead. Listening on
-    // document, not the anchor — React attaches its handler at the root, so an
-    // element listener runs first and would always see an uncancelled event.
-    const navigated = new Promise<boolean>((resolve) => {
-      document.addEventListener("click", (event) => resolve(!event.defaultPrevented), {
-        once: true,
-      });
-    });
-    await user.click(within(dialog).getByRole("link", { name: /View Source/ }));
-    expect(await navigated).toBe(false);
+    // No "View Source" here: a link to someone else's repo answers a question
+    // nobody asked while connecting an app. (`ExternalLink`'s navigation-
+    // cancelling behaviour is covered by its own test.)
+    expect(within(dialog).queryByRole("link", { name: /View Source/ })).not.toBeInTheDocument();
+
+    // No per-account "Reconnect" either: `composio link` only creates, and
+    // demands a new alias once an account exists, so the button added a row
+    // instead of repairing one.
+    expect(within(dialog).queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+
+    // Nothing is stated before it is known. The panel used to render "Connect"
+    // and a "Disconnected account" row while the probe was still out, then
+    // correct itself — a label that changes under the user reads as a bug even
+    // when the final state is right. Outside Tauri the probe resolves to
+    // nothing, so the settled state is the empty one.
+    expect(await within(dialog).findByText(/No account connected yet/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Disconnected account/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/gmail_/)).not.toBeInTheDocument();
 
     // Escape steps back to the list before closing.
     await user.keyboard("{Escape}");

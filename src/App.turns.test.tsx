@@ -57,8 +57,8 @@ vi.mock("@/lib/intent", async (importOriginal) => ({
   routeIntent: vi.fn(async (options: { messages: { content: unknown }[] }) => {
     const said = String(options.messages[options.messages.length - 1]?.content ?? "");
     return /remember I live in Lisbon/.test(said)
-      ? { action: "save_fact", fact: "the user lives in Lisbon", needsWeb: false }
-      : { action: "none", needsWeb: false };
+      ? { action: "save_fact", fact: "the user lives in Lisbon" }
+      : { action: "none" };
   }),
 }));
 
