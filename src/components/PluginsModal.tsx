@@ -22,34 +22,33 @@ interface PluginsModalProps {
   onClose: () => void;
 }
 
-/** Brand tile: exported because onboarding's plugin step draws the same one. */
+/**
+ * Brand tile: exported because onboarding's plugin step draws the same one.
+ *
+ * Each app's real logo, committed under `public/logos` by
+ * `scripts/fetch-logos.mjs` — a monogram in a coloured square is not a brand,
+ * and the vendors' own marks are what a user recognises in a list of fifty.
+ *
+ * Drawn with `<img>` rather than inlined markup on purpose: an SVG inlined
+ * into the DOM runs whatever it contains, while one behind `<img>` is inert.
+ * The fetch script rejects active SVGs too, so this is the second of the two.
+ *
+ * The tile stays white in both themes because these marks are drawn for light
+ * backgrounds — GitHub's and Notion's are near-black, and would disappear on
+ * a dark tile.
+ */
 export function PluginTile({ plugin, size = 40 }: { plugin: PluginDef; size?: number }) {
   return (
-    <span
-      className="plugin-tile"
-      style={{
-        width: size,
-        height: size,
-        background: plugin.tile.bg,
-        color: plugin.tile.fg ?? "#ffffff",
-        fontSize: size * 0.38,
-      }}
-      aria-hidden="true"
-    >
-      {plugin.tile.iconPath === undefined ? (
-        plugin.tile.label
-      ) : (
-        <svg
-          width={size * 0.55}
-          height={size * 0.55}
-          viewBox="0 0 24 24"
-          fill="currentColor"
-          focusable="false"
-          aria-hidden="true"
-        >
-          <path d={plugin.tile.iconPath} />
-        </svg>
-      )}
+    <span className="plugin-tile" style={{ width: size, height: size }} aria-hidden="true">
+      <img
+        src={`/logos/${plugin.id}.svg`}
+        alt=""
+        width={Math.round(size * 0.62)}
+        height={Math.round(size * 0.62)}
+        loading="lazy"
+        decoding="async"
+        draggable="false"
+      />
     </span>
   );
 }
@@ -65,6 +64,8 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
    */
   const [accounts, setAccounts] = useState<ComposioAccount[]>([]);
   const [connecting, setConnecting] = useState("");
+  /** Aborts the in-flight wait, so "Waiting…" is never a one-way door. */
+  const cancelRef = useRef<AbortController | null>(null);
   /** Which app is having a second account named, and the name so far. */
   const [addingTo, setAddingTo] = useState("");
   const [alias, setAlias] = useState("");
@@ -128,6 +129,12 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
    * existing catalog maps over without a translation table.
    */
   const connect = async (plugin: PluginDef, accountAlias = "") => {
+    // Abandoning the browser tab is the common case, not the exception.
+    // Without this the row sits on "Waiting…" until the wait expires, with
+    // nothing to press — which reads as a hung app rather than a choice the
+    // user already made.
+    const controller = new AbortController();
+    cancelRef.current = controller;
     setConnecting(plugin.id);
     setConnectError("");
     setFailedId("");
@@ -136,22 +143,63 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
       // merely that this app is connected — which it may already have been.
       const before = accounts;
       await openExternal(await startComposioLink(plugin.id, accountAlias));
-      if (await waitForComposioLink(plugin.id, before)) {
+      if (await waitForComposioLink(plugin.id, before, controller.signal)) {
         // Connecting an app is also a statement of intent, so it joins the
         // user's shortlist rather than making them add it twice.
         onSetInstalled(plugin.id, true);
+        setAddingTo("");
+      } else if (!controller.signal.aborted) {
+        // Ran the full window with nothing to show. Silence here left the row
+        // back on "Connect" as if the click had never happened — but this is
+        // not a failure either: a slow consent still completes in Composio and
+        // appears the next time this panel reads its accounts, so the wording
+        // must not send the user off to redo something that already worked.
+        setConnectError("Still not connected. Finish in the browser, then reopen this panel.");
+        setFailedId(plugin.id);
       }
       // A fresh connection is exactly the thing the cache does not know about.
       forgetComposioAccounts();
       setAccounts((await composioAccounts()).filter((account) => account.active));
-      setAddingTo("");
     } catch (error) {
       setConnectError(error instanceof Error ? error.message : String(error));
       setFailedId(plugin.id);
     } finally {
+      cancelRef.current = null;
       setConnecting("");
     }
   };
+
+  /** Ends the wait the user is currently sitting in, if any. */
+  const cancelConnect = () => cancelRef.current?.abort();
+
+  /**
+   * Connect, or the way out of a connect already running.
+   *
+   * The same button cancels while this app is the one waiting. Abandoning the
+   * consent tab is ordinary — wrong account, changed mind — and the previous
+   * behaviour left every control disabled for the whole window with no exit,
+   * which is indistinguishable from a hang.
+   */
+  const renderConnect = (
+    plugin: PluginDef,
+    className: string,
+    onStart: () => void,
+    blocked = false,
+  ) =>
+    connecting === plugin.id ? (
+      <button type="button" className={className} onClick={cancelConnect}>
+        Cancel
+      </button>
+    ) : (
+      <button
+        type="button"
+        className={className}
+        disabled={blocked || connecting !== ""}
+        onClick={onStart}
+      >
+        Connect
+      </button>
+    );
   const dialogRef = useRef<HTMLDivElement>(null);
   const { closing, requestClose, finishClose } = useExitAnimation(onClose);
 
@@ -239,14 +287,7 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
         {!loaded ? null : isConnected(plugin.id) ? (
           <span className="plugin-added">Connected</span>
         ) : (
-          <button
-            type="button"
-            className="modal-button plugin-add"
-            disabled={connecting !== ""}
-            onClick={() => void connect(plugin)}
-          >
-            {connecting === plugin.id ? "Waiting\u2026" : "Connect"}
-          </button>
+          renderConnect(plugin, "modal-button plugin-add", () => void connect(plugin))
         )}
       </div>
     );
@@ -444,14 +485,7 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
             {!loaded ? null : isConnected(plugin.id) ? (
               <span className="plugin-added">Connected</span>
             ) : (
-              <button
-                type="button"
-                className="modal-button plugin-add"
-                disabled={connecting !== ""}
-                onClick={() => void connect(plugin)}
-              >
-                {connecting === plugin.id ? "Waiting\u2026" : "Connect"}
-              </button>
+              renderConnect(plugin, "modal-button plugin-add", () => void connect(plugin))
             )}
             {connectError !== "" && failedId === plugin.id ? (
               <span className="plugin-desc">{connectError}</span>
@@ -513,14 +547,12 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
                     }
                   }}
                 />
-                <button
-                  type="button"
-                  className="modal-button"
-                  disabled={alias.trim() === "" || connecting !== ""}
-                  onClick={() => void connect(plugin, alias.trim())}
-                >
-                  {connecting === plugin.id ? "Waiting\u2026" : "Connect"}
-                </button>
+                {renderConnect(
+                  plugin,
+                  "modal-button",
+                  () => void connect(plugin, alias.trim()),
+                  alias.trim() === "",
+                )}
               </div>
             ) : (
               <button

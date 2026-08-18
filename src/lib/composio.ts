@@ -99,8 +99,19 @@ export function startComposioLogin(): Promise<string> {
   return invoke<string>("composio_login_start");
 }
 
-/** How long to wait for an OAuth consent screen before giving up on it. */
-const LINK_TIMEOUT_MS = 5 * 60_000;
+/**
+ * How long to wait for an OAuth consent screen before giving up on it.
+ *
+ * Ninety seconds, not five minutes: most of the old window was spent holding a
+ * row hostage after the user had already walked away, and Cancel is on screen
+ * for the whole wait anyway.
+ *
+ * This does cap a slow consent — an SSO or 2FA detour can outrun it. That is
+ * survivable because giving up only stops the watching: the connection still
+ * completes on Composio's side and shows up next time the panel reads its
+ * accounts. Callers must say that rather than calling it a failure.
+ */
+const LINK_TIMEOUT_MS = 90_000;
 
 /** Gap between checks. Each one spawns a process, so it is not a tight loop. */
 const LINK_POLL_MS = 2_000;
@@ -289,11 +300,18 @@ export function startComposioLink(toolkit: string, alias = ""): Promise<string> 
  * same lesson as the login bug: trust the disk, not a command's own answer.
  *
  * Resolves false when the user abandons the tab. Callers must keep a way out
- * on screen for the whole window.
+ * on screen for the whole window — a spinner with no exit is indistinguishable
+ * from a hang, so `signal` lets the user end it themselves and the loop checks
+ * it between passes as well as during the sleep.
+ *
+ * False means "not seen yet", not "failed": consent granted after the deadline
+ * still lands on Composio's side, and the next `connections list` picks it up.
+ * Callers must not word the timeout as a failure.
  */
 export async function waitForComposioLink(
   toolkit: string,
   before: ComposioAccount[],
+  signal?: AbortSignal,
 ): Promise<boolean> {
   // Compare against the accounts that were already usable, not just "is this
   // app connected": adding a second Gmail to an account that already has one
@@ -302,14 +320,29 @@ export async function waitForComposioLink(
   const known = new Set(before.filter((account) => account.active).map((account) => account.id));
   const deadline = Date.now() + LINK_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    if (signal?.aborted === true) {
+      return false;
+    }
     // Each pass must ask the CLI again: polling a cached answer would wait out
-    // the whole five minutes on a snapshot taken before the browser opened.
+    // the whole window on a snapshot taken before the browser opened.
     forgetComposioAccounts();
     const now = await composioAccounts();
     if (now.some((a) => a.toolkit === toolkit && a.active && !known.has(a.id))) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, LINK_POLL_MS));
+    // Sleeping through an abort would leave the button dead for up to another
+    // poll interval, so the wait ends the moment the signal fires. The
+    // listener is removed on every exit — `once` only fires it once, it does
+    // not detach the ones that never fire, and this loop runs ~45 times.
+    await new Promise<void>((resolve) => {
+      const stop = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", stop);
+        resolve();
+      };
+      const timer = setTimeout(stop, LINK_POLL_MS);
+      signal?.addEventListener("abort", stop);
+    });
   }
   return false;
 }

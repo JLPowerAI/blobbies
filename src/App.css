@@ -2245,7 +2245,16 @@ a.modal-button {
   justify-content: center;
   flex-shrink: 0;
   border-radius: 10px;
-  font-weight: 700;
+  /* White in both themes: these are vendor marks drawn for light backgrounds,
+     and the near-black ones (GitHub, Notion) vanish on a dark tile. */
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 10%);
+}
+
+.plugin-tile img {
+  /* A non-square logo must letterbox rather than stretch or push the tile. */
+  object-fit: contain;
+  user-select: none;
 }
 
 .plugin-text {

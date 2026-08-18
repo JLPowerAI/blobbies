@@ -1,158 +1,378 @@
-import { siGmail, siGooglecalendar, siGoogledrive, siHubspot, siIntercom, siX } from "simple-icons";
-
 /**
- * App-focused plugin catalog mirroring cursor/plugins (developer-tool plugins
- * intentionally excluded). Descriptions name what the app does, not how it
- * is reached: connections run through Composio, so a vendor's own MCP server
- * is not what a user (or a model reading this) is connecting to. Icons come from
- * simple-icons where the brand exists there; the rest keep branded monograms
- * (several brands were removed from simple-icons for trademark reasons).
+ * The app catalog, keyed by Composio toolkit slug.
+ *
+ * Two rules decide what may appear here, and both are load-bearing:
+ *
+ * 1. **`id` is the Composio slug, verbatim.** It is passed to `composio link`
+ *    as argv, and the Rust side refuses anything outside `[a-z0-9_]`. The
+ *    hyphenated ids this catalog used to carry (`google-calendar`,
+ *    `google-drive`, `apollo-io`) are not slugs, so every one of those tiles
+ *    answered "That is not a valid app name." The real ones are
+ *    `googlecalendar`, `googledrive` and `apollo`.
+ *
+ * 2. **Composio must be able to finish the connect on its own.** Measured
+ *    against the CLI: a toolkit whose only auth scheme is OAuth that Composio
+ *    does *not* manage (Docusign, Twitter/X) answers `link` with a *dashboard*
+ *    URL — the user would have to register their own OAuth app first — so the
+ *    Connect button is dead on arrival. Toolkits Composio manages, and
+ *    key-based ones it collects on its own hosted page (Apollo, Ashby), both
+ *    return a real connect link. Only those belong here.
+ *
+ * Icons are each vendor's own logo, fetched from Composio and committed under
+ * `public/logos/<id>.svg` by `scripts/fetch-logos.mjs`.
+ *
+ * `plugins.test.ts` holds rule 1 automatically. Rule 2 cannot be checked
+ * offline — it was established per app against the CLI, and adding an app
+ * means checking that `composio link <slug> --no-wait --no-browser` answers
+ * with a connect.composio.dev URL rather than a dashboard.com one.
  */
 
 export interface PluginDef {
+  /** Composio toolkit slug. Doubles as the icon filename and the link target. */
   id: string;
   name: string;
   description: string;
-  category: "Featured" | "Integrations";
-  /** Tile: brand background plus either an official SVG glyph or a monogram. */
-  tile: { bg: string; label: string; fg?: string; iconPath?: string };
-  /** Source directory in the cursor/plugins repo. */
-  sourceUrl: string;
+  category: (typeof PLUGIN_CATEGORIES)[number];
 }
 
 /**
- * Where each plugin's source lives upstream.
- *
- * `third_party/` is part of the path, not decoration: without it every "View
- * Source" link 404s — measured against the whole catalog.
+ * Section order in the marketplace. Featured is the shortlist most people
+ * reach for; the rest are grouped by the job rather than by vendor, because
+ * someone looking for a place to put a file does not think "Microsoft".
  */
-const REPO = "https://github.com/cursor/plugins/tree/main/third_party";
+export const PLUGIN_CATEGORIES = [
+  "Featured",
+  "Email & calendar",
+  "Files & docs",
+  "Messaging",
+  "Project management",
+  "CRM & support",
+  "Developer",
+  "Finance",
+  "Marketing",
+  "Design & social",
+] as const;
 
 export const plugins: PluginDef[] = [
   {
     id: "gmail",
     name: "Gmail",
-    description: "Connect to Gmail — search, read, draft, label, and manage email.",
+    description: "Triage the inbox, draft replies, search history, and manage labels.",
     category: "Featured",
-    tile: { bg: "#ea4335", label: "M", iconPath: siGmail.path },
-    sourceUrl: `${REPO}/gmail`,
   },
   {
-    id: "google-calendar",
+    id: "slack",
+    name: "Slack",
+    description: "Search conversations, post to channels, and catch up on threads and DMs.",
+    category: "Featured",
+  },
+  {
+    id: "googlecalendar",
     name: "Google Calendar",
-    description:
-      "Connect to Google Calendar — list calendars, search events, and create or update meetings.",
+    description: "See what is on, schedule meetings, and find a slot that actually works.",
     category: "Featured",
-    tile: { bg: "#4285f4", label: "31", iconPath: siGooglecalendar.path },
-    sourceUrl: `${REPO}/google-calendar`,
   },
   {
-    id: "google-drive",
+    id: "notion",
+    name: "Notion",
+    description: "Search pages and databases, pull context, and write notes back.",
+    category: "Featured",
+  },
+  {
+    id: "github",
+    name: "GitHub",
+    description: "Search code, review pull requests, and triage issues across repositories.",
+    category: "Featured",
+  },
+  {
+    id: "googledrive",
     name: "Google Drive",
-    description: "Connect to Google Drive — search, read, create, share, and manage files.",
+    description: "Find files, read their contents, and share or organise what matters.",
     category: "Featured",
-    tile: { bg: "#34a853", label: "D", iconPath: siGoogledrive.path },
-    sourceUrl: `${REPO}/google-drive`,
   },
   {
-    id: "salesforce",
-    name: "Salesforce",
-    description:
-      "Connect to Salesforce — query, search, create, update, and traverse records in your org.",
-    category: "Integrations",
-    tile: { bg: "#00a1e0", label: "SF" },
-    sourceUrl: `${REPO}/salesforce`,
+    id: "linear",
+    name: "Linear",
+    description: "Track issues and cycles, file bugs, and move work forward.",
+    category: "Featured",
   },
   {
     id: "hubspot",
     name: "HubSpot",
-    description:
-      "Connect to HubSpot CRM — search and update contacts, companies, deals, and tickets; work with activities, conversations, and marketing emails.",
-    category: "Integrations",
-    tile: { bg: "#ff7a59", label: "H", iconPath: siHubspot.path },
-    sourceUrl: `${REPO}/hubspot`,
+    description: "Look up contacts and deals, log activity, and keep the pipeline current.",
+    category: "Featured",
+  },
+
+  {
+    id: "outlook",
+    name: "Outlook",
+    description: "Search and send mail, and manage the calendar behind it.",
+    category: "Email & calendar",
   },
   {
-    id: "gong",
-    name: "Gong",
-    description:
-      "Connect to Gong — revenue intelligence: account summaries, deal insights, and call briefs.",
-    category: "Integrations",
-    tile: { bg: "#8039df", label: "G" },
-    sourceUrl: `${REPO}/gong`,
+    id: "googlemeet",
+    name: "Google Meet",
+    description: "Set up meetings and pull the recordings and transcripts afterwards.",
+    category: "Email & calendar",
   },
   {
-    id: "apollo-io",
-    name: "Apollo.io",
-    description:
-      "Connect to Apollo.io — prospect search, contact and company enrichment, lists, sequences, and one-off emails.",
-    category: "Integrations",
-    tile: { bg: "#f5a623", label: "A" },
-    sourceUrl: `${REPO}/apollo-io`,
+    id: "zoom",
+    name: "Zoom",
+    description: "Schedule calls, list participants, and fetch recordings and summaries.",
+    category: "Email & calendar",
   },
   {
-    id: "ashby",
-    name: "Ashby",
-    description:
-      "Connect to Ashby — search candidates and jobs, prep for interviews, manage pipeline tasks, and take recruiting actions.",
-    category: "Integrations",
-    tile: { bg: "#4a3aff", label: "A" },
-    sourceUrl: `${REPO}/ashby`,
+    id: "calendly",
+    name: "Calendly",
+    description: "Share booking links, see what is scheduled, and manage invitees.",
+    category: "Email & calendar",
+  },
+
+  {
+    id: "googledocs",
+    name: "Google Docs",
+    description: "Draft documents, read them back, and edit them in place.",
+    category: "Files & docs",
+  },
+  {
+    id: "googlesheets",
+    name: "Google Sheets",
+    description: "Read ranges, append rows, and keep spreadsheets up to date.",
+    category: "Files & docs",
+  },
+  {
+    id: "excel",
+    name: "Excel",
+    description: "Read and write worksheets, tables, and ranges in the cloud.",
+    category: "Files & docs",
+  },
+  {
+    id: "one_drive",
+    name: "OneDrive",
+    description: "Find files, upload new ones, and share folders.",
+    category: "Files & docs",
+  },
+  {
+    id: "dropbox",
+    name: "Dropbox",
+    description: "Search files, organise folders, and create sharing links.",
+    category: "Files & docs",
+  },
+  {
+    id: "box",
+    name: "Box",
+    description: "Search and manage files, folders, comments, and shared links.",
+    category: "Files & docs",
+  },
+
+  {
+    id: "discord",
+    name: "Discord",
+    description: "Read and send messages across servers and channels.",
+    category: "Messaging",
+  },
+  {
+    id: "microsoft_teams",
+    name: "Microsoft Teams",
+    description: "Post to channels and chats, and catch up on conversations.",
+    category: "Messaging",
+  },
+  {
+    id: "whatsapp",
+    name: "WhatsApp",
+    description: "Send business messages, manage templates, and read the replies.",
+    category: "Messaging",
+  },
+
+  {
+    id: "jira",
+    name: "Jira",
+    description: "Search issues, move them through workflows, and run sprints.",
+    category: "Project management",
+  },
+  {
+    id: "confluence",
+    name: "Confluence",
+    description: "Search spaces, read pages, and publish or update documentation.",
+    category: "Project management",
+  },
+  {
+    id: "asana",
+    name: "Asana",
+    description: "Find tasks and projects, assign work, and track what is due.",
+    category: "Project management",
+  },
+  {
+    id: "trello",
+    name: "Trello",
+    description: "Manage boards, lists, and cards, and move work across them.",
+    category: "Project management",
+  },
+  {
+    id: "clickup",
+    name: "ClickUp",
+    description: "Search tasks, update statuses, and manage lists and docs.",
+    category: "Project management",
+  },
+  {
+    id: "monday",
+    name: "Monday",
+    description: "Query boards, create items, and update columns.",
+    category: "Project management",
+  },
+  {
+    id: "todoist",
+    name: "Todoist",
+    description: "Capture tasks, organise projects, and close out what is due.",
+    category: "Project management",
+  },
+  {
+    id: "airtable",
+    name: "Airtable",
+    description: "Query bases, filter records, and create or update rows.",
+    category: "Project management",
+  },
+
+  {
+    id: "salesforce",
+    name: "Salesforce",
+    description: "Query and update records, and traverse relationships across your org.",
+    category: "CRM & support",
+  },
+  {
+    id: "zendesk",
+    name: "Zendesk",
+    description: "Search tickets, reply to customers, and manage users.",
+    category: "CRM & support",
   },
   {
     id: "intercom",
     name: "Intercom",
-    description:
-      "Connect to Intercom — search conversations and contacts, look up companies, and manage Help Center articles.",
-    category: "Integrations",
-    tile: { bg: "#286efa", label: "I", iconPath: siIntercom.path },
-    sourceUrl: `${REPO}/intercom`,
+    description: "Search conversations and contacts, and manage Help Center articles.",
+    category: "CRM & support",
   },
   {
-    id: "circleback",
-    name: "Circleback",
-    description:
-      "Connect to Circleback — search meetings, transcripts, action items, calendar events, and emails, and look up people and companies.",
-    category: "Integrations",
-    tile: { bg: "#0f172a", label: "C" },
-    sourceUrl: `${REPO}/circleback`,
+    id: "attio",
+    name: "Attio",
+    description: "Search records and lists, and keep CRM data current.",
+    category: "CRM & support",
   },
   {
-    id: "docusign",
-    name: "Docusign",
-    description:
-      "Connect to Docusign — work with eSignature envelopes and templates, Maestro workflows, and Navigator agreements.",
-    category: "Integrations",
-    tile: { bg: "#4c00ff", label: "D" },
-    sourceUrl: `${REPO}/docusign`,
+    id: "apollo",
+    name: "Apollo",
+    description: "Prospect search, contact and company enrichment, lists, and sequences.",
+    category: "CRM & support",
   },
   {
-    id: "x",
-    name: "X",
-    description:
-      "Read-only access to the X API — search posts and users, read timelines and mentions, and pull trends and news.",
-    category: "Integrations",
-    tile: { bg: "#111111", label: "X", iconPath: siX.path },
-    sourceUrl: `${REPO}/x`,
+    id: "gong",
+    name: "Gong",
+    description: "Account summaries, deal insights, and briefs from recorded calls.",
+    category: "CRM & support",
   },
   {
-    id: "navan",
-    name: "Navan",
-    description:
-      "Connect to Navan — query expenses, analyze travel bookings, check policies and approvals, and manage cards.",
-    category: "Integrations",
-    tile: { bg: "#ff3b30", label: "N" },
-    sourceUrl: `${REPO}/navan`,
+    id: "ashby",
+    name: "Ashby",
+    description: "Search candidates and jobs, prep interviews, and manage the pipeline.",
+    category: "CRM & support",
+  },
+
+  {
+    id: "gitlab",
+    name: "GitLab",
+    description: "Search projects, review merge requests, and manage issues.",
+    category: "Developer",
   },
   {
-    id: "profound",
-    name: "Profound",
-    description:
-      "Connect to Profound — retrieve AI visibility, sentiment, and citation reports, access agent analytics, and build or run Profound Agents.",
-    category: "Integrations",
-    tile: { bg: "#6d4aff", label: "P" },
-    sourceUrl: `${REPO}/profound`,
+    id: "bitbucket",
+    name: "Bitbucket",
+    description: "Browse repositories, pull requests, and pipelines.",
+    category: "Developer",
+  },
+  {
+    id: "sentry",
+    name: "Sentry",
+    description: "Search issues, read stack traces, and triage releases.",
+    category: "Developer",
+  },
+  {
+    id: "supabase",
+    name: "Supabase",
+    description: "Inspect projects, run queries, and manage tables and keys.",
+    category: "Developer",
+  },
+
+  {
+    id: "stripe",
+    name: "Stripe",
+    description: "Look up customers, payments, invoices, and subscriptions.",
+    category: "Finance",
+  },
+  {
+    id: "square",
+    name: "Square",
+    description: "Read orders, payments, catalog, and customer records.",
+    category: "Finance",
+  },
+  {
+    id: "quickbooks",
+    name: "QuickBooks",
+    description: "Query invoices, expenses, customers, and reports.",
+    category: "Finance",
+  },
+
+  {
+    id: "mailchimp",
+    name: "Mailchimp",
+    description: "Manage audiences, build campaigns, and read the reports.",
+    category: "Marketing",
+  },
+  {
+    id: "typeform",
+    name: "Typeform",
+    description: "List forms and pull responses as they come in.",
+    category: "Marketing",
+  },
+  {
+    id: "google_analytics",
+    name: "Google Analytics",
+    description: "Run reports on traffic, audiences, and conversions.",
+    category: "Marketing",
+  },
+  {
+    id: "googleads",
+    name: "Google Ads",
+    description: "Review campaigns, budgets, and performance metrics.",
+    category: "Marketing",
+  },
+
+  {
+    id: "figma",
+    name: "Figma",
+    description: "Browse files and frames, read comments, and export assets.",
+    category: "Design & social",
+  },
+  {
+    id: "canva",
+    name: "Canva",
+    description: "Find designs, create from templates, and export artwork.",
+    category: "Design & social",
+  },
+  {
+    id: "miro",
+    name: "Miro",
+    description: "Read and update boards, frames, and sticky notes.",
+    category: "Design & social",
+  },
+  {
+    id: "linkedin",
+    name: "LinkedIn",
+    description: "Publish posts and read profile and company information.",
+    category: "Design & social",
+  },
+  {
+    id: "youtube",
+    name: "YouTube",
+    description: "Search videos, read analytics, and manage playlists.",
+    category: "Design & social",
   },
 ];
-
-export const PLUGIN_CATEGORIES = ["Featured", "Integrations"] as const;
