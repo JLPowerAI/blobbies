@@ -4485,8 +4485,9 @@ a.modal-button {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  /* Shrinks with the window so the carousel still clears the heading above
-     and the buttons below in a 520px-tall window. */
+  /* The registered property cannot inherit, so it is assigned here from the
+     inheriting `--orbit-radius` set on `.onboarding` — which is where the
+     shrink-with-the-window clamp lives. */
   --orbit-r: var(--orbit-radius);
   translate: -50% -50%;
   /* One revolution per 40s: movement you notice only if you watch for it. */
