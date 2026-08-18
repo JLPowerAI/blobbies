@@ -127,6 +127,8 @@ body {
 .plugins-body,
 .search-results,
 .trigger-menu,
+.onboarding,
+.onboarding-plugins,
 .composer-input {
   overscroll-behavior: none;
   scroll-behavior: smooth;
@@ -4372,6 +4374,437 @@ a.modal-button {
   color: var(--text-secondary);
 }
 
+/* ----------------------------------------------------------- onboarding */
+/* First-run flow: covers the whole window, so nothing behind it is reachable
+   until it finishes. One shared 460px rail down the middle; the trio of
+   Blobs is the only thing that moves between steps. */
+.onboarding {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: 64px 24px 40px;
+  background: var(--surface-chat);
+  animation: pane-fade-in 200ms var(--ease-standard);
+  overflow-y: auto;
+}
+
+.onboarding:focus {
+  outline: none;
+}
+
+.onboarding-step {
+  display: flex;
+  width: min(460px, 100%);
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  text-align: center;
+}
+
+.onboarding-step-welcome {
+  gap: 24px;
+}
+
+/* The trio sits behind the copy: on the "one job" step it is the content,
+   everywhere else it shrinks up and out of the way. A fixed 680px rail, not
+   the window width, so the compact percentages below keep the three reading
+   as one cluster rather than drifting apart on a wide display. */
+.onboarding-trio {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 50%;
+  width: min(680px, 100%);
+  translate: -50% 0;
+  pointer-events: none;
+}
+
+/* Orbit radius, registered so it can be *transitioned* while the rotation
+   keyframes are running: that is what lets the three spiral gently into their
+   corner positions instead of snapping there when the step changes. On an
+   engine without @property the var still substitutes, so the orbit runs and
+   only the collapse is instant. */
+@property --orbit-r {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+/* On the "one job" step the three share one anchor and are spread by phase,
+   so they read as one slow carousel; `left`/`top` are only overridden (per
+   Blob, inline) once the step goes compact. */
+.onboarding-trio-blob {
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  --orbit-r: 132px;
+  translate: -50% -50%;
+  /* One revolution per 40s: movement you notice only if you watch for it. */
+  animation: trio-orbit 40s linear infinite;
+  animation-delay: calc(var(--phase) * -13.333s);
+  transition:
+    left var(--duration-panel) var(--ease-squish),
+    top var(--duration-panel) var(--ease-squish),
+    scale var(--duration-panel) var(--ease-squish),
+    --orbit-r var(--duration-panel) var(--ease-standard);
+}
+
+/* The inner counter-rotation is what keeps each face and label upright while
+   the outer one carries it around the circle. */
+@keyframes trio-orbit {
+  from {
+    transform: rotate(0deg) translateX(var(--orbit-r)) rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg) translateX(var(--orbit-r)) rotate(-360deg);
+  }
+}
+
+/* Compact positions and scales are per Blob, set inline; the orbit radius
+   collapses so the rotation keyframes keep running harmlessly at zero. */
+.onboarding-trio[data-compact="true"] .onboarding-trio-blob {
+  --orbit-r: 0px;
+}
+
+.onboarding-trio-label {
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: var(--surface-control);
+  font-size: 16px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.onboarding-trio[data-compact="true"] .onboarding-trio-label {
+  opacity: 0;
+}
+
+/* Step content sits above the trio; the blobs step is the exception, where
+   the copy is pinned to the top and the trio owns the middle. */
+.onboarding-step,
+.onboarding-actions {
+  position: relative;
+  z-index: 1;
+}
+
+.onboarding-step-blobs {
+  margin-bottom: auto;
+}
+
+.onboarding-wordmark {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.onboarding-title {
+  margin: 0;
+  font-size: 52px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.onboarding-heading {
+  margin: 0;
+  font-size: 30px;
+  /* Regular, not semibold: at this size the weight is the difference between
+     a title and a shout, and every screen below it is quiet. */
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.onboarding-lede {
+  margin: 0;
+  max-width: 22em;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.onboarding-blurb {
+  margin: 0;
+  max-width: 30em;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.onboarding-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 14px;
+  color: var(--text-primary);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+/* background-COLOR, matching the transition above: the `background`
+   shorthand also resets background-image, which is not an animatable
+   property, so the browser snapped the fill in on enter and only eased it
+   out. Same reason the other hovers here name the longhand. */
+.onboarding-start:hover {
+  background-color: var(--hover-overlay);
+  border-color: var(--text-secondary);
+}
+
+.onboarding-card {
+  width: 100%;
+  border-radius: 14px;
+  background: var(--surface-modal-card);
+  text-align: start;
+}
+
+.onboarding-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+}
+
+.onboarding-divider {
+  height: 1px;
+  margin-inline-start: 16px;
+  background: var(--border-hairline);
+}
+
+.onboarding-row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.onboarding-row-title {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.onboarding-row-blurb {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.onboarding-allow {
+  flex-shrink: 0;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: var(--surface-modal-control);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.onboarding-allow:hover:not(:disabled) {
+  opacity: 0.82;
+}
+
+/* Save with an empty field: there is no global disabled style, so without
+   this the control looks pressable when it is not. */
+.onboarding-allow:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.onboarding-row-state {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.onboarding-row-state[data-granted="true"] {
+  color: var(--accent-green);
+}
+
+/* Same anatomy as the sidebar and plugins fields: the glyph is absolutely
+   placed and `.search-input` already reserves the inline-start padding for
+   it, so a flex row here would leave it floating outside the control. */
+.onboarding-key {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+  text-align: start;
+}
+
+.onboarding-key-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.onboarding-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.onboarding-key-row .creator-name {
+  flex: 1;
+}
+
+/* Inline, not flex: this is a sentence with a link and a full stop in it,
+   and a flex `gap` would space the punctuation away from the word before it. */
+.onboarding-key-note {
+  display: block;
+  min-height: 18px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.onboarding-key-note > svg {
+  margin-inline-end: 5px;
+  vertical-align: -2px;
+}
+
+.onboarding-key-note[data-state="saved"] {
+  color: var(--accent-green);
+}
+
+.onboarding-key-note[data-state="rejected"] {
+  color: var(--status-err);
+}
+
+.onboarding-key-link {
+  padding: 0;
+  font-size: inherit;
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.onboarding-search {
+  position: relative;
+  width: min(300px, 100%);
+}
+
+.onboarding-search .search-input {
+  height: 36px;
+  border-radius: 999px;
+}
+
+.onboarding-plugins {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  max-height: 42vh;
+  padding: 2px;
+  overflow-y: auto;
+}
+
+.onboarding-plugin {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--surface-control);
+  text-align: start;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.onboarding-plugin:hover {
+  border-color: var(--border-strong);
+  background-color: var(--surface-selected);
+}
+
+.onboarding-plugin[aria-pressed="true"] {
+  border-color: var(--text-primary);
+}
+
+.onboarding-plugin-name {
+  flex: 1;
+  overflow: hidden;
+  font-size: 14px;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.onboarding-plugin-check {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bubble-user);
+  color: var(--text-on-dark);
+}
+
+.onboarding-actions {
+  display: flex;
+  width: min(340px, 100%);
+  flex-direction: column;
+  gap: 14px;
+}
+
+.onboarding-next,
+.onboarding-back {
+  padding: 12px 18px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 500;
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.onboarding-next {
+  background: var(--bubble-user);
+  color: var(--text-on-dark);
+}
+
+.onboarding-next:hover {
+  opacity: 0.88;
+}
+
+.onboarding-back {
+  background: var(--surface-control);
+  color: var(--text-primary);
+}
+
+.onboarding-back:hover {
+  background-color: var(--surface-selected);
+}
+
+.onboarding-skip {
+  padding: 4px;
+  margin-block-start: -4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.onboarding-skip:hover {
+  color: var(--text-primary);
+}
+
 /* ----------------------------------------------- dark-only recolors */
 /* Elements whose light-theme paint is hardcoded rather than tokenized. */
 :root[data-theme="dark"] .footer-avatar {
@@ -4442,6 +4875,14 @@ a.modal-button {
   .agent-group-rows,
   .plugin-open,
   .plugins-show-more,
+  .onboarding-trio-blob,
+  .onboarding-trio-label,
+  .onboarding-start,
+  .onboarding-allow,
+  .onboarding-plugin,
+  .onboarding-next,
+  .onboarding-back,
+  .onboarding-skip,
   .connectors-chevron,
   .slide-panel,
   .slide-panel > * {
@@ -4468,6 +4909,7 @@ a.modal-button {
   .reaction-picker,
   .composer-reply,
   .composer-reply-closing,
+  .onboarding,
   .blob-face,
   .blob-shine,
   .blob-avatar-thinking,
@@ -4475,8 +4917,17 @@ a.modal-button {
   .message-fresh,
   .pin-tray-empty,
   .pin-tile,
-  .drag-tile {
+  .drag-tile,
+  /* The orbit is ambient motion with nothing to convey: with motion reduced
+     the three simply hold their spread positions. */
+  .onboarding-trio-blob {
     animation: none;
+  }
+
+  /* ...which the keyframes were providing, so place them statically. */
+  .onboarding-trio-blob {
+    transform: rotate(calc(var(--phase) * 120deg)) translateX(var(--orbit-r))
+      rotate(calc(var(--phase) * -120deg));
   }
 
   /* The squish is the whole point of these; with motion reduced they simply
@@ -4508,6 +4959,8 @@ a.modal-button {
   .plugins-body,
   .search-results,
   .trigger-menu,
+  .onboarding,
+  .onboarding-plugins,
   .composer-input {
     scroll-behavior: auto;
   }

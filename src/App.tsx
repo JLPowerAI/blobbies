@@ -4,6 +4,7 @@ import { ChatPane } from "@/components/ChatPane";
 import { ComposePane } from "@/components/ComposePane";
 import { CreatorPane } from "@/components/CreatorPane";
 import { DetailPanel } from "@/components/DetailPanel";
+import { Onboarding } from "@/components/Onboarding";
 import { PluginsModal } from "@/components/PluginsModal";
 import { RoutinePanel } from "@/components/RoutinePanel";
 import { SearchModal } from "@/components/SearchModal";
@@ -336,6 +337,23 @@ export function App() {
   const [reasoning, setReasoning] = useState(
     () => readPreference("pref:reasoning", "off") === "on",
   );
+  // First-run flow. Shown until it is completed once, or for as long as the
+  // dev switch below is on. An install that predates onboarding sees it once.
+  const [forceOnboarding, setForceOnboarding] = useState(
+    () => readPreference("pref:forceOnboarding", "off") === "on",
+  );
+  const [onboarding, setOnboarding] = useState(
+    () =>
+      forceOnboarding ||
+      // Dev escape hatch: `VITE_ONBOARDING=1 pnpm tauri dev` replays the flow
+      // without writing a preference, which is the only way back in once the
+      // flag is set, since the webview owns the storage it lives in. Guarded
+      // by DEV because Vite *inlines* env vars at build time — unguarded, a
+      // stray `VITE_ONBOARDING=1 pnpm build` would ship onboarding-on to
+      // every user, and the constant folds away in release either way.
+      (import.meta.env.DEV && import.meta.env.VITE_ONBOARDING === "1") ||
+      readPreference("pref:onboarded", "false") !== "true",
+  );
 
   /**
    * Everything a turn reads that is not passed into it — mirrored for turns
@@ -587,6 +605,30 @@ export function App() {
     }
     setModel(next);
     writePreference("pref:model", next);
+  };
+
+  /**
+   * Dev switch: keep showing the first-run flow on every launch even though
+   * it has been completed. Turning it on opens the flow right away, so the
+   * change is visible where it was made rather than at the next launch.
+   */
+  const changeForceOnboarding = (on: boolean) => {
+    setForceOnboarding(on);
+    writePreference("pref:forceOnboarding", on ? "on" : "off");
+    if (on) {
+      setSettingsOpen(false);
+    }
+    setOnboarding(on);
+  };
+
+  const finishOnboarding = () => {
+    writePreference("pref:onboarded", "true");
+    setOnboarding(false);
+    // The flow ends *on* the app's own Blob creator rather than carrying a
+    // second copy of it. With an empty roster this is what would render
+    // anyway; on a replay (dev toggle) it is the screen the last step
+    // promised.
+    setMode({ kind: "creator", initialName: "" });
   };
 
   const setPluginInstalled = (id: string, isInstalled: boolean) => {
@@ -2257,7 +2299,16 @@ export function App() {
           onTimezoneChange={changeTimezone}
           model={model}
           onModelChange={changeModel}
+          forceOnboarding={forceOnboarding}
+          onForceOnboardingChange={changeForceOnboarding}
           onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
+      {onboarding ? (
+        <Onboarding
+          installedPlugins={installedPlugins}
+          onSetPluginInstalled={setPluginInstalled}
+          onDone={finishOnboarding}
         />
       ) : null}
     </div>

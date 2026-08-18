@@ -213,17 +213,76 @@ fn list_blob_ids(data_root: &Path) -> Vec<String> {
     ids
 }
 
+/// Everything the user owns lives here: rosters, chats, per-Blob home
+/// folders. A visible dotfolder in `$HOME` rather than
+/// `~/Library/Application Support/<bundle id>/` so the answer to "where is my
+/// data" is one path the user can type, back up, sync or delete without
+/// knowing the bundle identifier — and so it survives a rename of the app.
+///
+/// Pure: every store read and write resolves through here, so it stays a
+/// path lookup with no filesystem side effects. The one-time migration below
+/// runs from `startup_maintenance` instead.
 pub(crate) fn data_root(app: &tauri::AppHandle) -> Result<PathBuf> {
     use tauri::Manager;
     app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("data"))
+        .home_dir()
+        .map(|dir| dir.join(".blobbies"))
         .map_err(|error| Error::Io(error.to_string()))
 }
 
-/// Purge expired trash on startup. Call once from `run()`.
+/// Bring a pre-`~/.blobbies` install across, once, at startup.
+///
+/// Copy, never move: the legacy tree is left untouched on disk, so a failure
+/// halfway (full disk, permissions) costs the user nothing and the old data
+/// is still there to retry from. An already-present root is what makes this
+/// once — without that check a user who deleted something would find it
+/// restored on the next launch.
+fn migrate_legacy_root(app: &tauri::AppHandle, root: &Path) {
+    use tauri::Manager;
+    if root.exists() {
+        return;
+    }
+    let Ok(legacy) = app.path().app_data_dir().map(|dir| dir.join("data")) else {
+        return;
+    };
+    if !legacy.is_dir() {
+        return;
+    }
+    // Into a staging path first, renamed into place at the end: an interrupted
+    // copy must not leave a half-populated `~/.blobbies` that the check above
+    // would then treat as a finished migration.
+    let staging = root.with_extension("migrating");
+    let _ = fs::remove_dir_all(&staging);
+    if copy_dir(&legacy, &staging).is_ok() {
+        let _ = fs::rename(&staging, root);
+    } else {
+        let _ = fs::remove_dir_all(&staging);
+    }
+}
+
+/// Recursive directory copy; files only, no symlink following.
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        // `file_type` does not follow symlinks, so a link inside the legacy
+        // tree is skipped rather than copied through to somewhere else.
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Migrate a legacy data root, then purge expired trash. Once, from `run()`,
+/// before any command can touch the store.
 pub(crate) fn startup_maintenance(app: &tauri::AppHandle) {
     if let Ok(root) = data_root(app) {
+        migrate_legacy_root(app, &root);
         purge_trash_dir(&root);
     }
 }
@@ -391,6 +450,39 @@ mod tests {
         assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/runs")).is_ok());
         assert!(resolve_slice_path(root, "groups").is_ok());
         assert!(resolve_slice_path(root, &format!("groups/{BLOB_ID}/transcript")).is_ok());
+    }
+
+    #[test]
+    fn copies_the_legacy_tree_without_touching_it() {
+        let base = temp_root("migrate");
+        let legacy = base.join("legacy");
+        fs::create_dir_all(legacy.join("blobs").join(BLOB_ID)).expect("legacy tree");
+        fs::write(legacy.join("roster.json"), b"[]").expect("roster");
+        fs::write(
+            legacy.join("blobs").join(BLOB_ID).join("config.json"),
+            b"{}",
+        )
+        .expect("config");
+
+        let root = base.join("new");
+        let staging = root.with_extension("migrating");
+        copy_dir(&legacy, &staging).expect("copy");
+        fs::rename(&staging, &root).expect("rename into place");
+
+        // Every file arrived...
+        assert_eq!(
+            fs::read(root.join("roster.json")).expect("new roster"),
+            b"[]"
+        );
+        assert!(
+            root.join("blobs")
+                .join(BLOB_ID)
+                .join("config.json")
+                .is_file()
+        );
+        // ...and the old copy is still there to fall back on.
+        assert!(legacy.join("roster.json").is_file());
+        assert!(!staging.exists());
     }
 
     #[test]

@@ -45,6 +45,13 @@ const pendingValues = new Map<string, unknown>();
 /** In-memory fallback when localStorage is unavailable (e.g. jsdom). */
 const memoryBackend = new Map<string, string>();
 
+/**
+ * Every localStorage key this module has written, so the test hook below can
+ * wipe exactly those: `localStorage.clear()` would take the app's own
+ * preferences (`pref:*`) with it, and they share the origin.
+ */
+const writtenKeys = new Set<string>();
+
 function backendGet(key: string): string | null {
   try {
     if (typeof window.localStorage === "object" && window.localStorage !== null) {
@@ -60,6 +67,7 @@ function backendSet(key: string, value: string): void {
   try {
     if (typeof window.localStorage === "object" && window.localStorage !== null) {
       window.localStorage.setItem(key, value);
+      writtenKeys.add(key);
       return;
     }
   } catch {
@@ -80,14 +88,17 @@ function backendRemove(key: string): void {
   memoryBackend.delete(key);
 }
 
-/** Test hook: wipe the fallback backend. */
+/** Test hook: wipe the fallback backend, leaving other keys on the origin. */
 export function clearFallbackBackend(): void {
   memoryBackend.clear();
-  try {
-    window.localStorage.clear();
-  } catch {
-    // no localStorage: memory clear was enough
+  for (const key of writtenKeys) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      // no localStorage: the memory clear above was enough
+    }
   }
+  writtenKeys.clear();
 }
 
 async function rawRead(key: string): Promise<unknown> {

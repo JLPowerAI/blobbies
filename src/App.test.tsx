@@ -1,8 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "@/App";
 import { type Agent, MAX_BLOBS } from "@/data/agents";
+import { getSecret } from "@/lib/secrets";
 import {
   flushRoster,
   loadBlobRoutines,
@@ -274,7 +275,12 @@ describe("App", () => {
   it("starts a group chat from the palette, and drops the old empty section", async () => {
     // A leftover "New section" from the sidebar's removed add button: empty
     // scaffolding, so the migration must not seed a placeholder group with it.
-    const store = new Map<string, string>([["pref:sections", JSON.stringify(["New section"])]]);
+    // Seeded onboarded: this stub replaces the setup file's preference store,
+    // and without the flag the first-run flow covers the app.
+    const store = new Map<string, string>([
+      ["pref:onboarded", "true"],
+      ["pref:sections", JSON.stringify(["New section"])],
+    ]);
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => store.get(key) ?? null,
       setItem: (key: string, value: string) => void store.set(key, value),
@@ -751,7 +757,10 @@ describe("App", () => {
     // Seeded as a pre-group-chat "section" — which also proves the migration
     // into real groups keeps the Blobs that were in it.
     // Preferences live in localStorage, which this jsdom build does not provide.
-    const store = new Map<string, string>([["pref:sections", JSON.stringify(["Work"])]]);
+    const store = new Map<string, string>([
+      ["pref:onboarded", "true"],
+      ["pref:sections", JSON.stringify(["Work"])],
+    ]);
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => store.get(key) ?? null,
       setItem: (key: string, value: string) => void store.set(key, value),
@@ -825,5 +834,152 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Hide details panel" }));
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+  });
+});
+
+describe("onboarding", () => {
+  /** Undo the suite default: this describe is about the un-onboarded app. */
+  function clearOnboarded() {
+    window.localStorage.removeItem("pref:onboarded");
+    window.localStorage.removeItem("pref:forceOnboarding");
+    window.localStorage.removeItem("pref:plugins");
+  }
+
+  it("walks a first run through to the app's own Blob creator", async () => {
+    const user = userEvent.setup();
+    clearOnboarded();
+    render(<App />);
+
+    // Scoped to the flow throughout: the app it covers has a creator pane
+    // carrying some of the same labels.
+    const flow = () => within(screen.getByRole("dialog", { name: "Welcome to Blobbies" }));
+    await user.click(flow().getByRole("button", { name: /Get started/ }));
+
+    // What a Blob is, then permissions: notifications are never requested on
+    // render, only from Allow.
+    expect(flow().getByRole("heading", { name: "Every Blob gets one job" })).toBeInTheDocument();
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    expect(flow().getByRole("heading", { name: "A few things to settle" })).toBeInTheDocument();
+    await user.click(flow().getByRole("button", { name: "Next" }));
+
+    // Tinfoil is optional: Next carries on with the field left empty, and
+    // nothing is written to the keychain.
+    expect(flow().getByLabelText("API key")).toHaveValue("");
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    expect(await getSecret("tinfoil-api-key")).toBeNull();
+
+    // Plugins picked here are the app's installed list, not a separate one.
+    const gmail = flow().getByRole("button", { name: /Gmail/ });
+    expect(gmail).toHaveAttribute("aria-pressed", "false");
+    await user.click(gmail);
+    expect(gmail).toHaveAttribute("aria-pressed", "true");
+
+    // The last step hands over to the real creator rather than carrying a
+    // second copy of it, so the Blob is made by the same code every other
+    // path uses.
+    await user.click(flow().getByRole("button", { name: "Make your first Blob" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const creator = screen.getByRole("region", { name: "New Blob" });
+
+    await user.type(within(creator).getByLabelText("Name"), "Ken");
+    await user.click(within(creator).getByRole("button", { name: "Get started" }));
+    expect(await screen.findByRole("heading", { name: "Ken", level: 1 })).toBeInTheDocument();
+
+    await flushWrites();
+    expect((await loadRoster())?.[0]).toMatchObject({ name: "Ken" });
+    // Completed once is completed for good.
+    expect(window.localStorage.getItem("pref:onboarded")).toBe("true");
+  });
+
+  it("refuses a malformed Tinfoil key instead of storing it", async () => {
+    const user = userEvent.setup();
+    clearOnboarded();
+    render(<App />);
+
+    const flow = () => within(screen.getByRole("dialog", { name: "Welcome to Blobbies" }));
+    await user.click(flow().getByRole("button", { name: /Get started/ }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
+
+    // What a fumbled paste looks like: the env-var name dragged along with
+    // the value. Nothing may reach the keychain.
+    await user.type(flow().getByLabelText("API key"), "TINFOIL_API_KEY=tk_abc");
+    await user.click(flow().getByRole("button", { name: "Save" }));
+    expect(await getSecret("tinfoil-api-key")).toBeNull();
+    expect(flow().getByRole("status")).toHaveTextContent(/does not look like a key/);
+
+    // A clean key is accepted and kept.
+    await user.clear(flow().getByLabelText("API key"));
+    await user.type(flow().getByLabelText("API key"), "tk_abcdefghijklmnop");
+    await user.click(flow().getByRole("button", { name: "Save" }));
+    expect(await getSecret("tinfoil-api-key")).toBe("tk_abcdefghijklmnop");
+  });
+
+  it("steps back to the previous screen", async () => {
+    const user = userEvent.setup();
+    clearOnboarded();
+    render(<App />);
+
+    const flow = () => within(screen.getByRole("dialog", { name: "Welcome to Blobbies" }));
+    await user.click(flow().getByRole("button", { name: /Get started/ }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    expect(flow().getByRole("heading", { name: "A few things to settle" })).toBeInTheDocument();
+
+    await user.click(flow().getByRole("button", { name: "Back" }));
+    expect(flow().getByRole("heading", { name: "Every Blob gets one job" })).toBeInTheDocument();
+  });
+
+  it("opens the creator on a replay, where a roster already exists", async () => {
+    // The dev toggle replays the flow with Blobs already on disk, so its exit
+    // cannot rely on the empty-roster fallback that renders the creator.
+    await flushRoster([seedBlob(1, "Ken")]);
+    const user = userEvent.setup();
+    clearOnboarded();
+    render(<App />);
+
+    const flow = () => within(screen.getByRole("dialog", { name: "Welcome to Blobbies" }));
+    await user.click(flow().getByRole("button", { name: /Get started/ }));
+    for (const _ of [0, 1, 2]) {
+      await user.click(flow().getByRole("button", { name: "Next" }));
+    }
+    await user.click(flow().getByRole("button", { name: "Make your first Blob" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "New Blob" })).toBeInTheDocument();
+  });
+
+  it("replays for VITE_ONBOARDING without writing a preference", () => {
+    // Registered before the stub: a failed assertion below must not leave
+    // the flag set for every test that follows.
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    // The dev flag behind `VITE_ONBOARDING=1 pnpm tauri dev`, which is how
+    // the flow is reopened in the Tauri window (no editable URL there).
+    vi.stubEnv("VITE_ONBOARDING", "1");
+    // The suite default marks the app onboarded; the flag must win.
+    render(<App />);
+
+    expect(screen.getByRole("dialog", { name: "Welcome to Blobbies" })).toBeInTheDocument();
+    // Replaying is not completing: neither preference is touched.
+    expect(window.localStorage.getItem("pref:forceOnboarding")).toBeNull();
+    expect(window.localStorage.getItem("pref:onboarded")).toBe("true");
+  });
+
+  it("is skipped once completed, and replayed by the dev toggle", async () => {
+    const user = userEvent.setup();
+    // The suite default marks the app onboarded.
+    const { unmount } = render(<App />);
+    expect(screen.queryByRole("dialog", { name: "Welcome to Blobbies" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Ken Kai/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+    await user.click(screen.getByRole("switch", { name: "Show onboarding" }));
+
+    // Visible where it was switched on, and again on the next launch.
+    expect(screen.getByRole("dialog", { name: "Welcome to Blobbies" })).toBeInTheDocument();
+    unmount();
+    render(<App />);
+    expect(screen.getByRole("dialog", { name: "Welcome to Blobbies" })).toBeInTheDocument();
   });
 });

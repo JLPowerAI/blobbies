@@ -37,9 +37,15 @@ fn entry_for(name: &str) -> Result<keyring::Entry> {
 /// therefore a different program to the OS: it re-prompts for the device
 /// password and "Always Allow" can never stick.
 ///
-/// Exporting `TINFOIL_API_KEY` before `pnpm tauri:dev` switches secrets to the
-/// environment plus a process-local map, so a debug build never touches the
-/// keychain and never prompts. Unset, dev behaves exactly like release.
+/// So a debug build keeps secrets in a process-local map and never touches
+/// the keychain. **On by default**, because the alternative is a password
+/// prompt on every hot rebuild and no amount of developer discipline avoids
+/// it — an opt-in switch is just a prompt waiting for someone to forget.
+/// `TINFOIL_API_KEY` (see `.env.local`) seeds the map so Tinfoil still works;
+/// unset, dev simply starts without a key, exactly like a fresh install.
+///
+/// Set `BLOBBIES_DEV_KEYCHAIN=1` to exercise the real keychain path in a
+/// debug build — and accept the prompts that come with it.
 ///
 /// While active, saving or removing a key in Settings only edits the map: it
 /// lasts for the session and leaves the real keychain entry untouched.
@@ -48,16 +54,16 @@ mod dev {
     use std::collections::HashMap;
     use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-    /// Opt-in switch: the Tinfoil key the developer exported for this session.
+    /// Optional seed: the Tinfoil key the developer exported for this session.
     fn env_api_key() -> Option<String> {
         std::env::var("TINFOIL_API_KEY")
             .ok()
             .filter(|key| !key.is_empty())
     }
 
-    /// True once the developer opted in; checked before every keychain call.
+    /// True unless the developer explicitly asked for the real keychain.
     pub(super) fn active() -> bool {
-        env_api_key().is_some()
+        !matches!(std::env::var("BLOBBIES_DEV_KEYCHAIN").as_deref(), Ok("1"))
     }
 
     /// Seeded from the environment, then read/write for the life of the
@@ -179,6 +185,14 @@ mod tests {
             assert!(matches!(secret_set(name, "x"), Err(Error::InvalidSliceKey)));
             assert!(matches!(secret_delete(name), Err(Error::InvalidSliceKey)));
         }
+    }
+
+    /// Debug builds must default to the in-memory map: a test that reached the
+    /// real keychain would prompt for a device password and hang CI.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn dev_backend_is_on_by_default() {
+        assert!(dev::active(), "debug builds must not touch the keychain");
     }
 
     /// The dev backend is a plain per-process map: what goes in comes back and

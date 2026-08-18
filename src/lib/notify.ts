@@ -42,6 +42,30 @@ export function shouldNotify(event: {
 }
 
 /**
+ * Ask the OS for notification permission, on the user's say-so.
+ *
+ * The only caller is onboarding's Allow button: a prompt nobody asked for is
+ * the mistake `notify` avoids by requesting lazily, and a click on Allow is
+ * exactly that ask. Never call this on mount.
+ */
+export async function requestNotificationPermission(): Promise<
+  "granted" | "denied" | "unavailable"
+> {
+  if (!isTauri()) {
+    return "unavailable";
+  }
+  try {
+    if (await isPermissionGranted()) {
+      return "granted";
+    }
+    return (await requestPermission()) === "granted" ? "granted" : "denied";
+  } catch {
+    // No notification centre on this machine.
+    return "unavailable";
+  }
+}
+
+/**
  * Show one notification, asking for OS permission the first time.
  *
  * Permission is requested lazily, never at boot: an OS prompt the user did

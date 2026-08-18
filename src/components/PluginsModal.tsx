@@ -21,7 +21,8 @@ interface PluginsModalProps {
   onClose: () => void;
 }
 
-function PluginTile({ plugin, size = 40 }: { plugin: PluginDef; size?: number }) {
+/** Brand tile: exported because onboarding's plugin step draws the same one. */
+export function PluginTile({ plugin, size = 40 }: { plugin: PluginDef; size?: number }) {
   return (
     <span
       className="plugin-tile"

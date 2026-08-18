@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { afterEach, beforeEach } from "vitest";
 import { clearFallbackBackend } from "@/lib/store";
 
 // jsdom implements scrollTop but not Element.scrollTo; map one to the other
@@ -21,6 +21,28 @@ if (typeof Element.prototype.scrollTo !== "function") {
 if (typeof Element.prototype.scrollIntoView !== "function") {
   Element.prototype.scrollIntoView = function scrollIntoView() {};
 }
+
+// This jsdom build ships no localStorage, which every preference reads
+// through (`src/lib/preferences.ts`). A Map-backed stand-in, wiped between
+// tests, makes those reads honest without leaking state across cases.
+const preferences = new Map<string, string>();
+if (globalThis.localStorage === undefined) {
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => preferences.get(key) ?? null,
+      setItem: (key: string, value: string) => void preferences.set(key, value),
+      removeItem: (key: string) => void preferences.delete(key),
+    },
+  });
+}
+
+beforeEach(() => {
+  preferences.clear();
+  // Every suite but the onboarding one asserts the app that the first-run
+  // flow would otherwise cover on mount. Onboarding tests drop this flag.
+  preferences.set("pref:onboarded", "true");
+});
 
 afterEach(() => {
   cleanup();

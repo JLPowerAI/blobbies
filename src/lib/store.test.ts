@@ -137,6 +137,19 @@ describe("store (browser fallback)", () => {
     expect(await store.exportBlob(BLOB_ID, "Ken")).toBeNull();
   });
 
+  it("clears only its own keys, leaving app preferences alone", async () => {
+    // The test hook used to call localStorage.clear(), which took the app's
+    // `pref:*` with it — same origin — including the flag that keeps the
+    // first-run flow off the screen in every other suite.
+    window.localStorage.setItem("pref:onboarded", "true");
+    await store.flushRoster([ken]);
+
+    store.clearFallbackBackend();
+
+    expect(await store.loadRoster()).toBeNull();
+    expect(window.localStorage.getItem("pref:onboarded")).toBe("true");
+  });
+
   it("ignores corrupt stored JSON instead of throwing", async () => {
     store.saveBlobConfig(BLOB_ID, ken);
     window.dispatchEvent(new Event("beforeunload"));

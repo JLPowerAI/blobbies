@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { shouldNotify } from "@/lib/notify";
+import { describe, expect, it, vi } from "vitest";
+import { requestNotificationPermission, shouldNotify } from "@/lib/notify";
+
+const isPermissionGranted = vi.fn(async () => false);
+const requestPermission = vi.fn(async () => "granted");
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: () => isPermissionGranted(),
+  requestPermission: () => requestPermission(),
+  sendNotification: vi.fn(),
+}));
 
 const base = { trigger: "routine" as const, status: "done" as const, windowFocused: false };
 
@@ -28,5 +36,15 @@ describe("shouldNotify", () => {
     // Opted out beats every other reason to notify.
     expect(shouldNotify({ ...base, status: "waiting_input", blobOptedIn: false })).toBe(false);
     expect(shouldNotify({ ...base, blobOptedIn: undefined })).toBe(true);
+  });
+});
+
+describe("requestNotificationPermission", () => {
+  it("never touches the OS outside Tauri", async () => {
+    // Onboarding's Allow button calls this in the browser dev server too,
+    // where there is no notification centre and nothing to prompt.
+    expect(await requestNotificationPermission()).toBe("unavailable");
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(isPermissionGranted).not.toHaveBeenCalled();
   });
 });
