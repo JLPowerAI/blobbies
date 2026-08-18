@@ -22,20 +22,20 @@ if (typeof Element.prototype.scrollIntoView !== "function") {
   Element.prototype.scrollIntoView = function scrollIntoView() {};
 }
 
-// This jsdom build ships no localStorage, which every preference reads
-// through (`src/lib/preferences.ts`). A Map-backed stand-in, wiped between
-// tests, makes those reads honest without leaking state across cases.
+// Every preference reads through localStorage (`src/lib/preferences.ts`), and
+// whether jsdom provides one varies by environment — the local build ships
+// none, CI's does. Installing this Map-backed stand-in *unconditionally*
+// makes both behave the same; a conditional shim silently seeded a Map
+// nothing read, and the app saw an empty store.
 const preferences = new Map<string, string>();
-if (globalThis.localStorage === undefined) {
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (key: string) => preferences.get(key) ?? null,
-      setItem: (key: string, value: string) => void preferences.set(key, value),
-      removeItem: (key: string) => void preferences.delete(key),
-    },
-  });
-}
+Object.defineProperty(globalThis, "localStorage", {
+  configurable: true,
+  value: {
+    getItem: (key: string) => preferences.get(key) ?? null,
+    setItem: (key: string, value: string) => void preferences.set(key, value),
+    removeItem: (key: string) => void preferences.delete(key),
+  },
+});
 
 beforeEach(() => {
   preferences.clear();

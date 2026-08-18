@@ -3,6 +3,7 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "@/App";
 import { type Agent, MAX_BLOBS } from "@/data/agents";
+import { readPreference } from "@/lib/preferences";
 import { getSecret } from "@/lib/secrets";
 import {
   flushRoster,
@@ -838,6 +839,14 @@ describe("App", () => {
 });
 
 describe("onboarding", () => {
+  it("is off by default, so the rest of the suite sees the app", () => {
+    // The setup file seeds this through localStorage. CI's jsdom provides one
+    // and the local build does not, and a shim that skipped the provided one
+    // seeded a Map nothing read: green locally, every other test drowned in
+    // the onboarding overlay on CI.
+    expect(readPreference("pref:onboarded", "false")).toBe("true");
+  });
+
   /** Undo the suite default: this describe is about the un-onboarded app. */
   function clearOnboarded() {
     window.localStorage.removeItem("pref:onboarded");
