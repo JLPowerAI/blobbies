@@ -197,9 +197,24 @@ describe("parseToolList", () => {
     expect(parseToolList({ tools: "nope" })).toEqual([]);
   });
 
-  it("truncates a description, which is prompt text the server chose", () => {
-    const parsed = parseToolList({ tools: [{ name: "t", description: "x".repeat(5_000) }] });
-    expect(parsed[0]?.description.length).toBeLessThanOrEqual(400);
+  it("bounds a description only against abuse, never against real length", () => {
+    // A megabyte from a hostile server must not reach every prompt — but the
+    // bound sits far above any genuine description, because a tool's
+    // description is its interface and cutting it breaks tool selection
+    // silently. 2000 characters is a plausible real description and must
+    // survive untouched.
+    const real = "x".repeat(2_000);
+    expect(parseToolList({ tools: [{ name: "t", description: real }] })[0]?.description).toBe(real);
+
+    // One unbroken token has no space to cut on, so it falls back to a hard
+    // cut; the trailing ellipsis is the extra character.
+    const abusive = parseToolList({ tools: [{ name: "t", description: "x".repeat(200_000) }] });
+    expect(abusive[0]?.description.length).toBeLessThanOrEqual(8_001);
+
+    // Cut between words, never mid-token: a description ending `use \`--get-sche`
+    // reads as corruption to a user and a broken flag name to a model.
+    const wordy = parseToolList({ tools: [{ name: "t", description: "alpha ".repeat(4_000) }] });
+    expect(wordy[0]?.description.endsWith("alpha\u2026")).toBe(true);
   });
 
   it("flattens a description so it cannot forge a section of our own prompt", () => {
@@ -281,6 +296,22 @@ describe("makeMcpTools", () => {
     const { parameters } = tool as unknown as { parameters: { shape: object } };
     const shape = Object.keys(parameters.shape);
     expect(shape).toEqual(["path", "lines"]);
+  });
+
+  it("keeps a real tool description whole — it is the tool's interface", async () => {
+    // A description tells the model when to reach for a tool and what each
+    // argument means. Cutting it fails invisibly: nothing errors, the tool is
+    // just called wrongly or skipped. Real ones run past a thousand
+    // characters, and this app's own tool docs are longer still.
+    const long = `Use this when ${"the user asks about a file. ".repeat(60)}Do NOT use for directories.`;
+    expect(long.length).toBeGreaterThan(1_500);
+    const [tool] = makeMcpTools(
+      { name: "Files", url: "http://127.0.0.1:3000/mcp" },
+      [{ name: "read", description: long, inputSchema: {} }],
+      () => Promise.resolve(""),
+    );
+    // The exclusion at the very end is the part a cap would remove first.
+    expect(tool?.description).toContain("Do NOT use for directories.");
   });
 
   it("turns a failed call into text instead of throwing out of the run", async () => {

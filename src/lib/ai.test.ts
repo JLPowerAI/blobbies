@@ -103,6 +103,41 @@ describe("blobSystemPrompt", () => {
     expect(enclave).not.toContain("leaves this machine");
   });
 
+  it("names connected apps and the exact route to use them", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const blob = { name: "Ken", title: "Coach", description: "Helps." };
+    const prompt = blobSystemPrompt(blob, undefined, { connectedApps: ["Gmail"] });
+    expect(prompt).toContain("## Connected apps");
+    expect(prompt).toContain("- Gmail");
+    // The route has to be named. Left vague, a model asked about email reaches
+    // for web_search instead, burns its round budget and dies mid-sentence —
+    // measured, with a connected Gmail.
+    expect(prompt).toContain("app_find_tool");
+    // The ask-before-acting rule lives on app_run_tool's description, not
+    // here: it is read at the moment it applies, and repeating it in the
+    // prompt is the bloat this pass exists to remove. `ask_user` is never
+    // named — it only exists on routine turns, and most of this is chat.
+    expect(prompt).not.toContain("ask_user");
+    expect(prompt).toContain("never guess a tool name");
+
+    // Nothing connected means no section at all: an empty heading is wasted
+    // prefix on every turn.
+    expect(blobSystemPrompt(blob)).not.toContain("## Connected apps");
+  });
+
+  it("lists skills as bullets, and omits the section when there are none", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const blob = { name: "Ken", title: "Coach", description: "Helps." };
+    const prompt = blobSystemPrompt(blob, undefined, {
+      skills: ["composio-cli: Run Composio CLI tools."],
+    });
+    expect(prompt).toContain("## Skills");
+    expect(prompt).toContain("- composio-cli: Run Composio CLI tools.");
+
+    // An empty section would be wasted prefix on every turn, for every Blob.
+    expect(blobSystemPrompt(blob)).not.toContain("## Skills");
+  });
+
   it("contrasts spawn_blob with run_subagent in one line of the Tools section", async () => {
     const { blobSystemPrompt } = await import("@/lib/ai");
     // A model that spawns a Blob per subtask fills the user's roster with
@@ -145,10 +180,14 @@ describe("blobSystemPrompt", () => {
     // The generated pair is silently replaced, not appended.
     expect(prompt).not.toContain("Coach");
     expect(prompt).not.toContain("Helps.");
-    // The "never final" trailer would be a lie about text the user typed.
-    expect(prompt).not.toContain("This is never final");
-    // Blank (or whitespace) falls back to the generated role.
-    expect(blobSystemPrompt({ ...blob, instructions: "  " })).toContain("This is never final");
+    // Blank (or whitespace) falls back to the generated title/description.
+    const fallback = blobSystemPrompt({ ...blob, instructions: "  " });
+    expect(fallback).toContain("Coach");
+    expect(fallback).toContain("Helps.");
+    // The old "This is never final" trailer is gone from both paths: measured
+    // against deepseek it changed no answer, and only the intent router ever
+    // acted on it, so it was prefix cost every turn paid for.
+    expect(fallback).not.toContain("This is never final");
     // Instructions alone still count as configured — no "set yourself up".
     expect(blobSystemPrompt({ name: "Ken", instructions: "Do the thing." })).not.toContain(
       "You are not configured yet",
@@ -429,6 +468,48 @@ describe("streamBlobTurn", () => {
 });
 
 describe("streamBlobTurn routine scope", () => {
+  it("offers the app tools only once an app is connected", async () => {
+    // Three meta-tools however many apps exist — that is the point of
+    // search/schema/execute over 61 generated Gmail tools. But with nothing
+    // connected they are pure cost: the model would spend rounds discovering
+    // there is no account to reach, and might promise an inbox it cannot open.
+    const offered = async (hasConnectedApps: boolean) => {
+      let names: string[] = [];
+      fetchHandler = async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        if (request.format !== undefined) {
+          return new Response(JSON.stringify({ message: { content: '{"action":"none"}' } }));
+        }
+        names = ((request.tools ?? []) as { function: { name: string } }[]).map(
+          (tool) => tool.function.name,
+        );
+        return ndjson(textChunks("Done."));
+      };
+      await streamBlobTurn({
+        model: "llama3.2:latest",
+        messages: [{ role: "user", content: "read my latest emails" }],
+        scope: "routine",
+        hasConnectedApps,
+        memory: { list: () => [], save: () => {} },
+        onSegment: () => {},
+        onConfigure: () => {},
+      });
+      return names;
+    };
+
+    const withApps = await offered(true);
+    expect(withApps).toContain("app_find_tool");
+    expect(withApps).toContain("app_tool_schema");
+    expect(withApps).toContain("app_run_tool");
+
+    const without = await offered(false);
+    expect(without).not.toContain("app_find_tool");
+    expect(without).not.toContain("app_tool_schema");
+    expect(without).not.toContain("app_run_tool");
+    // The rest of the catalog is unaffected by the gate.
+    expect(without).toContain("web_search");
+  });
+
   it("skips the intent router and offers the autonomous catalog", async () => {
     // A routine turn has no fresh user message to classify and no human to
     // fill gaps: no router call, and the catalog grows files + ask + helper.
@@ -467,6 +548,10 @@ describe("streamBlobTurn routine scope", () => {
       "list_files",
       "message_blob",
       "read_file",
+      // A local command runner, but not a shell: the Rust side takes argv and
+      // an allowlist, so a poisoned page cannot turn "run this" into
+      // arbitrary execution.
+      "run_command",
       "run_subagent",
       "spawn_blob",
       "web_fetch",

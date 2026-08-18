@@ -454,6 +454,30 @@ describe("App", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("shows the Composio CLI as missing in the Plugins tab and never asks for a key", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /Ken Kai/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Settings" });
+    await user.click(within(dialog).getByRole("button", { name: "Plugins" }));
+
+    // Outside Tauri the CLI probe reports absent, which must read as missing
+    // rather than as a silent success.
+    expect(await within(dialog).findByText(/Not installed/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Install" })).toBeInTheDocument();
+
+    // The credential belongs to Composio's own CLI. If a key field ever comes
+    // back here, it means the app started keeping a second copy.
+    expect(within(dialog).queryByLabelText(/API key/)).not.toBeInTheDocument();
+
+    // Skills read from disk, which jsdom has none of — the empty state must
+    // say where to put one rather than showing a blank card.
+    expect(within(dialog).getByText("Skills")).toBeInTheDocument();
+    expect(await within(dialog).findByText(/No skills yet/)).toBeInTheDocument();
+  });
+
   it("lists downloaded Ollama models and frees the outgoing one on switch", async () => {
     // Deterministic local server: version probe succeeds, two models pulled.
     const unloads: unknown[] = [];
@@ -569,26 +593,51 @@ describe("App", () => {
     expect(within(list).getByText("Every hour")).toBeInTheDocument();
   });
 
-  it("browses, adds and uninstalls a plugin from the Plugins modal", async () => {
+  it("browses plugins and reports why a connect failed, on the row that failed", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await user.click(screen.getByRole("button", { name: "Plugins" }));
     const dialog = screen.getByRole("dialog", { name: "Plugins" });
 
-    // Search narrows the marketplace; Add flips the row to Added.
+    // Search narrows the marketplace. Connecting runs through Composio, so
+    // outside Tauri nothing can be connected — and a tile must never read
+    // "Connected" unless Composio said so.
     await user.type(within(dialog).getByLabelText("Search plugins"), "gmail");
-    await user.click(within(dialog).getByRole("button", { name: "Add" }));
-    expect(within(dialog).getByText("Added")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Connected")).not.toBeInTheDocument();
 
-    // The Yours tab lists it; opening the row shows the detail view.
+    // A failed connect explains itself on the row that was clicked. Without
+    // this, a missing CLI and an abandoned browser tab are both just a button
+    // that appeared to do nothing.
+    await user.click(within(dialog).getByRole("button", { name: "Connect" }));
+    expect(await within(dialog).findByText(/only works in the desktop app/)).toBeInTheDocument();
+    expect(within(dialog).queryByText("Connected")).not.toBeInTheDocument();
+
+    // The detail view lists real accounts. With none connected it says so
+    // rather than inventing a "Default" row that was never real.
     await user.clear(within(dialog).getByLabelText("Search plugins"));
-    await user.click(within(dialog).getByRole("tab", { name: "Yours" }));
     await user.click(within(dialog).getByRole("button", { name: /Gmail/ }));
-    expect(within(dialog).getByText(/Needs auth/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/No account connected yet/)).toBeInTheDocument();
 
-    // Uninstall, then Escape steps back to the list before closing.
-    await user.click(within(dialog).getByRole("button", { name: "Uninstall" }));
+    // Naming a second account comes before the browser opens, because the CLI
+    // requires an alias to tell two accounts on one app apart.
+    await user.click(within(dialog).getByRole("button", { name: /Add Another Account/ }));
+    expect(within(dialog).getByLabelText("Name for the new account")).toBeInTheDocument();
+
+    // View Source must not navigate the webview: a navigated webview keeps the
+    // IPC bridge, so remote content could call commands. ExternalLink hands the
+    // URL to the OS browser and cancels the navigation instead. Listening on
+    // document, not the anchor — React attaches its handler at the root, so an
+    // element listener runs first and would always see an uncancelled event.
+    const navigated = new Promise<boolean>((resolve) => {
+      document.addEventListener("click", (event) => resolve(!event.defaultPrevented), {
+        once: true,
+      });
+    });
+    await user.click(within(dialog).getByRole("link", { name: /View Source/ }));
+    expect(await navigated).toBe(false);
+
+    // Escape steps back to the list before closing.
     await user.keyboard("{Escape}");
     expect(within(dialog).getByRole("tab", { name: "Yours" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
@@ -871,11 +920,20 @@ describe("onboarding", () => {
     expect(flow().getByRole("heading", { name: "A few things to settle" })).toBeInTheDocument();
     await user.click(flow().getByRole("button", { name: "Next" }));
 
-    // Tinfoil is optional: Next carries on with the field left empty, and
-    // nothing is written to the keychain.
+    // Tinfoil is optional, but only through Skip. Next is not a second way
+    // past an empty field: someone who pressed it would believe they had set
+    // something up, and find out at the first model that will not answer.
     expect(flow().getByLabelText("API key")).toHaveValue("");
-    await user.click(flow().getByRole("button", { name: "Next" }));
+    expect(flow().getByRole("button", { name: "Next" })).toBeDisabled();
+    await user.click(flow().getByRole("button", { name: /Skip, I'll use the local model/ }));
     expect(await getSecret("tinfoil-api-key")).toBeNull();
+
+    // Composio is optional in the same way. It asks for no key at all — the
+    // CLI owns that credential — so the only way past an unsigned-in state is
+    // Skip, and Next stays shut.
+    expect(flow().queryByLabelText(/API key/)).not.toBeInTheDocument();
+    expect(flow().getByRole("button", { name: "Next" })).toBeDisabled();
+    await user.click(flow().getByRole("button", { name: /Skip, I'll connect my apps later/ }));
 
     // Plugins picked here are the app's installed list, not a separate one.
     const gmail = flow().getByRole("button", { name: /Gmail/ });
@@ -948,9 +1006,10 @@ describe("onboarding", () => {
 
     const flow = () => within(screen.getByRole("dialog", { name: "Welcome to Blobbies" }));
     await user.click(flow().getByRole("button", { name: /Get started/ }));
-    for (const _ of [0, 1, 2]) {
-      await user.click(flow().getByRole("button", { name: "Next" }));
-    }
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    await user.click(flow().getByRole("button", { name: /Skip, I'll use the local model/ }));
+    await user.click(flow().getByRole("button", { name: /Skip, I'll connect my apps later/ }));
     await user.click(flow().getByRole("button", { name: "Make your first Blob" }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

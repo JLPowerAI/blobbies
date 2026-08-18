@@ -2,7 +2,9 @@ import { siGmail, siGooglecalendar, siGoogledrive, siHubspot, siIntercom, siX } 
 
 /**
  * App-focused plugin catalog mirroring cursor/plugins (developer-tool plugins
- * intentionally excluded). UI-first: MCP wiring lands later. Icons come from
+ * intentionally excluded). Descriptions name what the app does, not how it
+ * is reached: connections run through Composio, so a vendor's own MCP server
+ * is not what a user (or a model reading this) is connecting to. Icons come from
  * simple-icons where the brand exists there; the rest keep branded monograms
  * (several brands were removed from simple-icons for trademark reasons).
  */
@@ -18,14 +20,19 @@ export interface PluginDef {
   sourceUrl: string;
 }
 
-const REPO = "https://github.com/cursor/plugins/tree/main";
+/**
+ * Where each plugin's source lives upstream.
+ *
+ * `third_party/` is part of the path, not decoration: without it every "View
+ * Source" link 404s — measured against the whole catalog.
+ */
+const REPO = "https://github.com/cursor/plugins/tree/main/third_party";
 
 export const plugins: PluginDef[] = [
   {
     id: "gmail",
     name: "Gmail",
-    description:
-      "Connect to Gmail via Google's remote MCP server — search, read, draft, label, and manage email.",
+    description: "Connect to Gmail — search, read, draft, label, and manage email.",
     category: "Featured",
     tile: { bg: "#ea4335", label: "M", iconPath: siGmail.path },
     sourceUrl: `${REPO}/gmail`,
@@ -34,7 +41,7 @@ export const plugins: PluginDef[] = [
     id: "google-calendar",
     name: "Google Calendar",
     description:
-      "Connect to Google Calendar via Google's remote MCP server — list calendars, search events, and create or update meetings.",
+      "Connect to Google Calendar — list calendars, search events, and create or update meetings.",
     category: "Featured",
     tile: { bg: "#4285f4", label: "31", iconPath: siGooglecalendar.path },
     sourceUrl: `${REPO}/google-calendar`,
@@ -42,8 +49,7 @@ export const plugins: PluginDef[] = [
   {
     id: "google-drive",
     name: "Google Drive",
-    description:
-      "Connect to Google Drive via Google's remote MCP server — search, read, create, share, and manage files.",
+    description: "Connect to Google Drive — search, read, create, share, and manage files.",
     category: "Featured",
     tile: { bg: "#34a853", label: "D", iconPath: siGoogledrive.path },
     sourceUrl: `${REPO}/google-drive`,
@@ -52,7 +58,7 @@ export const plugins: PluginDef[] = [
     id: "salesforce",
     name: "Salesforce",
     description:
-      "Connect to Salesforce via Salesforce Hosted MCP — query, search, create, update, and traverse records in your org.",
+      "Connect to Salesforce — query, search, create, update, and traverse records in your org.",
     category: "Integrations",
     tile: { bg: "#00a1e0", label: "SF" },
     sourceUrl: `${REPO}/salesforce`,
@@ -70,7 +76,7 @@ export const plugins: PluginDef[] = [
     id: "gong",
     name: "Gong",
     description:
-      "Gong MCP integration for revenue intelligence — account summaries, deal insights, and call briefs.",
+      "Connect to Gong — revenue intelligence: account summaries, deal insights, and call briefs.",
     category: "Integrations",
     tile: { bg: "#8039df", label: "G" },
     sourceUrl: `${REPO}/gong`,

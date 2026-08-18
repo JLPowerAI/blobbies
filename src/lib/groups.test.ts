@@ -7,7 +7,9 @@ import {
   handoffTarget,
   isPass,
   namedResponders,
+  owesAnswer,
   parseMentions,
+  stripSelfMention,
 } from "@/lib/groups";
 
 const blob = (id: string, name: string): Agent => ({
@@ -47,6 +49,27 @@ describe("parseMentions", () => {
   });
 });
 
+describe("owesAnswer", () => {
+  it("obliges the only Blob picked, not just the one addressed by name", () => {
+    // PASS means "a colleague has this". With one Blob picked there is no
+    // colleague, so a pass answers a direct question with silence — measured
+    // on qwen3.5:2b, 3 of 5 runs on "what did hosting cost last month?".
+    expect(owesAnswer({ addressed: false, pickedCount: 1 })).toBe(true);
+    expect(owesAnswer({ addressed: true, pickedCount: 3 })).toBe(true);
+    // Both at once is the ordinary case when the user names one Blob.
+    expect(owesAnswer({ addressed: true, pickedCount: 1 })).toBe(true);
+  });
+
+  it("lets an unaddressed Blob stay out when colleagues were picked too", () => {
+    // The behaviour this whole design protects: three "sounds good!" lines
+    // under one answer is the noise the router exists to prevent.
+    expect(owesAnswer({ addressed: false, pickedCount: 2 })).toBe(false);
+    expect(owesAnswer({ addressed: false, pickedCount: 6 })).toBe(false);
+    // Nobody picked: there is no turn to oblige, and the caller reports it.
+    expect(owesAnswer({ addressed: false, pickedCount: 0 })).toBe(false);
+  });
+});
+
 describe("isPass", () => {
   it("reads the bare token as declining, however the model decorates it", () => {
     for (const said of ["PASS", "pass", "**PASS**", "PASS.", "\u201CPASS\u201D", " pass "]) {
@@ -77,6 +100,73 @@ describe("isPass", () => {
     ]) {
       expect(isPass(said), said).toBe(false);
     }
+  });
+});
+
+describe("stripSelfMention", () => {
+  it("drops a Blob signing its own name, in the shapes small models produce", () => {
+    // Measured against qwen3.5:2b, which does this 3/3 no matter how the
+    // prompt rule is worded — hence the code path.
+    expect(stripSelfMention("@Ken I'll total those receipts.", "Ken")).toBe(
+      "I'll total those receipts.",
+    );
+    expect(stripSelfMention("Ken: on it.", "Ken")).toBe("on it.");
+    expect(stripSelfMention("@Ken — on it.", "Ken")).toBe("on it.");
+    // Case-insensitive, since a model capitalises how it likes.
+    expect(stripSelfMention("@ken here you go", "Ken")).toBe("here you go");
+  });
+
+  it("drops a sign-off at the end, where a 9b model puts it", () => {
+    // Observed on qwen3.5:9b in the group sim: "Hi Ken! ... today? @Scout".
+    expect(stripSelfMention("Ready to help. How can I assist today? @Scout", "Scout")).toBe(
+      "Ready to help. How can I assist today?",
+    );
+    expect(stripSelfMention("What's on the agenda? @Quill", "Quill")).toBe("What's on the agenda?");
+    // A trailing colleague mention is the hand-off this design runs on —
+    // `handoffTarget` reads it, so eating it would silently stop the work.
+    expect(stripSelfMention("Done — over to you. @Quill", "Scout")).toBe(
+      "Done — over to you. @Quill",
+    );
+  });
+
+  it("never eats a real hand-off or a lookalike name", () => {
+    // handoffTarget reads a sentence-opening mention as "wake that Blob", so
+    // a wrongly-stripped colleague mention would silently drop the hand-off
+    // this whole design exists to make visible.
+    expect(stripSelfMention("@Quill can you draft it?", "Ken")).toBe("@Quill can you draft it?");
+    // Prefix of the Blob's own name: a different person entirely.
+    expect(stripSelfMention("@Kendra has the file.", "Ken")).toBe("@Kendra has the file.");
+    // The name mid-sentence is the Blob being talked about, not a signature.
+    expect(stripSelfMention("Ask Ken about the invoice.", "Ken")).toBe(
+      "Ask Ken about the invoice.",
+    );
+  });
+
+  it("leaves a bare name that is part of the sentence", () => {
+    // The first version of this stripped any leading name and corrupted all
+    // three: a Blob talking about itself is not a Blob signing itself. Only a
+    // separator after the name makes it a signature.
+    expect(stripSelfMention("Ken's report is ready.", "Ken")).toBe("Ken's report is ready.");
+    expect(stripSelfMention("Ken and Quill agree.", "Ken")).toBe("Ken and Quill agree.");
+    expect(stripSelfMention("Ken? I think so.", "Ken")).toBe("Ken? I think so.");
+  });
+
+  it("keeps the reply when the name is all there is", () => {
+    // A blank bubble is more confusing than a stray signature, and an empty
+    // string here would be dropped as "nothing said".
+    expect(stripSelfMention("@Ken", "Ken")).toBe("@Ken");
+    // A Blob with no name configured cannot match anything.
+    expect(stripSelfMention("@Ken hello", "  ")).toBe("@Ken hello");
+  });
+
+  it("treats a name with regex characters as literal text", () => {
+    // Blob names come from user-editable config and reach a RegExp. `\b`
+    // would never match after the `+`, silently disabling the strip for this
+    // Blob; the lookahead does.
+    expect(stripSelfMention("@C++ done.", "C++")).toBe("done.");
+    // `.` must not act as "any character": `a.c` is a name, not a pattern.
+    expect(stripSelfMention("@a.c hello", "a.c")).toBe("hello");
+    expect(stripSelfMention("@abc hello", "a.c")).toBe("@abc hello");
   });
 });
 

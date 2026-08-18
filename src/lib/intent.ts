@@ -371,6 +371,17 @@ export async function applyGroupIntent(
  *
  * Fails open to everyone: a router problem must never leave a group silent,
  * and "everyone answers" is exactly the behaviour this refines.
+ *
+ * The opening line asks for every task in the message, not just its subject.
+ * That is what makes "check X, then write it up" reach both the researcher
+ * and the writer instead of one of them; without it the second job silently
+ * never starts. Measured on qwen3.5:9b, which is the floor these prompts are
+ * tuned for: this wording also fixed "hi all" (0/2 -> 2/2 at listing
+ * everyone), with the single-job cases unchanged at 2/2.
+ *
+ * It does *not* rescue a 2b-class model — that never picked both under any of
+ * three wordings, and two of them broke its single-job routing. Judging this
+ * prompt on a model that small optimises for a room it cannot hold anyway.
  */
 export async function pickResponders(options: {
   model: string;
@@ -418,13 +429,16 @@ export async function pickResponders(options: {
     {
       role: "system",
       content:
-        "People in a group chat have different jobs. Given a message, list " +
-        "ONLY those whose job the message actually needs.\n\n" +
+        "People in a group chat have different jobs. Read the message for " +
+        "every task in it, and list the people whose job each task needs \u2014 " +
+        "one person per task, nobody else.\n\n" +
         "Rules:\n" +
-        "- Usually exactly one person. Two only when the message genuinely " +
-        "needs both, and never everyone unless it is addressed to the group " +
-        "(\u201Ceveryone\u201D, \u201Cyou all\u201D, a general greeting or announcement).\n" +
-        "- Someone with no relevant job stays quiet. Silence is normal and " +
+        "- Usually a message is one task and needs one person. \u201CCheck X, then " +
+        "write it up\u201D is two tasks and needs two people.\n" +
+        "- Never everyone unless the message is addressed to the group " +
+        "(\u201Ceveryone\u201D, \u201Cyou all\u201D, a general greeting or announcement) \u2014 then " +
+        "list everyone.\n" +
+        "- Someone whose job no task needs stays quiet. Silence is normal and " +
         "correct \u2014 do not add people to be safe.\n" +
         "- Judge by their job, not by who spoke last.\n" +
         // The context is for resolving what the message refers to, not for

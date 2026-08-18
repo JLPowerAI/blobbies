@@ -1,7 +1,15 @@
-import { CircleArrowDown, Cpu, Settings, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { CircleArrowDown, Cpu, Plug, Settings, X } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink } from "@/components/ExternalLink";
 import { PillSelect } from "@/components/PillSelect";
+import {
+  composioCliInstallable,
+  composioCliVersion,
+  composioSignedIn,
+  installComposioCli,
+  pollComposioLogin,
+  startComposioLogin,
+} from "@/lib/composio";
 import {
   getOllamaVersion,
   isOllamaInstalled,
@@ -10,6 +18,8 @@ import {
   startOllama,
 } from "@/lib/ollama";
 import { deleteSecret, setSecret } from "@/lib/secrets";
+import { listSkills, type Skill } from "@/lib/skills";
+import { openExternal } from "@/lib/tauri";
 // Tinfoil's real module (attestation stack) is a lazy chunk: only the pure
 // id helpers are imported statically; handlers `import()` the rest on use.
 import type { TinfoilModel } from "@/lib/tinfoil";
@@ -23,7 +33,7 @@ export type ThemePreference = "system" | "light" | "dark";
 const APP_VERSION = "0.1.0";
 
 /** The dialog's tabs; also what the search palette can jump straight to. */
-export type SettingsTab = "general" | "model" | "updates";
+export type SettingsTab = "general" | "model" | "plugins" | "updates";
 
 interface SettingsModalProps {
   /** Tab to open on, for callers that jump to one. Defaults to General. */
@@ -122,6 +132,104 @@ function tinfoilBlurb(status: TinfoilStatus): string {
   }
 }
 
+/**
+ * What the Plugins tab knows about Composio.
+ *
+ * Install and sign-in are tracked as one sequence rather than two flags: a
+ * login is meaningless without the binary, and the pair would allow states
+ * that cannot exist. `waiting` is the one that has to be visible — the
+ * browser is open and this app is polling for up to ten minutes.
+ */
+type ComposioStatus = {
+  stage:
+    | "idle"
+    | "checking"
+    | "missing"
+    | "installing"
+    | "installed"
+    | "opening"
+    | "waiting"
+    | "signedIn";
+  version: string;
+  /** Empty unless something failed; shown verbatim. */
+  error: string;
+  installable: boolean;
+};
+
+const COMPOSIO_IDLE: ComposioStatus = {
+  stage: "idle",
+  version: "",
+  error: "",
+  installable: true,
+};
+
+/** Status-dot tone for the Composio row. */
+function composioTone(status: ComposioStatus): "wait" | "err" | "warn" | "ok" {
+  if (status.stage === "missing" || status.error !== "") {
+    return "err";
+  }
+  if (status.stage === "signedIn") {
+    return "ok";
+  }
+  // Installed but signed out is a warning, not success: the difference between
+  // "a binary exists" and "connecting an app will work".
+  return status.stage === "installed" ? "warn" : "wait";
+}
+
+function composioBlurb(status: ComposioStatus): string {
+  if (status.error !== "") {
+    return status.error;
+  }
+  switch (status.stage) {
+    case "idle":
+    case "checking":
+      return "Checking\u2026";
+    case "installing":
+      return "Installing\u2026 this takes a moment.";
+    case "missing":
+      // The WSL line stays specific: it is the one case where the user has to
+      // do something elsewhere, so naming it saves a dead-end click.
+      return status.installable
+        ? "Not installed yet."
+        : "Needs a POSIX shell. On Windows, install it inside WSL.";
+    case "installed":
+      return `Installed \u00b7 ${status.version}. Sign in to connect your apps.`;
+    case "opening":
+      return "Opening your browser\u2026";
+    case "waiting":
+      // Naming the blank page is the difference between retrying and giving
+      // up: the link dies after ten minutes and an expired one renders empty
+      // rather than saying so. "Open again" mints a fresh key (verified), so
+      // it genuinely recovers rather than replaying a dead one.
+      return "Waiting for you in the browser\u2026 blank page? Open again.";
+    case "signedIn":
+      return `Connected \u00b7 ${status.version}`;
+  }
+}
+
+/**
+ * Probe the CLI and whether it holds a login.
+ *
+ * The sign-in check is skipped when there is no binary to ask about, which is
+ * the common case on a first open.
+ */
+async function probeComposio(
+  setStatus: (update: (current: ComposioStatus) => ComposioStatus) => void,
+): Promise<void> {
+  setStatus((current) => ({ ...current, stage: "checking", error: "" }));
+  const [version, installable] = await Promise.all([
+    composioCliVersion(),
+    composioCliInstallable(),
+  ]);
+  const signedIn = version !== null && (await composioSignedIn());
+  setStatus((current) => ({
+    ...current,
+    stage: version === null ? "missing" : signedIn ? "signedIn" : "installed",
+    version: version ?? "",
+    installable,
+  }));
+}
+
 /** Check the keychain for a Tinfoil key and load the model catalog. */
 async function probeTinfoil(
   setStatus: (status: TinfoilStatus) => void,
@@ -168,6 +276,8 @@ export function SettingsModal({
   const [ollama, setOllama] = useState<OllamaStatus>({ kind: "idle" });
   const [tinfoil, setTinfoil] = useState<TinfoilStatus>({ kind: "idle" });
   const [tinfoilKeyDraft, setTinfoilKeyDraft] = useState("");
+  const [composio, setComposio] = useState<ComposioStatus>(COMPOSIO_IDLE);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const dialogRef = useRef<HTMLDivElement>(null);
   const { closing, requestClose, finishClose } = useExitAnimation(onClose);
 
@@ -179,7 +289,14 @@ export function SettingsModal({
     if (tab === "model" && tinfoil.kind === "idle") {
       void probeTinfoil(setTinfoil);
     }
-  }, [tab, ollama.kind, tinfoil.kind]);
+    if (tab === "plugins" && composio.stage === "idle") {
+      void probeComposio(setComposio);
+      // Read here rather than from App's copy: this tab is where a user looks
+      // after adding a folder, so it should reflect the disk, not the list
+      // captured at startup.
+      void listSkills().then(setSkills);
+    }
+  }, [tab, ollama.kind, tinfoil.kind, composio.stage]);
 
   const availableModels = ollama.kind === "running" ? ollama.models : [];
   const tinfoilModels = tinfoil.kind === "configured" ? tinfoil.models : [];
@@ -193,6 +310,51 @@ export function SettingsModal({
     setTinfoilKeyDraft("");
     // Force: the session probe may have cached "no key" before this save.
     await probeTinfoil(setTinfoil, true);
+  };
+
+  const installCli = async () => {
+    setComposio((current) => ({ ...current, stage: "installing", error: "" }));
+    try {
+      await installComposioCli();
+      // Re-probe rather than assume: a machine that was signed in before a
+      // reinstall should land straight on "Connected".
+      await probeComposio(setComposio);
+    } catch (error) {
+      setComposio((current) => ({
+        ...current,
+        stage: "missing",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  };
+
+  /**
+   * Start the login, open the URL, then wait for the browser half.
+   *
+   * Split in two because `--no-wait` returns a URL immediately and only the
+   * poll blocks; one blocking call would leave the tab frozen with nothing to
+   * show for it.
+   */
+  const signIn = async () => {
+    setComposio((current) => ({ ...current, stage: "opening", error: "" }));
+    try {
+      const url = await startComposioLogin();
+      await openExternal(url);
+      setComposio((current) => ({ ...current, stage: "waiting" }));
+      await pollComposioLogin();
+      // Re-probe instead of trusting the poll's own answer. The CLI can save
+      // credentials while our poll returns false — it competes with any other
+      // `--poll` for the same session — and disk is the source of truth the
+      // rest of this tab already reads. Abandoning the browser tab is not an
+      // error either; it just leaves the user on the button that starts again.
+      await probeComposio(setComposio);
+    } catch (error) {
+      setComposio((current) => ({
+        ...current,
+        stage: "installed",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
   };
 
   const removeTinfoilKey = async () => {
@@ -293,6 +455,15 @@ export function SettingsModal({
           >
             <Cpu size={15} strokeWidth={1.8} aria-hidden="true" />
             Model
+          </button>
+          <button
+            type="button"
+            className={tab === "plugins" ? "rail-item rail-item-active" : "rail-item"}
+            aria-current={tab === "plugins" ? "true" : undefined}
+            onClick={() => setTab("plugins")}
+          >
+            <Plug size={15} strokeWidth={1.8} aria-hidden="true" />
+            Plugins
           </button>
           <button
             type="button"
@@ -415,6 +586,86 @@ export function SettingsModal({
             </>
           ) : null}
 
+          {tab === "plugins" ? (
+            <>
+              <h2 className="modal-title">Plugins</h2>
+
+              <p className="modal-section-label">Composio</p>
+              <div className="modal-card">
+                <div className="modal-row modal-row-multiline">
+                  <span className="modal-row-text">
+                    <span className="modal-row-title ollama-title">
+                      <span
+                        className={`ollama-dot ollama-dot-${composioTone(composio)}`}
+                        aria-hidden="true"
+                      />
+                      Composio CLI
+                    </span>
+                    <span className="modal-row-blurb" aria-live="polite">
+                      {composioBlurb(composio)}
+                    </span>
+                  </span>
+                  {composio.stage === "missing" && composio.installable ? (
+                    <button
+                      type="button"
+                      className="modal-button"
+                      onClick={() => void installCli()}
+                    >
+                      {composio.error === "" ? "Install" : "Try again"}
+                    </button>
+                  ) : composio.stage === "installed" || composio.stage === "waiting" ? (
+                    <button type="button" className="modal-button" onClick={() => void signIn()}>
+                      {composio.stage === "waiting" ? "Open again" : "Sign in"}
+                    </button>
+                  ) : composio.stage === "signedIn" ? (
+                    <button
+                      type="button"
+                      className="modal-button"
+                      onClick={() => void probeComposio(setComposio)}
+                    >
+                      Re-check
+                    </button>
+                  ) : (
+                    <button type="button" className="modal-button" disabled>
+                      {composio.stage === "installing"
+                        ? "Installing\u2026"
+                        : composio.stage === "opening"
+                          ? "Opening\u2026"
+                          : "Checking\u2026"}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <p className="modal-section-label">Skills</p>
+              <div className="modal-card">
+                {skills.length === 0 ? (
+                  <div className="modal-row modal-row-multiline">
+                    <span className="modal-row-text">
+                      <span className="modal-row-blurb">
+                        No skills yet. Add one in <code>~/.blobbies/skills</code>.
+                      </span>
+                    </span>
+                  </div>
+                ) : (
+                  skills.map((skill, position) => (
+                    <Fragment key={skill.name}>
+                      {position === 0 ? null : <div className="modal-divider" />}
+                      {/* Name only: this list answers "what is installed",
+                          while a description answers "when should the model
+                          use this". Showing it here buys a wall of text or an
+                          ellipsis — and an ellipsis is the truncation refused
+                          everywhere else. It stays whole in the file. */}
+                      <div className="modal-row">
+                        <span className="modal-row-title">{skill.name}</span>
+                      </div>
+                    </Fragment>
+                  ))
+                )}
+              </div>
+            </>
+          ) : null}
+
           {tab === "model" ? (
             <>
               <h2 className="modal-title">Model</h2>
@@ -482,29 +733,38 @@ export function SettingsModal({
                       ) : null}
                     </span>
                   </span>
-                  {tinfoil.kind === "configured" ? (
-                    <button
-                      type="button"
-                      className="modal-button"
-                      onClick={() => void removeTinfoilKey()}
-                    >
-                      Remove Key
-                    </button>
-                  ) : null}
                 </div>
-                {tinfoil.kind === "none" ? (
-                  <>
-                    <div className="modal-divider" />
-                    <div className="modal-stack">
-                      <label className="modal-row-title" htmlFor="tinfoil-key">
-                        API key
-                      </label>
-                      <div className="modal-field-row">
+                {/* The key section always renders — only its contents swap.
+                    Unmounting it on save removed ~90px from the card and threw
+                    every section below it up the page, which reads as the
+                    dialog flinching at the moment the user succeeded. */}
+                <div className="modal-divider" />
+                <div className="modal-stack">
+                  <span className="modal-row-title" id="tinfoil-key-label">
+                    API key
+                  </span>
+                  <div className="modal-field-row">
+                    {tinfoil.kind === "configured" ? (
+                      <>
+                        <span className="modal-name-input modal-name-input-static">
+                          {"\u2022".repeat(24)}
+                        </span>
+                        <button
+                          type="button"
+                          className="modal-button"
+                          onClick={() => void removeTinfoilKey()}
+                        >
+                          Remove Key
+                        </button>
+                      </>
+                    ) : (
+                      <>
                         <input
                           id="tinfoil-key"
                           type="password"
                           className="modal-name-input"
                           autoComplete="off"
+                          aria-labelledby="tinfoil-key-label"
                           placeholder="Paste your API key"
                           value={tinfoilKeyDraft}
                           onChange={(event) => setTinfoilKeyDraft(event.currentTarget.value)}
@@ -522,13 +782,13 @@ export function SettingsModal({
                         >
                           Save
                         </button>
-                      </div>
-                      <span className="modal-row-blurb">
-                        Stored in your OS keychain, never in app files.
-                      </span>
-                    </div>
-                  </>
-                ) : null}
+                      </>
+                    )}
+                  </div>
+                  <span className="modal-row-blurb">
+                    Stored in your OS keychain, never in app files.
+                  </span>
+                </div>
               </div>
 
               <p className="modal-section-label">Model</p>

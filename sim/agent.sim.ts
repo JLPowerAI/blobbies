@@ -18,8 +18,15 @@ import { type SimBlob, scenarios, type TurnOutcome } from "./scenarios";
  *   SIM_RUNS=3 pnpm sim            # repeat each scenario, see flakiness
  */
 
-const MODEL = process.env.SIM_MODEL ?? "qwen3.5:0.8b";
-const RUNS = Number(process.env.SIM_RUNS ?? "1");
+// 9b is the floor, matching group.sim.ts: a 0.8b model fails these scenarios
+// for reasons no prompt fixes, so tuning against it optimises for a setup
+// nobody runs. Point SIM_MODEL at something smaller to watch it degrade.
+const MODEL = process.env.SIM_MODEL ?? "qwen3.5:9b";
+// Three by default, for the same reason as group.sim.ts: one run of a
+// non-deterministic model cannot tell a regression from noise, and a suite
+// that reddens on noise is one nobody reads. Scoring is by majority (below).
+// SIM_RUNS=1 for a quick look, and it reverts to failing on any single run.
+const RUNS = Number(process.env.SIM_RUNS ?? "3");
 /** A slow model on a cold load can take a while for a multi-tool turn. */
 const TURN_TIMEOUT_MS = 120_000;
 
@@ -95,7 +102,7 @@ function report(scenarioName: string, turns: { say: string }[], outcomes: TurnOu
 }
 
 /** Pass/fail tally per scenario, so repeat runs show reliability not luck. */
-const tally = new Map<string, { pass: number; fail: number }>();
+const tally = new Map<string, { pass: number; fail: number; reasons: string[] }>();
 
 afterAll(() => {
   const rows = [...tally.entries()].sort(
@@ -109,6 +116,19 @@ afterAll(() => {
     lines.push(`   ${bar} ${String(percent).padStart(3)}%  ${name}`);
   }
   console.log(lines.join("\n"));
+
+  // The verdict, taken across runs rather than per run: a scenario that failed
+  // more often than it passed is a regression, one that failed once in three
+  // is the model being a model.
+  if (RUNS > 1) {
+    const broken = rows
+      .filter(([, count]) => count.fail > count.pass)
+      .map(
+        ([name, count]) =>
+          `${name}: failed ${count.fail}/${count.pass + count.fail} \u2014 ${count.reasons[0]}`,
+      );
+    expect(broken, broken.join("\n   ")).toEqual([]);
+  }
 });
 
 describe(`agent simulation (${MODEL})`, () => {
@@ -135,14 +155,17 @@ describe(`agent simulation (${MODEL})`, () => {
           });
           // Always print: passes are as informative as failures when tuning.
           console.log(report(scenario.name, scenario.turns, outcomes));
-          const count = tally.get(scenario.name) ?? { pass: 0, fail: 0 };
+          const count = tally.get(scenario.name) ?? { pass: 0, fail: 0, reasons: [] as string[] };
           if (failures.length === 0) {
             count.pass++;
           } else {
             count.fail++;
+            count.reasons.push(failures.join("; "));
           }
           tally.set(scenario.name, count);
-          expect(failures, failures.join("\n   ")).toEqual([]);
+          if (RUNS === 1) {
+            expect(failures, failures.join("\n   ")).toEqual([]);
+          }
         },
         TURN_TIMEOUT_MS * scenario.turns.length,
       );

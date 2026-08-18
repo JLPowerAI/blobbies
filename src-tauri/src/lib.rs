@@ -1,8 +1,11 @@
 mod commands;
+mod composio;
 mod error;
 mod home;
 mod ocr;
 mod secrets;
+mod shell;
+mod skills;
 mod store;
 
 pub use error::Error;
@@ -26,6 +29,19 @@ pub fn run() {
             commands::ollama_installed,
             commands::ollama_start,
             commands::host_is_public,
+            composio::composio_cli_version,
+            composio::composio_cli_installable,
+            composio::composio_cli_install,
+            composio::composio_signed_in,
+            composio::composio_login_start,
+            composio::composio_login_poll,
+            composio::composio_accounts,
+            composio::composio_link_start,
+            composio::composio_search,
+            composio::composio_schema,
+            composio::composio_execute,
+            shell::shell_allowed,
+            shell::shell_run,
             store::store_read,
             store::store_write,
             store::store_delete_blob,
@@ -38,10 +54,12 @@ pub fn run() {
             ocr::ocr_image,
             secrets::secret_get,
             secrets::secret_set,
-            secrets::secret_delete
+            secrets::secret_delete,
+            skills::skills_list
         ])
         .setup(|app| {
             store::startup_maintenance(app.handle());
+            skills::seed_bundled(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())

@@ -160,6 +160,9 @@ mod tests {
             "TINFOIL-API-KEY",
             "../tinfoil-api-key",
             "openai-api-key",
+            // Composio's credential lives with its own CLI, not here: the
+            // keychain must not quietly accept a second copy.
+            "composio-api-key",
         ] {
             assert!(
                 matches!(entry_for(name), Err(Error::InvalidSliceKey)),

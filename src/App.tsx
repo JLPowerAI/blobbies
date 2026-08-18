@@ -39,6 +39,7 @@ import {
   saveAttachments,
 } from "@/lib/attachments";
 import type { BlobMemory, RosterAccess } from "@/lib/blob-tools";
+import { connectedAppNames } from "@/lib/composio";
 import {
   addressedResponders,
   type Group,
@@ -47,6 +48,8 @@ import {
   isPass,
   MAX_GROUP_MEMBERS,
   namedResponders,
+  owesAnswer,
+  stripSelfMention,
 } from "@/lib/groups";
 import { homeFor } from "@/lib/home";
 import type { Intent } from "@/lib/intent";
@@ -59,6 +62,7 @@ import { type ActiveRun, assertTransition, isTerminal, type RunTrigger } from "@
 import { nextFireTime } from "@/lib/schedule";
 import { startScheduler } from "@/lib/scheduler";
 import type { SearchResult } from "@/lib/search";
+import { listSkills, type Skill, skillLine } from "@/lib/skills";
 import * as store from "@/lib/store";
 import { openExternal } from "@/lib/tauri";
 import { isTinfoilModel } from "@/lib/tinfoil-model";
@@ -323,6 +327,23 @@ export function App() {
   });
   /** Local MCP servers; only enabled ones are contacted, on routine turns. */
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
+  /**
+   * Installed skills, named in every Blob's prompt.
+   *
+   * Loaded once at startup rather than per turn: the list only changes when
+   * the user adds or removes a folder, and it sits in the prompt's cached
+   * prefix, so re-reading it mid-session would risk moving that boundary for
+   * no benefit.
+   */
+  const [skills, setSkills] = useState<Skill[]>([]);
+  /**
+   * Display names of apps connected through Composio.
+   *
+   * Read at startup and refreshed when the Plugins modal closes, which is the
+   * only place a connection can change. Names rather than slugs: the prompt is
+   * read by a model that will repeat them back to the user.
+   */
+  const [connectedApps, setConnectedApps] = useState<string[]>([]);
   const [userName, setUserName] = useState(() =>
     readPreference("pref:userName", "Ken Kai").slice(0, MAX_USER_NAME_LENGTH),
   );
@@ -376,6 +397,8 @@ export function App() {
     userMemories,
     // Only enabled servers are ever contacted.
     mcpServers: mcpServers.filter((server) => server.enabled),
+    skills,
+    connectedApps,
   };
   const turnSettings = useRef(currentTurnSettings);
   turnSettings.current = currentTurnSettings;
@@ -451,6 +474,20 @@ export function App() {
             settings.plugins.filter((id): id is string => typeof id === "string"),
           );
         }
+      }
+
+      // Skills are seeded by Rust at startup, so this reads whatever is on
+      // disk by the time the app shell is up — bundled and user-added alike.
+      const installedSkills = await listSkills();
+      if (!cancelled) {
+        setSkills(installedSkills);
+      }
+
+      // Named in the prompt so a Blob knows what the user has connected; the
+      // tools themselves are not built yet, which the prompt says outright.
+      const apps = await connectedAppNames();
+      if (!cancelled) {
+        setConnectedApps(apps);
       }
 
       // Scheduler + recovery need every Blob's routines and last run — the
@@ -1262,7 +1299,16 @@ export function App() {
     const replyId = `agent-${crypto.randomUUID()}`;
     // Read once, from the ref: a scheduled routine runs the mount-render
     // closure, where every one of these is still its mount-time value.
-    const { model, userName, timezone, reasoning, userMemories, mcpServers } = turnSettings.current;
+    const {
+      model,
+      userName,
+      timezone,
+      reasoning,
+      userMemories,
+      mcpServers,
+      skills,
+      connectedApps,
+    } = turnSettings.current;
     if (model === "") {
       const text =
         "I don't have a model to think with yet \u2014 pick one in Settings \u2192 Model.";
@@ -1296,6 +1342,10 @@ export function App() {
             // Named in the prompt for both scopes so the Blob knows what it
             // has; the tools themselves stay routine-only.
             mcpServers: mcpServers.map((server) => server.name),
+            // Already sorted by the Rust side; passed through untouched so
+            // the cached prompt prefix stays byte-identical between turns.
+            skills: skills.map(skillLine),
+            connectedApps,
             runtime: isTinfoilModel(model) ? "enclave" : "local",
             ...(group === undefined
               ? {}
@@ -1376,8 +1426,24 @@ export function App() {
             // the one before it say exactly that. Withheld when the user named
             // this Blob — with the reminder present, a directly asked Blob
             // passed instead of answering.
+            // The hand-off offer rides with the obliged branch, because that
+            // is when it is needed: the router picks one Blob for a two-task
+            // message ("check X, then write it up"), so without this the
+            // second job silently never happens. Fixing that in
+            // `pickResponders` was tried three ways and regressed the 2b every
+            // time (see intent.ts).
+            //
+            // "TWO different kinds of work" is load-bearing, not padding. The
+            // broad version ("if part of this is another Blob's job") made the
+            // 2b hand off a plain one-task question too, turning "what did
+            // hosting cost?" into a wake-up call for a colleague. Measured on
+            // :2b and :9b: broad won the two-task case and lost the one-task
+            // case; this wording wins both on the 2b.
             (turn?.mustAnswer === true
-              ? ` ${userName} asked you by name, so answer — do not pass.]`
+              ? ` ${userName} asked you by name, so answer — do not pass. If it ` +
+                "asks for TWO different kinds of work and one is a colleague's, do " +
+                'your part, then end with "@Name" to hand over the rest. Otherwise ' +
+                "just answer.]"
               : " If one of them has already answered it, or you would only be " +
                 "agreeing or greeting, reply with exactly PASS.]"),
         });
@@ -1430,7 +1496,16 @@ export function App() {
      * streamBlobTurn (never token by token), so each call appends a finished
      * bubble rather than patching a growing one.
      */
-    const appendSegment = (content: string) => {
+    const appendSegment = (rawContent: string) => {
+      // A Blob signing its own name is dropped here rather than in the prompt:
+      // qwen3.5:2b opens with “@Ken …” 3/3 however the rule is worded (measured,
+      // both wordings, both prompt lengths). Only the first bubble is checked —
+      // that is where a signature goes, and mid-reply the same text is far more
+      // likely to be a real hand-off to a colleague.
+      const content =
+        group === undefined || bubbleCount > 0
+          ? rawContent
+          : stripSelfMention(rawContent, target.name);
       if (content.trim() === "") {
         return;
       }
@@ -1500,6 +1575,8 @@ export function App() {
           selfName: target.name,
         },
         mcpServers,
+        // Three meta-tools, gated on having something to reach.
+        hasConnectedApps: connectedApps.length > 0,
         signal: abort.signal,
         getSteeringMessages: () => (steering.length === 0 ? null : steering.splice(0)),
         onAsk: (pending) => {
@@ -1848,6 +1925,10 @@ export function App() {
         const picked = await pickResponders({ model, text, members, recent });
         queue = members.filter((member) => picked.includes(member.name));
       }
+      // Read before the loop: a hand-off appends to the queue, and a Blob that
+      // was alone when asked does not stop being alone because it pulled
+      // someone in afterwards.
+      const pickedCount = queue.length;
       const note = (text: string) =>
         appendMessage(convoId, {
           id: `event-${crypto.randomUUID()}`,
@@ -1910,7 +1991,11 @@ export function App() {
         outcome = await requestReply(speaker, history, {
           trigger: "user",
           group: { id: group.id, name: live.name, members: roster },
-          ...(obliged ? { mustAnswer: true } : {}),
+          // The sole picked Blob owes an answer as surely as a named one: PASS
+          // means "someone else has this", and there is nobody else. Told up
+          // front rather than caught after — qwen3.5:2b passed on "what did
+          // hosting cost last month?" in 3 of 5 runs, leaving the room silent.
+          ...(owesAnswer({ addressed: obliged, pickedCount }) ? { mustAnswer: true } : {}),
           ...(intent === undefined ? {} : { intent }),
         });
         // What this member just said, as its own bubbles.
@@ -1931,7 +2016,13 @@ export function App() {
         // answer. If the model emits the token anyway, that reply stands: a
         // visible stray "PASS" is a prompt problem the user can see, whereas
         // deleting it hides that the Blob answered at all.
-        if (!obliged && isPass(said)) {
+        //
+        // The sole picked Blob owes one too, for the same reason: PASS means
+        // “someone else has this”, and there is nobody else. Measured on
+        // qwen3.5:2b, which passed on “what did hosting cost last month?” in
+        // 3 of 5 runs — the router had picked exactly one Blob, so the room
+        // answered a direct question with silence.
+        if (!owesAnswer({ addressed: obliged, pickedCount }) && isPass(said)) {
           for (const bubble of bubbles) {
             dropMessage(convoId, bubble.id);
           }
@@ -2270,7 +2361,12 @@ export function App() {
         <PluginsModal
           installed={installedPlugins}
           onSetInstalled={setPluginInstalled}
-          onClose={() => setPluginsOpen(false)}
+          onClose={() => {
+            setPluginsOpen(false);
+            // This modal is the only place a connection can change, so it is
+            // the only place the prompt's app list needs re-reading.
+            void connectedAppNames().then(setConnectedApps);
+          }}
         />
       ) : null}
       {searchOpen ? (

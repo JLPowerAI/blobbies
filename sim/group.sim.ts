@@ -2,7 +2,14 @@ import type { Message } from "@kenkaiiii/gg-ai";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { Agent } from "@/data/agents";
 import { blobSystemPrompt, streamBlobTurn } from "@/lib/ai";
-import { addressedResponders, handoffTarget, isPass, namedResponders } from "@/lib/groups";
+import {
+  addressedResponders,
+  handoffTarget,
+  isPass,
+  namedResponders,
+  owesAnswer,
+  stripSelfMention,
+} from "@/lib/groups";
 import { applyGroupIntent, pickResponders, routeIntent } from "@/lib/intent";
 import type { BlobMemory } from "@/lib/memory";
 
@@ -39,8 +46,18 @@ import type { BlobMemory } from "@/lib/memory";
  * here without being copied.
  */
 
-const MODEL = process.env.SIM_MODEL ?? "qwen3.5:0.8b";
-const RUNS = Number(process.env.SIM_RUNS ?? "1");
+// 9b is the floor these scenarios are judged against. A 0.8b/2b model cannot
+// hold a multi-party room: measured, it invents facts rather than hand work to
+// the colleague whose job it is, so scenarios fail for reasons no prompt can
+// fix and every run carries noise that hides real regressions. Point SIM_MODEL
+// at something smaller to see how it degrades, not to gate on it.
+const MODEL = process.env.SIM_MODEL ?? "qwen3.5:9b";
+// Three by default, because one run cannot tell a regression from noise here:
+// a 20s turn at temperature 0 still varies, and every scenario that has ever
+// failed in this suite also passed on retry. Three runs with majority scoring
+// (see `score`) is the cheapest thing that is actually decisive. SIM_RUNS=1
+// for a quick look, and it reverts to failing on any single failure.
+const RUNS = Number(process.env.SIM_RUNS ?? "3");
 const TURN_TIMEOUT_MS = 120_000;
 const USER = { userName: "Ken Kai", timezone: "Asia/Kuala_Lumpur" };
 
@@ -110,7 +127,10 @@ function focusLine(transcript: GroupLine[], mustAnswer: boolean): Message[] {
             "it is a colleague replying to that same message \u2014 never answer a " +
             "colleague." +
             (mustAnswer
-              ? ` ${USER.userName} asked you by name, so answer \u2014 do not pass.]`
+              ? ` ${USER.userName} asked you by name, so answer \u2014 do not pass. If it ` +
+                "asks for TWO different kinds of work and one is a colleague's, do " +
+                'your part, then end with "@Name" to hand over the rest. Otherwise ' +
+                "just answer.]"
               : " If one of them has already answered it, or you would only be " +
                 "agreeing or greeting, reply with exactly PASS.]"),
         },
@@ -196,6 +216,7 @@ async function send(transcript: GroupLine[], text: string): Promise<Exchange> {
     });
     queue = TEAM.filter((blob) => names.includes(blob.name));
   }
+  const pickedCount = queue.length;
   // Singled out by name: obliged to answer. Routed to, pulled in by a
   // colleague, or swept up by @everyone: invited, and free to stay out.
   const named = namedResponders(TEAM, { text });
@@ -211,7 +232,14 @@ async function send(transcript: GroupLine[], text: string): Promise<Exchange> {
     spoken.add(speaker.id);
     const spoke = await streamBlobTurn({
       model: MODEL,
-      messages: requestFor(speaker, transcript, "Launch", named.has(speaker.id)),
+      // `mustAnswer` for a named Blob *and* the sole picked one, as the app
+      // decides it: with nobody to defer to, PASS is silence.
+      messages: requestFor(
+        speaker,
+        transcript,
+        "Launch",
+        owesAnswer({ addressed: named.has(speaker.id), pickedCount }),
+      ),
       // Pre-classified above, as the app does: a group turn must not route
       // (and must not write memories) on its own.
       intent,
@@ -222,11 +250,20 @@ async function send(transcript: GroupLine[], text: string): Promise<Exchange> {
     // Declining is a real outcome: it never reaches the transcript, so the
     // next speaker does not read a wall of "PASS" either. A Blob the user
     // named cannot opt out, exactly as the app decides it.
-    if (!named.has(speaker.id) && isPass(spoke)) {
+    // Mirrors the app: a Blob the user named owes an answer, and so does the
+    // only Blob picked — PASS means "someone else has this", and there is
+    // nobody else. Without the second half qwen3.5:2b answered a direct
+    // question with silence in 3 of 5 runs.
+    if (!owesAnswer({ addressed: named.has(speaker.id), pickedCount }) && isPass(spoke)) {
       passed.push(speaker.name);
       continue;
     }
-    const reply = spoke;
+    // Mirrors the app: a Blob signing its own name is dropped before the reply
+    // is banked (App.tsx `appendSegment`). Without this the sim would measure
+    // a pipeline the user never runs — and `handoffTarget` below reads a
+    // sentence-opening mention as a hand-off, so a self-signature would wake
+    // the speaker again.
+    const reply = stripSelfMention(spoke, speaker.name);
     transcript.push({ who: speaker.name, text: reply });
     replies.push({ who: speaker.name, text: reply });
     const pulled = handoffTarget(reply, TEAM, new Set(spoken));
@@ -252,7 +289,7 @@ function report(name: string, exchanges: Exchange[]): string {
   return lines.join("\n");
 }
 
-const tally = new Map<string, { pass: number; fail: number }>();
+const tally = new Map<string, { pass: number; fail: number; reasons: string[] }>();
 
 afterAll(() => {
   const rows = [...tally.entries()];
@@ -267,19 +304,43 @@ afterAll(() => {
     );
   }
   console.log(lines.join("\n"));
+
+  // The verdict, taken across runs. A scenario that failed more often than it
+  // passed is a real regression; one that failed once out of three is the model
+  // being a model.
+  if (RUNS > 1) {
+    const broken = rows
+      .filter(([, count]) => count.fail > count.pass)
+      .map(
+        ([name, count]) =>
+          `${name}: failed ${count.fail}/${count.pass + count.fail} \u2014 ${count.reasons[0]}`,
+      );
+    expect(broken, broken.join("\n   ")).toEqual([]);
+  }
 });
 
-/** Record a scenario's outcome, then fail on the collected reasons. */
+/**
+ * Record a scenario's outcome, and decide when to fail on it.
+ *
+ * With repeats, a single bad run is not a verdict: judged per-run this suite
+ * goes red on noise, which trains everyone to ignore it. So the failure is
+ * raised once, from `afterAll`, and only for a scenario that failed a majority
+ * of its runs. One run keeps the strict behaviour — there is no majority to
+ * take, and a single failure is all the signal there is.
+ */
 function score(name: string, failures: string[], printed: string) {
   console.log(printed);
-  const count = tally.get(name) ?? { pass: 0, fail: 0 };
+  const count = tally.get(name) ?? { pass: 0, fail: 0, reasons: [] as string[] };
   if (failures.length === 0) {
     count.pass++;
   } else {
     count.fail++;
+    count.reasons.push(failures.join("; "));
   }
   tally.set(name, count);
-  expect(failures, failures.join("\n   ")).toEqual([]);
+  if (RUNS === 1) {
+    expect(failures, failures.join("\n   ")).toEqual([]);
+  }
 }
 
 describe(`group simulation (${MODEL})`, () => {

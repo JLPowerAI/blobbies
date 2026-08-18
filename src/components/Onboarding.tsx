@@ -4,6 +4,13 @@ import { BlobAvatar } from "@/components/BlobAvatar";
 import { PluginTile } from "@/components/PluginsModal";
 import type { AgentShape, AvatarTone } from "@/data/agents";
 import { plugins } from "@/data/plugins";
+import {
+  composioCliVersion,
+  composioSignedIn,
+  installComposioCli,
+  pollComposioLogin,
+  startComposioLogin,
+} from "@/lib/composio";
 import { requestNotificationPermission } from "@/lib/notify";
 import { setSecret } from "@/lib/secrets";
 import { openExternal } from "@/lib/tauri";
@@ -16,9 +23,10 @@ import { openExternal } from "@/lib/tauri";
  * name uniqueness, the roster cap and the store write. A second creator here
  * would be a copy of that screen drifting away from it.
  */
-const STEPS = ["welcome", "blobs", "permissions", "tinfoil", "plugins"] as const;
+/** The flow's screens. */
+const ALL_STEPS = ["welcome", "blobs", "permissions", "tinfoil", "composio", "plugins"] as const;
 
-type Step = (typeof STEPS)[number];
+type Step = (typeof ALL_STEPS)[number];
 
 /**
  * The three Blobs that travel through the flow: the content of the "one job"
@@ -74,11 +82,41 @@ type PermissionState = "idle" | "granted" | "denied" | "unavailable";
  */
 const DATA_ROOT_LABEL = "~/.blobbies";
 
-/** Where Tinfoil hands out keys; opened in the real browser, not in-app. */
-const TINFOIL_KEYS_URL = "https://tinfoil.sh/dashboard/api-keys";
+/**
+ * Where Tinfoil hands out keys; opened in the real browser, not in-app.
+ *
+ * The dashboard root, deliberately not a deep link.
+ *
+ * `tinfoil.sh/dashboard/api-keys` redirects to `dash.tinfoil.sh/api-keys`,
+ * which 404s (measured). The root is the stable entry point; keys are one
+ * click from there, which beats landing someone on an error page.
+ */
+const TINFOIL_KEYS_URL = "https://dash.tinfoil.sh/";
 
 /** Idle, or the outcome of one save attempt. */
 type KeyState = "idle" | "saved" | "rejected";
+
+/**
+ * The Composio step's states, in the order a first run walks them.
+ *
+ * One machine rather than two flags because the states are sequential and
+ * mutually exclusive: there is no "installing while signed in", and a pair of
+ * booleans would allow several such nonsense combinations. `waiting` is the
+ * one that matters most — the browser is open, this app is polling, and the
+ * user needs a way out that is not force-quitting.
+ */
+type ComposioState =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "missing" }
+  | { kind: "installing" }
+  | { kind: "installed" }
+  | { kind: "opening" }
+  | { kind: "waiting" }
+  | { kind: "signedIn" }
+  // `retry` names which step failed, so "Try again" repeats *that* one. Without
+  // it a failed sign-in would offer a button wired to the installer.
+  | { kind: "failed"; message: string; retry: "install" | "signIn" };
 
 /**
  * What a pasted key must look like: one run of key characters, nothing else.
@@ -100,8 +138,8 @@ interface OnboardingProps {
 }
 
 /**
- * First-run flow: welcome, what a Blob is, permissions, Tinfoil and plugins,
- * ending on the app's Blob creator. Rendered over the app shell, so nothing
+ * First-run flow: welcome, what a Blob is, permissions, Tinfoil, Composio and
+ * plugins, ending on the app's Blob creator. Rendered over the app shell, so nothing
  * behind it is reachable until it finishes; `onDone` is the only way out
  * (plus the dev toggle in Settings, which re-opens it on demand).
  */
@@ -111,10 +149,11 @@ export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: O
   const [key, setKey] = useState("");
   const [keyState, setKeyState] = useState<KeyState>("idle");
   const [query, setQuery] = useState("");
+  const [composio, setComposio] = useState<ComposioState>({ kind: "idle" });
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  const step: Step = STEPS[index] ?? "welcome";
-  const last = index === STEPS.length - 1;
+  const step: Step = ALL_STEPS[index] ?? "welcome";
+  const last = index === ALL_STEPS.length - 1;
 
   // Move focus to the flow on mount and on every step, so the keyboard lands
   // on the new screen rather than wherever the old Next button was.
@@ -123,7 +162,7 @@ export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: O
     dialogRef.current?.focus();
   }, [step]);
 
-  const next = () => setIndex((current) => Math.min(current + 1, STEPS.length - 1));
+  const next = () => setIndex((current) => Math.min(current + 1, ALL_STEPS.length - 1));
   const back = () => setIndex((current) => Math.max(current - 1, 0));
 
   const grantNotifications = async () => {
@@ -142,6 +181,72 @@ export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: O
     const tinfoil = await import("@/lib/tinfoil");
     await tinfoil.configureTinfoilFromKeychain(true);
     setKeyState("saved");
+  };
+
+  // Probe when the Composio screen is reached, not on mount: it spawns a
+  // process, and most of a first run never needs the answer.
+  useEffect(() => {
+    if (step !== "composio" || composio.kind !== "idle") {
+      return;
+    }
+    setComposio({ kind: "checking" });
+    void (async () => {
+      const version = await composioCliVersion();
+      if (version === null) {
+        setComposio({ kind: "missing" });
+        return;
+      }
+      // Installed *and* already signed in is a real state on a replayed run;
+      // showing "Sign in" there would invite a pointless second login.
+      setComposio({ kind: (await composioSignedIn()) ? "signedIn" : "installed" });
+    })();
+  }, [step, composio.kind]);
+
+  const failure = (error: unknown, retry: "install" | "signIn") => ({
+    kind: "failed" as const,
+    retry,
+    // The Rust side returns a sentence written for this screen; anything else
+    // would be a bug, so it is shown rather than swallowed.
+    message: error instanceof Error ? error.message : String(error),
+  });
+
+  const installCli = async () => {
+    setComposio({ kind: "installing" });
+    try {
+      await installComposioCli();
+      // Back to `idle` so the probe above re-runs: a machine that was signed
+      // in before a reinstall should land on "Ready", not be asked to log in
+      // a second time.
+      setComposio({ kind: "idle" });
+    } catch (error) {
+      setComposio(failure(error, "install"));
+    }
+  };
+
+  /**
+   * Start the login, hand the URL to the real browser, then wait for it.
+   *
+   * Two calls rather than one because that is what makes this survivable from
+   * a GUI: `--no-wait` returns a URL immediately, and only the second call
+   * blocks. Doing it in one would mean holding a terminal open for ten
+   * minutes with nothing on screen.
+   */
+  const signIn = async () => {
+    setComposio({ kind: "opening" });
+    try {
+      const url = await startComposioLogin();
+      await openExternal(url);
+      setComposio({ kind: "waiting" });
+      await pollComposioLogin();
+      // Ask the disk rather than trusting the poll's answer: the CLI can save
+      // credentials while the poll still reports false (it competes with any
+      // other `--poll` for the same session), so the file is the only honest
+      // source. Checked directly rather than by bouncing through `idle`, which
+      // would re-run the probe and flash "Checking\u2026" over a finished login.
+      setComposio((await composioSignedIn()) ? { kind: "signedIn" } : { kind: "installed" });
+    } catch (error) {
+      setComposio(failure(error, "signIn"));
+    }
   };
 
   const trimmedQuery = query.trim().toLowerCase();
@@ -320,6 +425,82 @@ export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: O
           </div>
         );
 
+      case "composio":
+        return (
+          <div className="onboarding-step">
+            <h1 className="onboarding-heading">Hooking up your apps</h1>
+            <p className="onboarding-blurb">
+              Gmail, Calendar, Slack and the rest connect through Composio. One sign-in covers all
+              of them.
+            </p>
+            <div className="onboarding-card">
+              <div className="onboarding-row">
+                <span className="onboarding-row-text">
+                  <span className="onboarding-row-title">Composio</span>
+                  <span className="onboarding-row-blurb" role="status">
+                    {composio.kind === "idle" || composio.kind === "checking"
+                      ? "Checking\u2026"
+                      : composio.kind === "missing"
+                        ? "Not installed yet."
+                        : composio.kind === "installing"
+                          ? "Installing\u2026 this takes a moment."
+                          : composio.kind === "installed"
+                            ? "Installed. Sign in to connect your apps."
+                            : composio.kind === "opening"
+                              ? "Opening your browser\u2026"
+                              : composio.kind === "waiting"
+                                ? "Waiting for you in the browser\u2026 blank page? Open again."
+                                : composio.kind === "failed"
+                                  ? composio.message
+                                  : "Signed in. Your apps can connect now."}
+                  </span>
+                </span>
+                {composio.kind === "signedIn" ? (
+                  <span className="onboarding-row-state" data-granted={true}>
+                    <Check size={13} strokeWidth={2.2} aria-hidden="true" />
+                    Ready
+                  </span>
+                ) : composio.kind === "installed" ||
+                  composio.kind === "waiting" ||
+                  (composio.kind === "failed" && composio.retry === "signIn") ? (
+                  <button
+                    type="button"
+                    className="onboarding-allow"
+                    // Kept live while waiting: the poll runs for ten minutes,
+                    // and a browser tab closed by accident must not leave the
+                    // only way forward greyed out.
+                    onClick={() => void signIn()}
+                  >
+                    {composio.kind === "waiting"
+                      ? "Open again"
+                      : composio.kind === "failed"
+                        ? "Try again"
+                        : "Sign in"}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="onboarding-allow"
+                    disabled={
+                      composio.kind === "installing" ||
+                      composio.kind === "checking" ||
+                      composio.kind === "idle" ||
+                      composio.kind === "opening"
+                    }
+                    onClick={() => void installCli()}
+                  >
+                    {composio.kind === "installing"
+                      ? "Installing"
+                      : composio.kind === "failed"
+                        ? "Try again"
+                        : "Install"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+
       case "plugins":
         return (
           <div className="onboarding-step">
@@ -367,6 +548,11 @@ export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: O
 
   const compact = step !== "blobs";
 
+  /** Next is not the way past a setup step; Skip is, and it is right there. */
+  const needsKey =
+    (step === "tinfoil" && keyState !== "saved") ||
+    (step === "composio" && composio.kind !== "signedIn");
+
   return (
     <div
       ref={dialogRef}
@@ -410,18 +596,35 @@ export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: O
       {step === "welcome" ? null : (
         <div className="onboarding-actions">
           {/* The last Next hands over to the app's own creator, so it says so. */}
-          <button type="button" className="onboarding-next" onClick={last ? onDone : next}>
+          <button
+            type="button"
+            className="onboarding-next"
+            // On the key steps, Next means "I gave you a key" and Skip means
+            // "I did not". Letting an empty Next through collapses the two
+            // into one button, and the user who pressed it believes they
+            // set something up — finding out later, at the first app that
+            // will not connect. Skip stays one click away, so this is a
+            // rename of the exit, not a wall.
+            disabled={needsKey}
+            onClick={last ? onDone : next}
+          >
             {last ? "Make your first Blob" : "Next"}
           </button>
           <button type="button" className="onboarding-back" onClick={back}>
             Back
           </button>
-          {/* Tinfoil is the one step with something to decline, so it is the
-              one step that says so outright rather than leaving "Next with an
-              empty field" to be inferred. */}
+          {/* The two key steps are the ones with something to decline, so they
+              say so outright rather than leaving "Next with an empty field" to
+              be inferred. Composio's wording names the cost of skipping: the
+              next screen is a list of apps that cannot connect without it. */}
           {step === "tinfoil" && keyState !== "saved" ? (
             <button type="button" className="onboarding-skip" onClick={next}>
               Skip, I'll use the local model
+            </button>
+          ) : null}
+          {step === "composio" && composio.kind !== "signedIn" ? (
+            <button type="button" className="onboarding-skip" onClick={next}>
+              Skip, I'll connect my apps later
             </button>
           ) : null}
         </div>

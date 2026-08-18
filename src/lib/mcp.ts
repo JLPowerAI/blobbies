@@ -44,8 +44,39 @@ const REQUEST_TIMEOUT_MS = 20_000;
 /** Cap on a tool result, matching web_fetch: ~570 tokens of a 16k window. */
 const RESULT_LIMIT = 3_000;
 
-/** Cap on a server-supplied description — it is prompt text we did not write. */
-const DESCRIPTION_LIMIT = 400;
+/**
+ * Backstop on a server-supplied description — it is prompt text we did not
+ * write — deliberately set far above any real one.
+ *
+ * A tool's description *is* its interface: it tells the model when to reach
+ * for the tool, what each argument means, and when not to use it. Cutting it
+ * saves nothing that matters and makes the model call the tool wrongly or not
+ * at all — and the damage is invisible, since nothing errors, the tool is just
+ * used badly. Real descriptions run well past a thousand characters (this
+ * app's own tool docs do), so the previous 400 was severing live instructions
+ * mid-sentence.
+ *
+ * This bound exists only so a hostile server cannot paste a megabyte into
+ * every prompt; `MAX_TOOLS_PER_SERVER` bounds the count.
+ */
+const DESCRIPTION_LIMIT = 8_000;
+
+/**
+ * Apply the backstop on a word boundary, marking the elision.
+ *
+ * A hard `slice` ends mid-token: a description cut to `use \`--get-sche` reads
+ * as corruption to the user and as a broken flag name to the model. This only
+ * ever runs on abusive input — real descriptions are nowhere near the limit —
+ * but when it does, the result should still be a readable sentence.
+ */
+function clip(text: string): string {
+  if (text.length <= DESCRIPTION_LIMIT) {
+    return text;
+  }
+  const cut = text.slice(0, DESCRIPTION_LIMIT);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${lastSpace > 0 ? cut.slice(0, lastSpace) : cut}\u2026`;
+}
 
 /**
  * Flatten a server-supplied description into one harmless line.
@@ -60,7 +91,7 @@ const DESCRIPTION_LIMIT = 400;
  * detected.
  */
 function cleanDescription(text: string): string {
-  return (
+  return clip(
     text
       // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
       .replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ")
@@ -69,8 +100,7 @@ function cleanDescription(text: string): string {
       .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
       .replace(/[\u{e0000}-\u{e007f}]/gu, "")
       .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, DESCRIPTION_LIMIT)
+      .trim(),
   );
 }
 

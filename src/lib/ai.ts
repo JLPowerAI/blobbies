@@ -12,8 +12,10 @@ import {
   type MemoryAccess,
   makeAskTool,
   makeBlobTools,
+  makeComposioTools,
   makeFsTools,
   makeRosterTools,
+  makeShellTool,
   type PendingAsk,
   type RosterAccess,
 } from "@/lib/blob-tools";
@@ -476,6 +478,14 @@ export async function streamBlobTurn(options: {
    */
   mcpServers?: McpServerConfig[];
   /**
+   * Whether the user has at least one app connected through Composio.
+   *
+   * Gates the three app meta-tools. Offering them with nothing connected
+   * wastes rounds on a discovery that can only fail, and invites the model to
+   * promise an inbox it cannot reach.
+   */
+  hasConnectedApps?: boolean;
+  /**
    * Token usage for one agent loop. Fired once per loop, so a turn that
    * retries or runs a rescue round reports more than once — the caller sums.
    */
@@ -631,6 +641,12 @@ export async function streamBlobTurn(options: {
     const full = () => [...said, text].filter((segment) => segment.trim() !== "").join("\n\n");
     const memoryTools = new Set(["remember", "update_memory", "forget"]);
     const webTools = makeBlobTools(options.memory).filter((tool) => !memoryTools.has(tool.name));
+    // The connected-apps surface is three tools no matter how many apps are
+    // connected, so it costs a chat turn the same as a routine — and "read my
+    // email" is a chat request far more often than a scheduled one. Offered
+    // only once something is connected: with no account the model would spend
+    // rounds discovering there is nothing to call.
+    const appTools = options.hasConnectedApps === true ? makeComposioTools() : [];
     // Routine turns run unattended, so they get the full autonomous catalog;
     // chat turns keep the tuned web-only pair (see the scope option docs).
     const fs = options.home === undefined ? null : makeFsTools(options.home);
@@ -638,6 +654,10 @@ export async function streamBlobTurn(options: {
       scope === "routine"
         ? [
             ...webTools,
+            ...appTools,
+            // Unattended turns get the local shell; a chat turn does not need
+            // it and the surface is worth keeping small.
+            makeShellTool(),
             ...(fs === null ? [] : [...fs.readOnly, ...fs.mutating]),
             ...(options.roster === undefined
               ? []
@@ -654,7 +674,7 @@ export async function streamBlobTurn(options: {
               signal: options.signal,
             }),
           ]
-        : webTools;
+        : [...webTools, ...appTools];
     const loop = agentLoop(conversation, {
       provider: providerFor(options.model),
       model: options.model,

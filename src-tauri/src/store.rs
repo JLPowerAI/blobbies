@@ -261,7 +261,7 @@ fn migrate_legacy_root(app: &tauri::AppHandle, root: &Path) {
 }
 
 /// Recursive directory copy; files only, no symlink following.
-fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+pub(crate) fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;

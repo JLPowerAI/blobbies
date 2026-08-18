@@ -12,8 +12,27 @@ export async function greet(name: string): Promise<string> {
   return invoke<string>("greet", { name });
 }
 
-/** Opens a URL in the system browser. Rejects unless allowed by the capability scope. */
+/**
+ * Opens a URL in the system browser.
+ *
+ * Scoped by *scheme*, not host. Most links reaching here come from agent
+ * markdown, which is remote text citing arbitrary sites — a host allowlist
+ * could only ever be an incomplete list of dead links. The boundary that
+ * matters is that `javascript:`, `file:` and custom app schemes act on this
+ * machine when handed to the system opener, while http(s) can only open a
+ * browser. The capability scope enforces the same rule; this half fails with
+ * a reason the caller can show instead of an opaque refusal.
+ */
 export async function openExternal(url: string): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("That link is not a valid URL.");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error("Only web links can be opened.");
+  }
   return openUrl(url);
 }
 
@@ -48,4 +67,28 @@ export async function hostIsPublic(host: string): Promise<boolean> {
  */
 export function isTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
+}
+
+/** What a local command produced. `code` is null when it hit the deadline. */
+export interface CommandOutput {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+}
+
+/**
+ * Run one allowlisted program with literal arguments.
+ *
+ * Returns a string on refusal or failure — the caller shows it to the model,
+ * which can then tell the user rather than aborting the turn.
+ */
+export async function runCommand(program: string, args: string[]): Promise<CommandOutput | string> {
+  if (!isTauri()) {
+    return "Local commands only run in the desktop app.";
+  }
+  try {
+    return await invoke<CommandOutput>("shell_run", { program, args });
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }

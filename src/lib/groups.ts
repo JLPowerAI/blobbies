@@ -123,11 +123,79 @@ export const PASS_TOKEN = "PASS";
  * far worse than showing a stray "PASS", since the user can see the latter
  * but never sees what was silently deleted.
  */
+/**
+ * Whether this Blob owes an answer, so PASS must not silence it.
+ *
+ * Two ways to be obliged, and the second is the one that bites: a Blob the
+ * user addressed by name, and the *only* Blob the router picked. PASS means
+ * “a colleague has this” — with nobody else picked there is no colleague, so
+ * a pass leaves a direct question answered by silence. Measured on qwen3.5:2b,
+ * which did exactly that in 3 of 5 runs on “what did hosting cost last month?”
+ *
+ * `pickedCount` is read before the turn loop starts, never during it: a
+ * hand-off appends to the queue, and a Blob that was alone when it was asked
+ * does not stop being alone because it later pulled someone in.
+ */
+export function owesAnswer(options: { addressed: boolean; pickedCount: number }): boolean {
+  return options.addressed || options.pickedCount === 1;
+}
+
 export function isPass(reply: string): boolean {
   return new RegExp(
     `^[\\s*_"\u2018\u201c\`]*${PASS_TOKEN}\\b[\\s*_"\u2019\u201d\`]*([-\u2013\u2014:;.,!\u2026]|$)`,
     "i",
   ).test(reply.trim());
+}
+
+/**
+ * Drop a Blob's own name where it has signed its reply.
+ *
+ * Measured, not guessed: qwen3.5:2b opens with its own “@Ken …” on 3 runs out
+ * of 3, and no wording of the prompt rule changed that — abstract (“never
+ * start it with your own name”) and explicit (naming the handle) both failed,
+ * on the full section and the trimmed one. qwen3.5:9b obeys either. Since the
+ * rule cannot be taught to the small model, it is enforced here instead.
+ *
+ * It matters beyond tidiness: every message already carries its author, so a
+ * signature is noise — and `handoffTarget` reads a sentence-opening mention as
+ * “hand the next step to that Blob”, so a Blob signing its own name would wake
+ * *itself*.
+ *
+ * Deliberately narrow. Only the Blob's own name, only at the very start, only
+ * when punctuation or whitespace follows — so “@Kendra …” survives for a Blob
+ * called Ken, and a genuine hand-off to a colleague is never touched. Anything
+ * it fails to catch is cosmetic; anything it wrongly ate would be a reply the
+ * user never sees.
+ */
+export function stripSelfMention(reply: string, selfName: string): string {
+  const name = selfName.trim();
+  if (name === "") {
+    return reply;
+  }
+  // The name reaches here from user-editable Blob config, so it is escaped
+  // rather than interpolated into a pattern raw.
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Two shapes, and the separator is what makes each safe:
+  //   “@Ken …”  an @handle is already unambiguous, so a space is enough.
+  //   “Ken: …”  a bare name needs a colon or dash, or “Ken and Quill agree”
+  //             loses its subject and “Ken's report” becomes “'s report”.
+  // `\b` is avoided throughout: word boundaries are defined against word
+  // characters, so they never match after a name ending in punctuation
+  // (“C++”) and the strip would silently stop working for those Blobs.
+  const tail = "(?![\\p{L}\\p{N}_])";
+  const open = "[\\s*_\"'‘“]*";
+  const handle = new RegExp(`^${open}@${escaped}${tail}[\\s]*[:,—–-]?[\\s]+`, "iu");
+  const bare = new RegExp(`^${open}${escaped}${tail}[\\s]*[:—–-][\\s]*`, "iu");
+  const opened = handle.test(reply) ? reply.replace(handle, "") : reply.replace(bare, "");
+  // Also at the end, where a 9b model signs off: “… How can I help today? @Scout”.
+  // Only the @handle form and only its own — a trailing “@Quill” is the hand-off
+  // this design runs on, and `handoffTarget` reads it. Self is never a hand-off:
+  // the Blob has already spoken, so it can only be a signature.
+  const signOff = new RegExp(`[\\s—–-]*@${escaped}${tail}[\\s.!?]*$`, "iu");
+  const stripped = opened.replace(signOff, "");
+  // Never return an empty reply: if the name was the whole message, the
+  // original is less confusing than a blank bubble.
+  return stripped.trim() === "" ? reply : stripped;
 }
 
 /**

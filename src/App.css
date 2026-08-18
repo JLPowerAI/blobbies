@@ -1922,6 +1922,16 @@ select:focus:not(:focus-visible) {
   transition: border-color var(--duration-fast) var(--ease-standard);
 }
 
+/* Placeholder for a stored key: same box as the input it replaces, so the card
+   keeps its height and nothing below shifts when a key is saved. */
+.modal-name-input-static {
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+  letter-spacing: 1px;
+  user-select: none;
+}
+
 .modal-name-input:focus {
   outline: none;
   border-color: var(--border-strong);
@@ -2265,14 +2275,19 @@ a.modal-button {
   font-size: 12px;
 }
 
+/* Reads as a pill in the same slot as Connect, so a row's state is legible
+   from the shape alone — solid green where the action button is gray. Same
+   metrics as `.modal-button` + `.plugin-add` so the two never jump when a row
+   flips from one to the other. White text in both themes: it sits on the green
+   fill, not on the surface. */
 .plugin-added {
   flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12.5px;
-  color: var(--text-secondary);
-  padding-inline-end: 4px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--accent-green);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .plugins-show-more {
@@ -4739,7 +4754,12 @@ a.modal-button {
   color: var(--accent-green);
 }
 
-.onboarding-key-note[data-state="rejected"] {
+/* Composio's field can fail three ways where Tinfoil's fails one. A bad paste
+   and a key Composio refused are both the user's to fix, so both read as an
+   error; `unreachable` deliberately does not, because nothing is wrong with
+   what they typed and the fix is to try again. */
+.onboarding-key-note[data-state="rejected"],
+.onboarding-key-note[data-state="malformed"] {
   color: var(--status-err);
 }
 
