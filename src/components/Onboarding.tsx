@@ -27,32 +27,33 @@ type Step = (typeof STEPS)[number];
  *
  * The compact positions are deliberately uneven — different insets, heights
  * and scales — because three evenly spaced marks at one size read as a
- * progress indicator. They sit outside the 460px content column, as
- * percentages of the 680px trio rail, so nothing collides with a heading.
+ * progress indicator. They are percentages of the trio box in CSS, kept
+ * under 20% or over 80% so every Blob sits in the margin beside the content
+ * column and none can land on a card or a heading.
  */
 const TRIO = [
   {
     job: "Inbox Triage",
     tone: "red",
     shape: "droplet",
-    compactX: "14%",
-    compactY: "6%",
+    compactX: "9%",
+    compactY: "14%",
     compactScale: 0.34,
   },
   {
     job: "Monday Recap",
     tone: "teal",
     shape: "cloud",
-    compactX: "-2%",
-    compactY: "13%",
+    compactX: "4%",
+    compactY: "63%",
     compactScale: 0.26,
   },
   {
     job: "Pipeline Watch",
     tone: "blue",
     shape: "squircle",
-    compactX: "104%",
-    compactY: "15%",
+    compactX: "93%",
+    compactY: "27%",
     compactScale: 0.42,
   },
 ] as const satisfies readonly {
@@ -402,7 +403,9 @@ export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: O
         </div>
       )}
 
-      {renderStep()}
+      {/* Scrolls when the content outgrows a short window; the actions below
+          sit outside it, so Next and Back are reachable at any size. */}
+      <div className="onboarding-body">{renderStep()}</div>
 
       {step === "welcome" ? null : (
         <div className="onboarding-actions">

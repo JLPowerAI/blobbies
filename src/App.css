@@ -4386,11 +4386,42 @@ a.modal-button {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 28px;
-  padding: 64px 24px 40px;
+  gap: clamp(14px, 3vh, 28px);
+  /* Top padding clears the traffic lights; both ends shrink on a short
+     window so the actions keep their place instead of being pushed off. */
+  padding: clamp(30px, 7vh, 64px) 24px clamp(20px, 4vh, 40px);
   background: var(--surface-chat);
   animation: pane-fade-in 200ms var(--ease-standard);
+  overflow: hidden;
+  /* Plain (inheriting) twin of the registered `--orbit-r` below, which
+     cannot inherit. The "one job" step reserves its height from this, since
+     the orbiting Blobs are absolutely positioned and measure zero. */
+  --orbit-radius: clamp(74px, 16vh, 132px);
+}
+
+/* The only scrolling region: content that does not fit scrolls *inside* the
+   flow, so `.onboarding-actions` below is never pushed past the bottom edge.
+   `min-height: 0` is what lets a flex child shrink enough to scroll at all. */
+.onboarding-body {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  /* Grow never, shrink yes: on a tall window it hugs its content so the
+     actions sit directly under it instead of being shoved to the bottom
+     edge; on a short one it gives way and scrolls. */
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-items: center;
+  /* Not `justify-content: center`: in a scroll container that centres the
+     overflow too, and the part above the fold becomes unreachable — a
+     heading sliced in half with no way to scroll up to it. Auto margins on
+     the child centre it while there is room and collapse when there is not. */
+  justify-content: flex-start;
   overflow-y: auto;
+}
+
+.onboarding-body > .onboarding-step {
+  margin-block: auto;
 }
 
 .onboarding:focus {
@@ -4411,15 +4442,24 @@ a.modal-button {
 }
 
 /* The trio sits behind the copy: on the "one job" step it is the content,
-   everywhere else it shrinks up and out of the way. A fixed 680px rail, not
-   the window width, so the compact percentages below keep the three reading
-   as one cluster rather than drifting apart on a wide display. */
+   everywhere else it shrinks up and out of the way.
+
+   A box centred on the flow rather than the window: the compact percentages
+   below are relative to *this*, so the three stay pinned around the content
+   at any size. Sized to the window it would track the window instead — which
+   stranded them in the corners of a 1080p display and drove them into the
+   heading on a short one. */
 .onboarding-trio {
   position: absolute;
-  inset-block: 0;
-  inset-inline-start: 50%;
-  width: min(680px, 100%);
-  translate: -50% 0;
+  top: 50%;
+  left: 50%;
+  /* Wider than the 460px content column on purpose: the compact positions
+     below are percentages of this box, and keeping them under ~20% or over
+     ~80% puts every Blob in the side margin, so none can land on a card or
+     a heading however the column grows. */
+  width: min(900px, 100%);
+  height: min(460px, 100%);
+  translate: -50% -50%;
   pointer-events: none;
 }
 
@@ -4445,7 +4485,9 @@ a.modal-button {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  --orbit-r: 132px;
+  /* Shrinks with the window so the carousel still clears the heading above
+     and the buttons below in a 520px-tall window. */
+  --orbit-r: var(--orbit-radius);
   translate: -50% -50%;
   /* One revolution per 40s: movement you notice only if you watch for it. */
   animation: trio-orbit 40s linear infinite;
@@ -4474,6 +4516,16 @@ a.modal-button {
   --orbit-r: 0px;
 }
 
+/* Small window: the compact trio is decoration, and there is no room for it
+   beside the content without landing on a heading. Decoration that collides
+   is worse than no decoration, so it goes. The "one job" step keeps its trio
+   at every size — there it *is* the content. */
+@media (max-width: 900px), (max-height: 660px) {
+  .onboarding-trio[data-compact="true"] {
+    display: none;
+  }
+}
+
 .onboarding-trio-label {
   padding: 7px 16px;
   border-radius: 999px;
@@ -4496,8 +4548,13 @@ a.modal-button {
   z-index: 1;
 }
 
-.onboarding-step-blobs {
-  margin-bottom: auto;
+/* The exception: its heading stays at the top and the trio owns the middle,
+   so only the bottom margin is auto. The min-height is that middle — the
+   orbit is absolutely positioned and contributes no height, so without it
+   the step collapses to its heading and the buttons ride up into the Blobs. */
+.onboarding-body > .onboarding-step-blobs {
+  min-height: calc(2 * var(--orbit-radius) + 176px);
+  margin-block: 0 auto;
 }
 
 .onboarding-wordmark {
@@ -4760,8 +4817,9 @@ a.modal-button {
 .onboarding-actions {
   display: flex;
   width: min(340px, 100%);
+  flex-shrink: 0;
   flex-direction: column;
-  gap: 14px;
+  gap: clamp(8px, 1.6vh, 14px);
 }
 
 .onboarding-next,
@@ -4803,6 +4861,30 @@ a.modal-button {
 
 .onboarding-skip:hover {
   color: var(--text-primary);
+}
+
+/* Last in the section on purpose: a media query adds no specificity, so
+   these would lose to the base rules above if they came first.
+
+   Short window (the 520px floor `tauri.conf.json` allows): tighten the type
+   and the rows so the densest step still fits without scrolling. It scrolls
+   correctly when it does not — this only keeps the common case whole. */
+@media (max-height: 660px) {
+  .onboarding-heading {
+    font-size: 25px;
+  }
+
+  .onboarding-row {
+    padding: 9px 16px;
+  }
+
+  .onboarding-row-blurb {
+    font-size: 12px;
+  }
+
+  .onboarding-plugins {
+    max-height: 38vh;
+  }
 }
 
 /* ----------------------------------------------- dark-only recolors */
