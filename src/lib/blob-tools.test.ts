@@ -180,6 +180,56 @@ describe("blob tools", () => {
     expect(stored).toHaveLength(4);
   });
 
+  it("evicts the stalest fact at the limit instead of refusing to remember", async () => {
+    // Previously the tool answered "Memory is full — forget something first"
+    // and dropped the write, so memory silently stopped working at the cap
+    // until the user pruned it by hand. The oldest untouched fact goes, and
+    // the reply names it so the model can offer to re-save it.
+    let stored: BlobMemory[] = Array.from({ length: MEMORY_LIMIT }, (_, index) => ({
+      id: `id${index}`,
+      text: `saved fact number ${index}`,
+      createdAt: index + 1,
+    }));
+    const tools = makeBlobTools({
+      list: () => stored,
+      save: (next) => {
+        stored = next;
+      },
+    });
+
+    const result = await tools
+      .find((tool) => tool.name === "remember")
+      ?.execute({ text: "Ken moved to Lisbon" }, context);
+    expect(stored).toHaveLength(MEMORY_LIMIT);
+    expect(stored.map((memory) => memory.text)).toContain("Ken moved to Lisbon");
+    expect(stored.map((memory) => memory.text)).not.toContain("saved fact number 0");
+    expect(result).toContain("saved fact number 0");
+  });
+
+  it("treats a requoted fact as known, without spending a reconcile call", async () => {
+    // The per-Blob path used to compare case-sensitively while the group path
+    // did not, so restating a fact duplicated in a 1-to-1 chat but not in a
+    // room. Reconciling a fact already on the list is also a model call on
+    // the turn's critical path to be told what a string compare knew.
+    let stored: BlobMemory[] = [{ id: "aaa11111", text: "Biscuit is a beagle", createdAt: 1 }];
+    const reconcile = vi.fn(async () => []);
+    const tools = makeBlobTools({
+      list: () => stored,
+      save: (next) => {
+        stored = next;
+      },
+      reconcile,
+    });
+
+    const result = await tools
+      .find((tool) => tool.name === "remember")
+      ?.execute({ text: "biscuit  IS a Beagle" }, context);
+    expect(result).toBe("Already remembered.");
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.text).toBe("Biscuit is a beagle");
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
   it("budgets the memory block so it cannot overrun a local context window", () => {
     // Worst case the store allows: every slot filled to the text cap.
     const full: BlobMemory[] = Array.from({ length: MEMORY_LIMIT }, (_, index) => ({

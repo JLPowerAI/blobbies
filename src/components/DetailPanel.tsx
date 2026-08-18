@@ -2,7 +2,13 @@ import { ChevronsRight, Clock, FileText, Plus, Settings, Trash2, User, Users } f
 import { useEffect, useRef, useState } from "react";
 import type { Agent, Routine } from "@/data/agents";
 import { type HomeEntry, homeFor } from "@/lib/home";
-import { type BlobMemory, MEMORY_LIMIT, MEMORY_TEXT_LIMIT } from "@/lib/memory";
+import {
+  applyMemoryWrite,
+  type BlobMemory,
+  MEMORY_LIMIT,
+  MEMORY_TEXT_LIMIT,
+  type MemoryWrite,
+} from "@/lib/memory";
 
 /** "12.4k", "380k", "1.2M" — a glance, not an invoice. */
 function formatTokens(count: number): string {
@@ -201,6 +207,18 @@ function MemoriesSection({
   const patchFor = (scope: "blob" | "user", next: BlobMemory[]) =>
     scope === "blob" ? { blob: next } : { user: next };
 
+  /**
+   * Every edit here goes through the same reducer the `remember` tool and the
+   * group router use, so a fact typed by hand is deduped, reconciled against
+   * what it contradicts, and capped exactly like one the Blob saved itself.
+   */
+  const write = (scope: "blob" | "user", change: MemoryWrite) => {
+    const result = applyMemoryWrite(listFor(scope), change);
+    if (result.changed) {
+      onChange(patchFor(scope, result.memories));
+    }
+  };
+
   const commit = () => {
     const editedId = target.current;
     target.current = null;
@@ -208,48 +226,43 @@ function MemoriesSection({
     if (editedId === null) {
       return;
     }
-    // The store caps memory text too; cap here so the user sees what is kept.
-    const text = draft.trim().slice(0, MEMORY_TEXT_LIMIT);
+    const text = draft.trim();
     if (editedId === NEW_MEMORY) {
-      if (text !== "" && memories.length < MEMORY_LIMIT) {
-        onChange({
-          blob: [...memories, { id: crypto.randomUUID().slice(0, 8), text, createdAt: Date.now() }],
-        });
-      }
+      write("blob", { kind: "save", text });
       return;
     }
     const row = rows.find((candidate) => candidate.memory.id === editedId);
     if (row === undefined) {
       return;
     }
-    const list = listFor(row.scope);
     // Emptying the text deletes the fact: the alternative is a blank row that
     // costs prompt space and says nothing.
-    onChange(
-      patchFor(
-        row.scope,
-        text === ""
-          ? list.filter((memory) => memory.id !== editedId)
-          : list.map((memory) =>
-              memory.id === editedId ? { ...memory, text, updatedAt: Date.now() } : memory,
-            ),
-      ),
+    write(
+      row.scope,
+      text === "" ? { kind: "delete", ref: editedId } : { kind: "update", ref: editedId, text },
     );
   };
 
   const remove = (id: string, scope: "blob" | "user") => {
-    onChange(
-      patchFor(
-        scope,
-        listFor(scope).filter((memory) => memory.id !== id),
-      ),
-    );
+    write(scope, { kind: "delete", ref: id });
   };
 
-  /** Move a fact between scopes, keeping its id and createdAt. */
+  /**
+   * Move a fact between scopes, keeping its id and createdAt.
+   *
+   * The fact is reconciled on arrival, so promoting "trains on Fridays" into a
+   * shared scope that still says "trains on Mondays" replaces it instead of
+   * leaving both for every Blob to read. It only leaves the source scope if
+   * the destination accepted it: a destination that already knows the fact
+   * rejects the write, and dropping it from the source anyway would delete a
+   * memory the user asked to move. The full case never reaches here — the
+   * button is disabled at the cap, because a user looking at the list should
+   * prune it deliberately rather than have the oldest fact evicted under them.
+   */
   const moveScope = (memory: BlobMemory, from: "blob" | "user") => {
     const to = from === "blob" ? "user" : "blob";
-    if (listFor(to).length >= MEMORY_LIMIT) {
+    const arrived = applyMemoryWrite(listFor(to), { kind: "adopt", memory });
+    if (!arrived.changed) {
       return;
     }
     onChange({
@@ -257,7 +270,7 @@ function MemoriesSection({
         from,
         listFor(from).filter((candidate) => candidate.id !== memory.id),
       ),
-      ...patchFor(to, [...listFor(to), memory]),
+      ...patchFor(to, arrived.memories),
     });
   };
 

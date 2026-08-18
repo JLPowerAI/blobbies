@@ -17,8 +17,8 @@ import type { Settings } from "@/lib/store";
  * the real pieces meet:
  *   - roster tools driven against App's own `RosterAccess`, not a stub;
  *   - token accounting across an ask, the one place a run spans two turns;
- *   - Settings edits (instructions, memory scope) landing in the next
- *     turn's system prompt;
+ *   - Settings edits (memory scope) landing in the next turn's system
+ *     prompt, and the prompt dialog showing exactly what a turn sends;
  *   - two roster writes inside one turn composing instead of clobbering;
  *   - a turn fired by the scheduler rather than by typing, which runs a
  *     different closure and so can read entirely different values.
@@ -539,25 +539,31 @@ describe("turn wiring", () => {
     expect((await store.loadRoster())?.map((blob) => blob.name)).toEqual(["Ken"]);
   });
 
-  it("instructions typed in Settings reach the next turn's system prompt", async () => {
+  it("shows the system prompt a turn actually sends, not an approximation", async () => {
+    // The dialog is the only place a user can check what their Blob was told,
+    // so it is worth nothing if it renders a prompt built differently from
+    // the real one — a preview that drifts is worse than none.
     const user = userEvent.setup();
-    script = [() => "Done.", () => "Done again."];
+    script = [() => "Done."];
     mountWithModel();
     await createFirstBlob(user, "Ken");
     await say(user, "hello");
-
-    const systemOf = (index: number) =>
-      String(calls[index]?.messages.find((message) => message.role === "system")?.content ?? "");
-    expect(systemOf(0)).not.toContain("Reply only in haiku.");
+    const sent = String(
+      calls[0]?.messages.find((message) => message.role === "system")?.content ?? "",
+    );
+    expect(sent).not.toBe("");
 
     await user.click(screen.getByRole("button", { name: "Show details panel" }));
     await user.click(screen.getByRole("button", { name: "Open settings" }));
-    await user.type(screen.getByLabelText("Instructions"), "Reply only in haiku.");
+    await user.click(screen.getByRole("button", { name: "System prompt" }));
 
-    await say(user, "again");
-    // Verbatim, and it replaced the generated role rather than joining it.
-    expect(systemOf(1)).toContain("Reply only in haiku.");
-    expect(systemOf(1)).not.toContain("This is never final");
+    const dialog = screen.getByRole("dialog", { name: "Ken system prompt" });
+    expect(dialog.textContent).toContain(sent);
+
+    await user.click(within(dialog).getByRole("button", { name: "Close system prompt" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Ken system prompt" })).not.toBeInTheDocument(),
+    );
   });
 
   it("a promoted memory reaches the prompt as a shared fact, not a numbered one", async () => {

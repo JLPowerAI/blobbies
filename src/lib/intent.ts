@@ -1,5 +1,11 @@
 import type { Message } from "@kenkaiiii/gg-ai";
-import { type BlobMemory, MEMORY_LIMIT, MEMORY_TEXT_LIMIT, renderMemories } from "@/lib/blob-tools";
+import {
+  applyMemoryWrite,
+  type BlobMemory,
+  knownFact,
+  normaliseFact,
+  renderMemories,
+} from "@/lib/blob-tools";
 import { OLLAMA_URL } from "@/lib/ollama";
 import { OLLAMA_KEEP_ALIVE, OLLAMA_NUM_CTX } from "@/lib/ollama-native";
 import { isTinfoilModel, tinfoilStructuredCall } from "@/lib/tinfoil";
@@ -306,13 +312,13 @@ export async function applyGroupIntent(
   options: { model: string; memories: BlobMemory[]; signal?: AbortSignal },
 ): Promise<BlobMemory[] | null> {
   if (intent.action === "save_fact") {
-    const text = (intent.fact ?? "").trim().slice(0, MEMORY_TEXT_LIMIT);
+    const text = normaliseFact(intent.fact ?? "");
     if (text === "") {
       return null;
     }
-    // Same duplicate guard as the per-Blob path: a group repeats itself more,
-    // not less, because several Blobs may prompt the user to restate things.
-    if (options.memories.some((memory) => memory.text.toLowerCase() === text.toLowerCase())) {
+    // A duplicate is not worth a model call: a group repeats itself more, not
+    // less, because several Blobs may prompt the user to restate things.
+    if (knownFact(options.memories, text)) {
       return null;
     }
     const obsolete = await reconcileMemories({
@@ -321,18 +327,22 @@ export async function applyGroupIntent(
       existing: options.memories,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
-    const kept = options.memories.filter((_, index) => !obsolete.includes(index + 1));
-    return [
-      ...kept.slice(Math.max(0, kept.length - (MEMORY_LIMIT - 1))),
-      { id: crypto.randomUUID(), text, createdAt: Date.now() },
-    ];
+    // Same reducer the per-Blob `remember` tool uses, against the shared
+    // scope. A fact told to a room belongs to the room, but it must be
+    // deduped, reconciled and capped exactly as a private one is — the two
+    // paths having their own rules is what let one sentence produce two
+    // different memories depending on where it was said.
+    const result = applyMemoryWrite(options.memories, {
+      kind: "save",
+      text,
+      stale: obsolete,
+    });
+    return result.changed ? result.memories : null;
   }
   if (intent.action === "delete_fact") {
-    const at = (intent.memoryNumber ?? 0) - 1;
-    if (at < 0 || at >= options.memories.length) {
-      return null;
-    }
-    return options.memories.filter((_, index) => index !== at);
+    const at = intent.memoryNumber ?? 0;
+    const result = applyMemoryWrite(options.memories, { kind: "delete", ref: String(at) });
+    return result.changed ? result.memories : null;
   }
   return null;
 }

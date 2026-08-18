@@ -4,7 +4,7 @@ import { z } from "zod";
 import { MAX_BLOB_NAME_LENGTH, MAX_BLOBS } from "@/data/agents";
 import { composioExecute, composioSchema, composioSearch } from "@/lib/composio";
 import type { HomeBackend } from "@/lib/home";
-import { type BlobMemory, MEMORY_LIMIT, MEMORY_TEXT_LIMIT } from "@/lib/memory";
+import { applyMemoryWrite, type BlobMemory, knownFact, normaliseFact } from "@/lib/memory";
 import { hostIsPublic, isTauri, runCommand } from "@/lib/tauri";
 
 /**
@@ -38,10 +38,15 @@ export type { BlobMemory } from "@/lib/memory";
  * and web tools in here. Re-exported for back-compat.
  */
 export {
+  applyMemoryWrite,
+  factOverlap,
+  knownFact,
   MEMORY_LIMIT,
   MEMORY_PROMPT_CHARS,
   MEMORY_TEXT_LIMIT,
+  normaliseFact,
   renderMemories,
+  resolveMemory,
 } from "@/lib/memory";
 
 /** In a plain browser (dev/tests) the plugin IPC is absent; fall back. */
@@ -411,179 +416,6 @@ export interface MemoryAccess {
   reconcile?: (fact: string, existing: BlobMemory[]) => Promise<number[]>;
 }
 
-/**
- * Words too common to signal that two facts are about the same thing.
- *
- * Includes the ways a model refers to the person the memory is about: the sim
- * caught "Ken trains on Mondays" and "the user trains on Tuesdays" scoring
- * 0.25 purely because the subject was worded differently, so a correction was
- * stored as a second, contradicting fact.
- */
-const STOP_WORDS = new Set([
-  "user",
-  "users",
-  "i",
-  "me",
-  "my",
-  "mine",
-  "you",
-  "your",
-  "yours",
-  "he",
-  "she",
-  "they",
-  "them",
-  "their",
-  "his",
-  "her",
-  "now",
-  "new",
-  "also",
-  "prefers",
-  "prefer",
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "for",
-  "has",
-  "in",
-  "is",
-  "it",
-  "of",
-  "on",
-  "or",
-  "the",
-  "to",
-  "was",
-  "with",
-]);
-
-function contentWords(text: string): Set<string> {
-  return new Set(
-    text
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((word) => word !== "" && !STOP_WORDS.has(word)),
-  );
-}
-
-/**
- * True when two facts about the same topic are alternatives rather than
- * additions — the kind a correction replaces.
- *
- * Overlap alone cannot tell "I train Mondays" -> "I train Fridays" (a
- * correction) from "allergic to peanuts" + "allergic to shellfish" (two real
- * facts): both score 0.50. The difference is that a correction *replaces* the
- * distinguishing word, while an addition keeps the old one meaningful. Only
- * time-like words are treated as replaceable, because a person has one
- * training schedule but can have several allergies.
- */
-const SCHEDULE_WORDS =
-  /\b(mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?|mornings?|afternoons?|evenings?|nights?|daily|weekly|weekends?|weekdays?|\d{1,2}(:\d{2})?\s?(am|pm))\b/i;
-
-/**
- * Fraction of the shorter fact's content words that also appear in the other.
- * 1 means one fact's words are wholly contained in the other.
- */
-export function factOverlap(left: string, right: string): number {
-  const a = contentWords(left);
-  const b = contentWords(right);
-  const smaller = a.size <= b.size ? a : b;
-  const larger = a.size <= b.size ? b : a;
-  if (smaller.size === 0) {
-    return 0;
-  }
-  let shared = 0;
-  for (const word of smaller) {
-    if (larger.has(word)) {
-      shared++;
-    }
-  }
-  return shared / smaller.size;
-}
-
-/**
- * Above this, two facts are treated as the same fact restated — the new one
- * supersedes the old instead of sitting beside it. Facts about different
- * subjects score 0.00, so the gap between "same topic" and "unrelated" is
- * wide: measured 0.33-0.67 for corrections, 0.00 for unrelated pairs.
- *
- * Tuned against sim/: "Ken trains on Mondays and Thursdays" vs "…Tuesdays
- * and Fridays" scores 0.5 (a correction, replace); "Ken is allergic to
- * peanuts" against either scores 0.33 (unrelated, keep both).
- *
- * simplification: word overlap cannot tell a corrected fact from two genuinely
- * different facts that share phrasing — "Ken likes coffee" then "Ken likes
- * tea" merges. The tool result names what it replaced so the model can re-add
- * it; the alternative, silently accumulating contradictions, misleads on every
- * later turn instead of occasionally losing one fact.
- */
-const SUPERSEDE_OVERLAP = 0.3;
-
-/**
- * At or above this, the new text is a restatement of the old fact whatever it
- * is about, so it supersedes without needing the schedule test.
- */
-const RESTATEMENT_OVERLAP = 0.8;
-
-/**
- * Find the memory a model meant, given whatever it put in the `id` argument.
- *
- * Small models cannot copy an opaque id: the sim caught qwen3.5:0.8b writing
- * "aaaaaaa1111" for the memory "aaa11111", silently doing nothing. Memories
- * are therefore listed to the model by position, and this accepts a position,
- * a real id, or a distinctive phrase from the fact itself.
- */
-export function resolveMemory(memories: BlobMemory[], reference: string): BlobMemory | undefined {
-  const needle = reference.trim().toLowerCase();
-  if (needle === "") {
-    return undefined;
-  }
-  // Position as shown in the prompt, 1-based. "[2]" and "2" both work.
-  const position = Number.parseInt(needle.replace(/[^0-9]/g, ""), 10);
-  if (
-    /^\[?\d+\]?$/.test(needle) &&
-    Number.isInteger(position) &&
-    position >= 1 &&
-    position <= memories.length
-  ) {
-    return memories[position - 1];
-  }
-  const exact = memories.find((memory) => memory.id.toLowerCase() === needle);
-  if (exact !== undefined) {
-    return exact;
-  }
-  // Last resort: the model quoted the fact instead of its id.
-  return memories.find(
-    (memory) =>
-      memory.text.toLowerCase().includes(needle) || needle.includes(memory.text.toLowerCase()),
-  );
-}
-
-/**
- * Word-overlap fallback for when no model judge is available (unit tests,
- * offline). Catches a restatement of the same fact, and a replaced schedule;
- * it cannot see that "we broke up" invalidates "my girlfriend is Sarah".
- */
-function supersededByOverlap(memories: BlobMemory[], text: string): BlobMemory[] {
-  const best = memories.reduce<{ memory: BlobMemory; score: number } | null>((carry, memory) => {
-    const score = factOverlap(memory.text, text);
-    const replaces =
-      score >= RESTATEMENT_OVERLAP ||
-      (score >= SUPERSEDE_OVERLAP && SCHEDULE_WORDS.test(memory.text) && SCHEDULE_WORDS.test(text));
-    if (!replaces) {
-      return carry;
-    }
-    return carry === null || score > carry.score ? { memory, score } : carry;
-  }, null);
-  return best === null ? [] : [best.memory];
-}
-
 function makeMemoryTools(access: MemoryAccess) {
   const rememberParams = z.object({
     text: z.string().describe("The fact to remember, one short sentence"),
@@ -609,47 +441,43 @@ function makeMemoryTools(access: MemoryAccess) {
     parameters: rememberParams,
     executionMode: "sequential",
     execute: async (args) => {
-      const text = args.text.trim().slice(0, MEMORY_TEXT_LIMIT);
-      if (text === "") {
-        return "Nothing to remember: empty text.";
-      }
       const memories = access.list();
-      if (memories.some((memory) => memory.text === text)) {
-        return "Already remembered.";
-      }
+      const text = normaliseFact(args.text);
       // Which saved facts does this one make untrue? The model judges meaning
       // ("we broke up" kills "my girlfriend is Sarah"); word overlap, used
-      // when no judge is wired up, only catches restatements.
+      // when no judge is wired up, only catches restatements. A fact already
+      // on the list is skipped: reconciling it would spend a model call, on
+      // the turn's critical path, to be told what a string compare knew.
       const stale =
-        access.reconcile === undefined
-          ? supersededByOverlap(memories, text)
-          : (await access.reconcile(text, memories))
-              .map((position) => memories[position - 1])
-              .filter((memory): memory is BlobMemory => memory !== undefined);
-      if (stale.length > 0) {
-        const staleIds = new Set(stale.map((memory) => memory.id));
-        // Rewrite the first stale fact in place so its slot (and createdAt)
-        // survives; drop any others the new fact also invalidated.
-        const first = stale[0];
-        access.save(
-          memories
-            .filter((memory) => memory.id === first?.id || !staleIds.has(memory.id))
-            .map((memory) =>
-              memory.id === first?.id ? { ...memory, text, updatedAt: Date.now() } : memory,
-            ),
-        );
-        return `Updated. That replaced what I knew: ${stale
+        access.reconcile === undefined || text === "" || knownFact(memories, text)
+          ? undefined
+          : await access.reconcile(text, memories);
+      const result = applyMemoryWrite(memories, {
+        kind: "save",
+        text,
+        ...(stale === undefined ? {} : { stale }),
+      });
+      if (result.changed) {
+        access.save(result.memories);
+      }
+      if (result.outcome === "empty") {
+        return "Nothing to remember: empty text.";
+      }
+      if (result.outcome === "duplicate") {
+        return "Already remembered.";
+      }
+      if (result.outcome === "replaced") {
+        return `Updated. That replaced what I knew: ${result.replaced
           .map((memory) => `"${memory.text}"`)
           .join(", ")}.`;
       }
-      if (memories.length >= MEMORY_LIMIT) {
-        return `Memory is full (${MEMORY_LIMIT}). Forget something first.`;
-      }
-      access.save([
-        ...memories,
-        { id: crypto.randomUUID().slice(0, 8), text, createdAt: Date.now() },
-      ]);
-      return "Remembered.";
+      // Naming the evicted fact is the only warning the user gets that a
+      // memory left the list, and the model can offer to re-save it.
+      return result.evicted.length === 0
+        ? "Remembered."
+        : `Remembered. Memory was full, so I dropped the oldest: ${result.evicted
+            .map((memory) => `"${memory.text}"`)
+            .join(", ")}.`;
     },
   };
   const update: AgentTool<typeof updateParams> = {
@@ -660,22 +488,21 @@ function makeMemoryTools(access: MemoryAccess) {
     parameters: updateParams,
     executionMode: "sequential",
     execute: (args) => {
-      const text = args.text.trim().slice(0, MEMORY_TEXT_LIMIT);
-      if (text === "") {
+      const result = applyMemoryWrite(access.list(), {
+        kind: "update",
+        ref: args.id,
+        text: args.text,
+      });
+      if (result.changed) {
+        access.save(result.memories);
+      }
+      if (result.outcome === "empty") {
         return "Nothing to save: empty text. Use forget to delete instead.";
       }
-      const memories = access.list();
-      const target = resolveMemory(memories, args.id);
-      if (target === undefined) {
+      if (result.outcome === "missing") {
         return `No memory ${args.id}. Use the number shown in brackets.`;
       }
-      access.save(
-        memories.map((memory) =>
-          // createdAt is preserved: this is the same fact, reworded.
-          memory.id === target.id ? { ...memory, text, updatedAt: Date.now() } : memory,
-        ),
-      );
-      return "Updated.";
+      return result.outcome === "duplicate" ? "Already saved that way." : "Updated.";
     },
   };
   const forget: AgentTool<typeof forgetParams> = {
@@ -687,12 +514,11 @@ function makeMemoryTools(access: MemoryAccess) {
     parameters: forgetParams,
     executionMode: "sequential",
     execute: (args) => {
-      const memories = access.list();
-      const target = resolveMemory(memories, args.id);
-      if (target === undefined) {
+      const result = applyMemoryWrite(access.list(), { kind: "delete", ref: args.id });
+      if (!result.changed) {
         return `No memory ${args.id}. Use the number shown in brackets.`;
       }
-      access.save(memories.filter((memory) => memory.id !== target.id));
+      access.save(result.memories);
       return "Forgotten.";
     },
   };

@@ -2305,7 +2305,6 @@ export function App() {
                   onUpdate={(patch) => updateBlob(agent.id, patch)}
                   userMemories={userMemories}
                   mcpServers={mcpServers}
-                  onChangeMcpServers={setMcpServers}
                   onBack={() => setDetailView({ kind: "info" })}
                   onClose={() => setDetailOpen(false)}
                 />

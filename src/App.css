@@ -775,18 +775,11 @@ select:focus:not(:focus-visible) {
 }
 
 /* Read-only view of the exact prompt the Blob runs with. */
-.prompt-preview-summary {
-  cursor: pointer;
-  user-select: none;
-}
-
 .prompt-preview-body {
-  margin: 8px 0 0;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: var(--surface-selected);
+  /* No card of its own: the dialog body is the surface and the scroller. */
+  margin: 0;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.55;
   color: var(--text-secondary);
   white-space: pre-wrap;
@@ -1113,20 +1106,39 @@ select:focus:not(:focus-visible) {
 
 /* Wraps because the same picker also renders in the 322px detail panel,
    where one row of 10 swatches does not fit; no-op in the wide creator. */
+/* Ten tones and seven shapes, each always on one row.
+
+   Wrapping put a single orphan swatch on a second row in the 322px details
+   panel, which reads as a separate group rather than as the tenth option.
+   `nowrap` plus the default flex-shrink keeps one row at any panel width: the
+   items give up a pixel each instead of one dropping to a row of its own.
+
+   The width stays explicit. Sizing these by flex-basis alone collapsed them to
+   0×0 — the fieldset is shrink-to-fit, and an empty item with `width: auto`
+   contributes nothing to the max-content width its parent is measuring. */
 .creator-swatches {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
-  gap: 10px;
+  align-items: center;
+  gap: 6px;
   border: 0;
   margin: 0;
+  /* Both are needed to make the row shrink rather than overflow: a fieldset
+     carries a UA `min-inline-size: min-content`, and as a centred flex item it
+     otherwise takes its max-content width and spills past the panel. */
+  min-inline-size: 0;
+  width: 100%;
   padding: 0;
 }
 
 .tone-swatch {
   display: inline-block;
+  /* Full size where there is room, smaller rather than wrapped where there is
+     not: the default `flex-shrink: 1` does that, and `aspect-ratio` replaces
+     the fixed height so it stays a circle at every size. */
   width: 22px;
-  height: 22px;
+  aspect-ratio: 1;
   border-radius: 50%;
   cursor: pointer;
   transition:
@@ -1185,11 +1197,16 @@ select:focus:not(:focus-visible) {
 
 .creator-shapes {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   border: 0;
   margin: 0;
+  /* As above: the fieldset must be held to the panel width, or it sizes to
+     its content and overflows instead of shrinking. */
+  min-inline-size: 0;
+  width: 100%;
   padding: 0;
 }
 
@@ -1197,8 +1214,10 @@ select:focus:not(:focus-visible) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* The hit area shrinks; the avatar inside it never does, because a flex
+     item's automatic minimum size is its 26px min-content width. */
   width: 36px;
-  height: 36px;
+  aspect-ratio: 1;
   border-radius: 11px;
   cursor: pointer;
   transition: background-color var(--duration-fast) var(--ease-standard);
@@ -1773,6 +1792,45 @@ select:focus:not(:focus-visible) {
 
 .settings-modal:focus {
   outline: none;
+}
+
+/* Same shell as the settings dialog, minus the rail: one column of monospace
+   prompt, so the full 900px would set a line length nothing can read. The
+   height stays the shared min(640px, 78vh) — a dialog that resized itself to
+   the prompt would jump between Blobs and outgrow the window on a long one. */
+.prompt-modal {
+  flex-direction: column;
+  width: min(680px, 72vw);
+}
+
+.prompt-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  /* Never scrolls: the prompt is always longer than the dialog. */
+  flex-shrink: 0;
+  padding: 16px 16px 12px 24px;
+  border-block-end: 1px solid var(--border-hairline);
+}
+
+/* Its own class rather than `.modal-title` with the margin overridden: that
+   override has to out-specify a rule defined later in the file, which is the
+   descending-specificity trap. */
+.prompt-modal-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.prompt-modal-body {
+  flex: 1;
+  /* Without this a flex child refuses to shrink below its content, so the
+     dialog grows instead of scrolling. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  padding: 16px 24px 24px;
 }
 
 .modal-rail {

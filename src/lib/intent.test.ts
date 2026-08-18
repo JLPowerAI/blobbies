@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BlobMemory } from "@/lib/blob-tools";
+import { type BlobMemory, makeBlobTools } from "@/lib/blob-tools";
 import { applyGroupIntent, pickResponders, reconcileMemories, routeIntent } from "@/lib/intent";
 import { tinfoilStructuredCall } from "@/lib/tinfoil";
 
@@ -259,6 +259,51 @@ describe("applyGroupIntent", () => {
     expect(
       await applyGroupIntent({ action: "change_job" }, { model: base.model, memories }),
     ).toBeNull();
+  });
+
+  it("lands a fact exactly where the per-Blob `remember` tool would", async () => {
+    // The point of the shared reducer. These two paths each used to hold
+    // their own save logic and had drifted: one deduped case-sensitively,
+    // one refused at the limit while the other evicted, one rewrote a
+    // superseded fact in place while the other appended a new row. So the
+    // same sentence produced different memory depending on whether the user
+    // said it in a group or a 1-to-1 chat, which is how a contradiction gets
+    // saved. Given the same judge verdict, the two must now agree exactly.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => reply({ obsolete: [1] })),
+    );
+    try {
+      const fromGroup = await applyGroupIntent(
+        { action: "save_fact", fact: "the user trains on Fridays" },
+        { model: base.model, memories },
+      );
+      let fromBlob: BlobMemory[] = [];
+      const tools = makeBlobTools({
+        list: () => memories,
+        save: (next) => {
+          fromBlob = next;
+        },
+        // The same verdict the group path just got from the model.
+        reconcile: async () => [1],
+      });
+      await tools
+        .find((tool) => tool.name === "remember")
+        ?.execute(
+          { text: "the user trains on Fridays" },
+          { signal: new AbortController().signal, toolCallId: "t1" },
+        );
+      const shape = (list: BlobMemory[]) =>
+        list.map((memory) => ({ id: memory.id, text: memory.text, createdAt: memory.createdAt }));
+      expect(shape(fromGroup ?? [])).toEqual(shape(fromBlob));
+      // Rewritten in place: same row, same id, same createdAt as the fact it
+      // replaced — not a new row beside the stale one.
+      expect(shape(fromBlob)).toEqual([
+        { id: "m1", text: "the user trains on Fridays", createdAt: 1 },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
