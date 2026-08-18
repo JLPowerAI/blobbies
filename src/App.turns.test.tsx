@@ -138,6 +138,34 @@ async function createFirstBlob(user: UserEvent, name = "Ken") {
 }
 
 /**
+ * One Blob on disk that already remembers something, ready for mount.
+ *
+ * The dialog cannot add facts — only the Blob does that — so a test that needs
+ * an existing memory has to seed it the way a saved turn would.
+ */
+async function seedBlobWithMemory(name: string, text: string) {
+  await store.flushRoster([
+    {
+      id: "61ec34f1-9ba5-4eff-b8e1-7acefb210001",
+      name,
+      time: "Now",
+      snippet: "New Blob. Say hello",
+      tone: "blue",
+      shape: "sphere",
+      memories: [{ id: "aaa11111", text, createdAt: 1 }],
+    },
+  ]);
+}
+
+/** Open Settings → Memories, where saved facts are listed and edited. */
+async function openMemories(user: UserEvent, blobName: string) {
+  await user.click(screen.getByRole("button", { name: "Show details panel" }));
+  await user.click(screen.getByRole("button", { name: "Open settings" }));
+  await user.click(screen.getByRole("button", { name: /^Memories/ }));
+  return screen.getByRole("dialog", { name: `${blobName} memories` });
+}
+
+/**
  * Type a message and wait for the turn it triggers.
  *
  * Waits for the call count to *grow*: a bare `> 0` would return instantly on
@@ -569,15 +597,15 @@ describe("turn wiring", () => {
   it("a promoted memory reaches the prompt as a shared fact, not a numbered one", async () => {
     const user = userEvent.setup();
     script = [() => "Done.", () => "Done again."];
+    await seedBlobWithMemory("Ken", "Biscuit is a beagle");
     mountWithModel();
-    await createFirstBlob(user, "Ken");
+    await screen.findByRole("navigation", { name: "Conversations" });
     await say(user, "hello");
 
-    await user.click(screen.getByRole("button", { name: "Show details panel" }));
-    const details = screen.getByRole("complementary", { name: "Ken details" });
-    await user.click(within(details).getByRole("button", { name: "Add memory" }));
-    await user.type(within(details).getByLabelText("Memory text"), "Biscuit is a beagle{Enter}");
-    await user.click(within(details).getByRole("button", { name: "Share with all Blobs" }));
+    // Promoted through the dialog, from a fact already saved on disk: the
+    // dialog has no add button, because saving is the Blob's job.
+    const memories = await openMemories(user, "Ken");
+    await user.click(within(memories).getByRole("button", { name: "Share with all Blobs" }));
 
     await say(user, "again");
     const system = String(
@@ -618,18 +646,18 @@ describe("turn wiring", () => {
     // built at mount — so reading them from the render closure hands a
     // scheduled routine an empty list forever. MCP is routine-scope only, so
     // that path is the one that matters most.
+    await seedBlobWithMemory("Ken", "Biscuit is a beagle");
     mountWithModel({
       mcpServers: [{ id: "1", name: "Fine", url: "http://127.0.0.1:39917/mcp", enabled: true }],
     });
-    await createFirstBlob(user, "Ken");
+    await screen.findByRole("navigation", { name: "Conversations" });
     await say(user, "hello");
 
-    // Add a shared fact through the UI, after mount, exactly as a user would.
-    await user.click(screen.getByRole("button", { name: "Show details panel" }));
-    const details = screen.getByRole("complementary", { name: "Ken details" });
-    await user.click(within(details).getByRole("button", { name: "Add memory" }));
-    await user.type(within(details).getByLabelText("Memory text"), "Biscuit is a beagle{Enter}");
-    await user.click(within(details).getByRole("button", { name: "Share with all Blobs" }));
+    // Promote through the UI, after mount, exactly as a user would. The fact
+    // is seeded on disk rather than typed: the dialog has no add button,
+    // because saving a fact is the Blob's job.
+    const memories = await openMemories(user, "Ken");
+    await user.click(within(memories).getByRole("button", { name: "Share with all Blobs" }));
 
     // Fire through the scheduler's own host, not by typing a message.
     // Asserted first so a mock that never captured the host fails as

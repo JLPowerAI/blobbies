@@ -201,6 +201,56 @@ export function uniqueBlobName(wanted: string, taken: readonly string[]): string
 /** Blobs start empty; the first-run creator makes the first one. */
 export const agents: Agent[] = [];
 
+/**
+ * Sample facts for looking at the Memories dialog during development.
+ *
+ * Deliberately varied in length — some short enough to sit on one line, some
+ * long enough to wrap — because a table of uniform strings hides exactly the
+ * layout problems worth catching.
+ *
+ * Applied to a newly created Blob on the dev server only, so a production
+ * build never invents things it "remembers" about a real user. Vitest also
+ * runs with DEV set, so `createBlob` excludes test mode too — otherwise this
+ * fixture would quietly define what the tests think a fresh Blob knows.
+ *
+ * These are saved with the Blob, so a Blob created in dev carries them on disk
+ * and the model is told them on every turn. Delete them from the Memories
+ * dialog once the display has been eyeballed, or the Blob will happily talk
+ * about a beagle that does not exist.
+ */
+export const SAMPLE_MEMORIES: import("@/lib/blob-tools").BlobMemory[] = [
+  { id: "sample01", text: "Prefers short replies with no preamble", createdAt: 1 },
+  { id: "sample02", text: "Has a beagle called Biscuit", createdAt: 2 },
+  {
+    id: "sample03",
+    text: "Trains on Tuesday and Friday evenings, so calls after 6pm on those days never work",
+    createdAt: 3,
+  },
+  { id: "sample04", text: "Sister's birthday is 14 March", createdAt: 4 },
+  {
+    id: "sample05",
+    text: "Is building a desktop app called Blobbies and asks about Rust and React most days",
+    createdAt: 5,
+  },
+];
+
+/**
+ * Shared sample facts, so the dialog has both scopes to show.
+ *
+ * Seeded on hydrate rather than on creation like `SAMPLE_MEMORIES`: a Blob
+ * made before that seed existed still has none of its own, and the shared
+ * scope is the one place a fact shows up for every Blob including old ones.
+ */
+export const SAMPLE_USER_MEMORIES: import("@/lib/blob-tools").BlobMemory[] = [
+  { id: "shared01", text: "Lives in Kuala Lumpur", createdAt: 1 },
+  {
+    id: "shared02",
+    text: "Works from a cafe on Wednesdays, so mornings are unreliable for calls",
+    createdAt: 2,
+  },
+  { id: "shared03", text: "Goes by Ken, never Kenneth", createdAt: 3 },
+];
+
 export const transcripts: Record<string, Message[]> = {};
 
 /** Greeting shown in a fresh conversation (and as the initial snippet). */

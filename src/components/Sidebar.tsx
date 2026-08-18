@@ -4,6 +4,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  FolderPlus,
   Link,
   Pencil,
   Pin,
@@ -24,7 +25,7 @@ import {
   useState,
 } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
-import { type Agent, MAX_BLOBS } from "@/data/agents";
+import { type Agent, MAX_BLOB_NAME_LENGTH, MAX_BLOBS } from "@/data/agents";
 import { type Group, MAX_GROUP_MEMBERS } from "@/lib/groups";
 import { readPreference, writePreference } from "@/lib/preferences";
 import { isTauri } from "@/lib/tauri";
@@ -71,6 +72,8 @@ interface SidebarProps {
   selectedGroupId: string | null;
   onSelectGroup: (id: string) => void;
   onChangeGroups: (next: Group[]) => void;
+  /** Rename a group and move its members; owned by App, which persists both. */
+  onRenameGroup: (id: string, name: string) => void;
   composing: boolean;
   userName: string;
   onSelect: (id: string) => void;
@@ -84,12 +87,17 @@ interface SidebarProps {
   onDelete: (id: string) => void;
 }
 
-/** Right-click context menu target: which Blob, and where to render. */
-interface MenuTarget {
-  agentId: string;
-  x: number;
-  y: number;
-}
+/**
+ * Right-click context menu target: what was clicked, and where to render.
+ *
+ * One menu for both, because they open the same way and only one can be open
+ * at a time — a second piece of menu state would let a Blob's menu and a
+ * group's menu sit on screen together.
+ */
+type MenuTarget = { x: number; y: number } & (
+  | { kind: "blob"; agentId: string }
+  | { kind: "group"; name: string }
+);
 
 /** Drop zone ids. Sections use `section:<name>`, so these cannot collide. */
 const PIN_ZONE = "pin";
@@ -117,7 +125,8 @@ function readNames(key: string): string[] {
 
 /** Keep the fixed-position menu inside the viewport. */
 const MENU_WIDTH = 224;
-const MENU_HEIGHT = 316;
+/** The taller of the two menus (a Blob's), so neither can hang off the edge. */
+const MENU_HEIGHT = 356;
 
 function initialsOf(name: string): string {
   const letters = name
@@ -136,6 +145,7 @@ export function Sidebar({
   selectedGroupId,
   onSelectGroup,
   onChangeGroups,
+  onRenameGroup,
   composing,
   userName,
   onSelect,
@@ -150,8 +160,18 @@ export function Sidebar({
 }: SidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<MenuTarget | null>(null);
+  /** Group being renamed inline, and the text typed so far. */
+  const [renaming, setRenaming] = useState<{ from: string; draft: string } | null>(null);
   /** Blob awaiting delete confirmation (window.confirm is a no-op in wry). */
-  const [confirmDelete, setConfirmDelete] = useState<Agent | null>(null);
+  /**
+   * Pending destructive confirmation, for a Blob or a group.
+   *
+   * One piece of state and one dialog for both: they ask the same question and
+   * only one can be open, so a second copy would be the same markup drifting.
+   */
+  const [confirmDelete, setConfirmDelete] = useState<
+    { kind: "blob"; agent: Agent } | { kind: "group"; name: string; members: number } | null
+  >(null);
   /** Hidden Blobs are collapsed behind a toggle — the only way back to one. */
   const [showHidden, setShowHidden] = useState(false);
 
@@ -186,15 +206,85 @@ export function Sidebar({
   };
 
   /**
-   * Drop a group, and its collapsed flag with it: `addSection` reuses "New
-   * Group", so a leftover flag would make a later group of the same name
-   * open up already shut. The group's transcript stays on disk — removing an
-   * empty group tidies the sidebar, it does not delete a conversation.
+   * Drop a group, releasing its members and its collapsed flag with it.
+   *
+   * Clearing each member's `section` is the load-bearing part. Membership is
+   * that name, and a Blob whose group no longer exists merely *renders* as
+   * ungrouped — the dead name stays on disk. Leave it there and the next group
+   * that happens to take the same name silently adopts Blobs the user never
+   * put in it, which is what "I deleted the group and the Blob came back"
+   * actually was.
+   *
+   * The group's transcript stays on disk: removing a group tidies the sidebar,
+   * it does not delete a conversation.
    */
   const removeSection = (name: string) => {
     saveSections(sections.filter((candidate) => candidate !== name));
+    for (const agent of agents) {
+      if (agent.section === name) {
+        // Empty string, matching what a drop into the ungrouped run writes.
+        onUpdateBlob(agent.id, { section: "" });
+      }
+    }
     if (collapsedSections.includes(name)) {
       saveCollapsedSections(collapsedSections.filter((candidate) => candidate !== name));
+    }
+  };
+
+  /**
+   * A new, empty group, named so it does not collide with an existing one.
+   *
+   * Names are the key for membership, drop zones and the collapsed-flag list,
+   * so two groups called "New Group" would share rows and collapse together.
+   *
+   * Names still written on a Blob count as taken even when no group has them.
+   * `removeSection` clears those, but an older build, a hand-edited roster or
+   * a half-finished write can leave one behind, and the cost of stepping over
+   * it is a suffix nobody notices — against a new group opening with a
+   * stranger's Blob already inside it.
+   */
+  const addSection = () => {
+    const taken = new Set([
+      ...sections,
+      ...agents
+        .map((agent) => agent.section)
+        .filter((name): name is string => name !== undefined && name !== ""),
+    ]);
+    let name = "New Group";
+    for (let suffix = 2; taken.has(name); suffix += 1) {
+      name = `New Group ${suffix}`;
+    }
+    onChangeGroups([...groups, { id: crypto.randomUUID(), name }]);
+    // Straight into rename: "New Group" is nobody's intended name, and naming
+    // it is the next thing they were going to do anyway.
+    setRenaming({ from: name, draft: name });
+  };
+
+  /**
+   * Commit an inline rename.
+   *
+   * The rename itself belongs to App, which already owns one for the chat
+   * header: it moves each member's `section` (membership is the name, so the
+   * group would otherwise empty itself) and writes both the roster and every
+   * member's config. A second copy here drifted on exactly those rules — it
+   * compared names case-sensitively, where App treats "launch" and "Launch"
+   * as one membership key.
+   *
+   * What stays here is the part App cannot see: the collapsed flag is keyed
+   * by name, so it has to travel with the rename or a renamed group forgets
+   * it was shut.
+   */
+  const commitRename = (from: string, to: string) => {
+    setRenaming(null);
+    const group = groups.find((candidate) => candidate.name === from);
+    // Trimmed here only to compare against the old name; App applies the cap.
+    const name = to.trim();
+    if (group === undefined || name === "" || name === from) {
+      return;
+    }
+    onRenameGroup(group.id, name);
+    if (collapsedSections.includes(from)) {
+      saveCollapsedSections([...collapsedSections.filter((candidate) => candidate !== from), name]);
     }
   };
 
@@ -282,10 +372,16 @@ export function Sidebar({
     return () => window.removeEventListener("keydown", onKey);
   }, [contextMenu]);
 
-  const openContextMenu = (event: ReactMouseEvent, agentId: string) => {
+  const openContextMenu = (
+    event: ReactMouseEvent,
+    target: { kind: "blob"; agentId: string } | { kind: "group"; name: string },
+  ) => {
     event.preventDefault();
+    // A right-click inside a group header would otherwise also hit the row
+    // beneath it and open that Blob's menu instead.
+    event.stopPropagation();
     setContextMenu({
-      agentId,
+      ...target,
       x: Math.min(event.clientX, window.innerWidth - MENU_WIDTH - 8),
       y: Math.min(event.clientY, window.innerHeight - MENU_HEIGHT - 8),
     });
@@ -464,7 +560,7 @@ export function Sidebar({
               onSelect(agent.id);
             }
           }}
-          onContextMenu={(event) => openContextMenu(event, agent.id)}
+          onContextMenu={(event) => openContextMenu(event, { kind: "blob", agentId: agent.id })}
         >
           {/* The dot badges the avatar rather than trailing the snippet: at
               the end of a variable-length line it sat in a different place on
@@ -597,7 +693,9 @@ export function Sidebar({
                       onSelect(agent.id);
                     }
                   }}
-                  onContextMenu={(event) => openContextMenu(event, agent.id)}
+                  onContextMenu={(event) =>
+                    openContextMenu(event, { kind: "blob", agentId: agent.id })
+                  }
                 >
                   <BlobAvatar tone={agent.tone} shape={agent.shape} size={44} />
                   <span className="pin-tile-name">{agent.name}</span>
@@ -638,72 +736,104 @@ export function Sidebar({
                         : "section-header"
                     }
                   >
-                    {/* The name is the group's chat: press-and-hold reorders, a
+                    {renaming?.from === group.name ? (
+                      <input
+                        className="section-rename"
+                        value={renaming.draft}
+                        maxLength={MAX_BLOB_NAME_LENGTH}
+                        aria-label={`Rename group ${group.name}`}
+                        // biome-ignore lint/a11y/noAutofocus: rename was just chosen from the menu
+                        autoFocus
+                        onChange={(event) =>
+                          setRenaming({ from: renaming.from, draft: event.target.value })
+                        }
+                        onBlur={() => commitRename(renaming.from, renaming.draft)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            commitRename(renaming.from, renaming.draft);
+                          } else if (event.key === "Escape") {
+                            setRenaming(null);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <>
+                        {/* The name is the group's chat: press-and-hold reorders, a
                       plain click opens the conversation. Collapsing moved to
                       the chevron beside it — a group is somewhere you go now,
                       and that has to be the primary click. */}
-                    <button
-                      type="button"
-                      className="section-toggle"
-                      aria-current={group.id === selectedGroupId ? "true" : undefined}
-                      aria-label={
-                        group.unread === true ? `${group.name}, unread messages` : undefined
-                      }
-                      onPointerDown={(event) => startSectionDrag(event, group.name)}
-                      onClick={() => {
-                        if (!consumeSectionClick()) {
-                          onSelectGroup(group.id);
-                        }
-                      }}
-                    >
-                      <span className="section-name">{group.name}</span>
-                      {/* Replies landed while you were elsewhere. The group's
-                        words live in its own transcript, so no member's unread
-                        dot can stand in for this.
+                        <button
+                          type="button"
+                          className="section-toggle"
+                          aria-current={group.id === selectedGroupId ? "true" : undefined}
+                          aria-label={
+                            group.unread === true ? `${group.name}, unread messages` : undefined
+                          }
+                          onPointerDown={(event) => startSectionDrag(event, group.name)}
+                          onClick={() => {
+                            if (!consumeSectionClick()) {
+                              onSelectGroup(group.id);
+                            }
+                          }}
+                          // On the name button rather than the header row: the
+                          // row is a plain div, and this is where a Blob row
+                          // puts its own menu, so the gesture stays consistent.
+                          onContextMenu={(event) =>
+                            openContextMenu(event, { kind: "group", name: group.name as string })
+                          }
+                        >
+                          <span className="section-name">{group.name}</span>
+                          {/* Replies landed while you were elsewhere. The group's
+                            words live in its own transcript, so no member's unread
+                            dot can stand in for this.
 
-                        Announced through the button's own accessible name:
-                        inside a button, a labelled child is concatenated into
-                        that name, so the row read as “LaunchUnread messages in
-                        Launch”. */}
-                      {group.unread === true ? (
-                        <span className="unread-dot unread-dot-shimmer" aria-hidden="true" />
-                      ) : null}
-                      {/* Shut: how much is hidden. Full: why the next drop will
-                        not land — a group answers as a whole, so it is capped. */}
-                      {shut || group.rows.length >= MAX_GROUP_MEMBERS ? (
-                        <span className="section-count">
-                          {shut ? group.rows.length : `${group.rows.length}/${MAX_GROUP_MEMBERS}`}
-                        </span>
-                      ) : null}
-                    </button>
-                    <button
-                      type="button"
-                      className="section-collapse"
-                      aria-expanded={!shut}
-                      aria-label={shut ? `Expand ${group.name}` : `Collapse ${group.name}`}
-                      onClick={() => toggleSection(group.name)}
-                    >
-                      <ChevronDown
-                        size={15}
-                        strokeWidth={2}
-                        aria-hidden="true"
-                        className={
-                          shut ? "section-chevron section-chevron-shut" : "section-chevron"
-                        }
-                      />
-                    </button>
-                    {/* Only an empty group can be removed: with rows it would be
-                    a destructive-looking button next to real conversations. */}
-                    {group.rows.length === 0 ? (
-                      <button
-                        type="button"
-                        className="section-remove"
-                        aria-label={`Remove group ${group.name}`}
-                        onClick={() => removeSection(group.name)}
-                      >
-                        <X size={12} strokeWidth={2} aria-hidden="true" />
-                      </button>
-                    ) : null}
+                            Announced through the button's own accessible name:
+                            inside a button, a labelled child is concatenated into
+                            that name, so the row read as “LaunchUnread messages in
+                            Launch”. */}
+                          {group.unread === true ? (
+                            <span className="unread-dot unread-dot-shimmer" aria-hidden="true" />
+                          ) : null}
+                          {/* Shut: how much is hidden. Full: why the next drop will
+                            not land — a group answers as a whole, so it is capped. */}
+                          {shut || group.rows.length >= MAX_GROUP_MEMBERS ? (
+                            <span className="section-count">
+                              {shut
+                                ? group.rows.length
+                                : `${group.rows.length}/${MAX_GROUP_MEMBERS}`}
+                            </span>
+                          ) : null}
+                        </button>
+                        <button
+                          type="button"
+                          className="section-collapse"
+                          aria-expanded={!shut}
+                          aria-label={shut ? `Expand ${group.name}` : `Collapse ${group.name}`}
+                          onClick={() => toggleSection(group.name)}
+                        >
+                          <ChevronDown
+                            size={15}
+                            strokeWidth={2}
+                            aria-hidden="true"
+                            className={
+                              shut ? "section-chevron section-chevron-shut" : "section-chevron"
+                            }
+                          />
+                        </button>
+                        {/* Only an empty group can be removed: with rows it would be
+                        a destructive-looking button next to real conversations. */}
+                        {group.rows.length === 0 ? (
+                          <button
+                            type="button"
+                            className="section-remove"
+                            aria-label={`Remove group ${group.name}`}
+                            onClick={() => removeSection(group.name)}
+                          >
+                            <X size={12} strokeWidth={2} aria-hidden="true" />
+                          </button>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                 )}
                 {/* Collapses on the same 0fr→1fr grid as the compose slot, and
@@ -783,8 +913,11 @@ export function Sidebar({
 
       {contextMenu !== null &&
         (() => {
-          const target = agents.find((candidate) => candidate.id === contextMenu.agentId);
-          if (target === undefined) {
+          const target =
+            contextMenu.kind === "blob"
+              ? agents.find((candidate) => candidate.id === contextMenu.agentId)
+              : undefined;
+          if (contextMenu.kind === "blob" && target === undefined) {
             return null;
           }
           const item = (
@@ -823,56 +956,109 @@ export function Sidebar({
               <div
                 className="context-menu"
                 role="menu"
-                aria-label={`Actions for ${target.name}`}
+                aria-label={
+                  target === undefined
+                    ? `Actions for group ${contextMenu.kind === "group" ? contextMenu.name : ""}`
+                    : `Actions for ${target.name}`
+                }
                 style={{ left: contextMenu.x, top: contextMenu.y }}
                 onClick={(event) => event.stopPropagation()}
               >
-                {target.pinned === true
-                  ? item("Unpin", <PinOff size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
-                      onUpdateBlob(target.id, { pinned: false }),
-                    )
-                  : item("Pin", <Pin size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
-                      onUpdateBlob(target.id, { pinned: true }),
+                {contextMenu.kind === "group" ? (
+                  <>
+                    {item(
+                      "New group",
+                      <FolderPlus size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      addSection,
                     )}
-                {item(
-                  "Mark as Unread",
-                  <Bell size={15} strokeWidth={1.8} aria-hidden="true" />,
-                  () => onUpdateBlob(target.id, { unread: true }),
-                )}
-                <hr className="context-menu-separator" />
-                {item(
-                  "Edit Profile",
-                  <Pencil size={15} strokeWidth={1.8} aria-hidden="true" />,
-                  () => onEditProfile(target.id),
-                )}
-                {/* No Duplicate at the cap: the copy would silently not appear. */}
-                {agents.length >= MAX_BLOBS
-                  ? null
-                  : item("Duplicate", <Copy size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
-                      onDuplicate(target.id),
+                    {item("Rename", <Pencil size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
+                      setRenaming({ from: contextMenu.name, draft: contextMenu.name }),
                     )}
-                <hr className="context-menu-separator" />
-                {item(
-                  "Copy conversation ID",
-                  <Link size={15} strokeWidth={1.8} aria-hidden="true" />,
-                  () => void navigator.clipboard?.writeText(target.id),
-                )}
-                <hr className="context-menu-separator" />
-                {target.hidden === true
-                  ? item("Unhide", <Eye size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
-                      onUpdateBlob(target.id, { hidden: false }),
-                    )
-                  : item(
-                      "Hide from sidebar",
-                      <EyeOff size={15} strokeWidth={1.8} aria-hidden="true" />,
-                      () => onUpdateBlob(target.id, { hidden: true }),
+                    <hr className="context-menu-separator" />
+                    {/* Deleting a group with members would silently turn every
+                        one of them loose into the ungrouped run, so the group
+                        has to be emptied first — by dragging, which is how it
+                        was filled. */}
+                    {item(
+                      "Delete group",
+                      <Trash2 size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      () =>
+                        setConfirmDelete({
+                          kind: "group",
+                          name: contextMenu.name,
+                          members: agents.filter(
+                            (candidate) =>
+                              candidate.hidden !== true && candidate.section === contextMenu.name,
+                          ).length,
+                        }),
+                      true,
                     )}
-                {item(
-                  "Delete",
-                  <Trash2 size={15} strokeWidth={1.8} aria-hidden="true" />,
-                  // Styled dialog: window.confirm never shows in the webview.
-                  () => setConfirmDelete(target),
-                  true,
+                  </>
+                ) : null}
+                {target === undefined ? null : (
+                  <>
+                    {target.pinned === true
+                      ? item(
+                          "Unpin",
+                          <PinOff size={15} strokeWidth={1.8} aria-hidden="true" />,
+                          () => onUpdateBlob(target.id, { pinned: false }),
+                        )
+                      : item("Pin", <Pin size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
+                          onUpdateBlob(target.id, { pinned: true }),
+                        )}
+                    {item(
+                      "Mark as Unread",
+                      <Bell size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      () => onUpdateBlob(target.id, { unread: true }),
+                    )}
+                    <hr className="context-menu-separator" />
+                    {item(
+                      "Edit Profile",
+                      <Pencil size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      () => onEditProfile(target.id),
+                    )}
+                    {/* No Duplicate at the cap: the copy would silently not appear. */}
+                    {agents.length >= MAX_BLOBS
+                      ? null
+                      : item(
+                          "Duplicate",
+                          <Copy size={15} strokeWidth={1.8} aria-hidden="true" />,
+                          () => onDuplicate(target.id),
+                        )}
+                    <hr className="context-menu-separator" />
+                    {/* Also here, not only on a group's own menu: with no groups
+                        yet there is nothing to right-click, and this is the
+                        only path to the first one. It is a keyboard path too —
+                        a focused row opens this menu with the Menu key. */}
+                    {item(
+                      "New group",
+                      <FolderPlus size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      addSection,
+                    )}
+                    <hr className="context-menu-separator" />
+                    {item(
+                      "Copy conversation ID",
+                      <Link size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      () => void navigator.clipboard?.writeText(target.id),
+                    )}
+                    <hr className="context-menu-separator" />
+                    {target.hidden === true
+                      ? item("Unhide", <Eye size={15} strokeWidth={1.8} aria-hidden="true" />, () =>
+                          onUpdateBlob(target.id, { hidden: false }),
+                        )
+                      : item(
+                          "Hide from sidebar",
+                          <EyeOff size={15} strokeWidth={1.8} aria-hidden="true" />,
+                          () => onUpdateBlob(target.id, { hidden: true }),
+                        )}
+                    {item(
+                      "Delete",
+                      <Trash2 size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      // Styled dialog: window.confirm never shows in the webview.
+                      () => setConfirmDelete({ kind: "blob", agent: target }),
+                      true,
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -894,7 +1080,11 @@ export function Sidebar({
             className="confirm-dialog"
             role="alertdialog"
             aria-modal="true"
-            aria-label={`Delete ${confirmDelete.name}`}
+            aria-label={
+              confirmDelete.kind === "blob"
+                ? `Delete ${confirmDelete.agent.name}`
+                : `Delete group ${confirmDelete.name}`
+            }
             tabIndex={-1}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
@@ -902,11 +1092,22 @@ export function Sidebar({
               }
             }}
           >
-            <h2 className="confirm-title">{`Delete \u201c${confirmDelete.name}\u201d`}</h2>
+            <h2 className="confirm-title">{`Delete “${
+              confirmDelete.kind === "blob" ? confirmDelete.agent.name : confirmDelete.name
+            }”`}</h2>
             <p className="confirm-body">
-              This removes the Blob and its chat history from Blobbies. Its files sit in the app's
-              trash folder on this computer for 30 days before they're purged. If you may need its
-              work later, hide it instead.
+              {confirmDelete.kind === "blob"
+                ? "Deletes this Blob and its chat. Files stay in the trash folder for 30 days."
+                : // Naming the count is the whole warning: the members are not
+                  // deleted, but they do leave the group, and from a collapsed
+                  // header the user cannot see how many that is.
+                  `Deletes this group chat.${
+                    confirmDelete.members === 0
+                      ? ""
+                      : ` Its ${confirmDelete.members} ${
+                          confirmDelete.members === 1 ? "Blob" : "Blobs"
+                        } move out, and are kept.`
+                  }`}
             </p>
             <div className="confirm-actions">
               <button type="button" className="modal-button" onClick={() => setConfirmDelete(null)}>
@@ -918,7 +1119,11 @@ export function Sidebar({
                 // biome-ignore lint/a11y/noAutofocus: destructive dialogs focus their primary action
                 autoFocus
                 onClick={() => {
-                  onDelete(confirmDelete.id);
+                  if (confirmDelete.kind === "blob") {
+                    onDelete(confirmDelete.agent.id);
+                  } else {
+                    removeSection(confirmDelete.name);
+                  }
                   setConfirmDelete(null);
                 }}
               >

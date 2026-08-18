@@ -157,4 +157,37 @@ describe("store (browser fallback)", () => {
     store.clearFallbackBackend();
     expect(await store.loadRoster()).toBeNull();
   });
+
+  it("reports a failed background write instead of rejecting into nowhere", async () => {
+    // Debounced and unload writes are fire-and-forget — nobody awaits them — so
+    // a failure used to surface as an unhandled promise rejection naming
+    // neither the slice nor the cause. In Tauri that is a bare Rust string
+    // ("storage error: No such file or directory"); here a value that cannot
+    // be serialised reaches the same catch.
+    const reported: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      reported.push(args);
+    });
+    const rejections: unknown[] = [];
+    const onRejection = (event: PromiseRejectionEvent) => rejections.push(event.reason);
+    window.addEventListener("unhandledrejection", onRejection);
+
+    try {
+      const circular: { self?: unknown } = {};
+      circular.self = circular;
+      // Routines are a debounced slice, so this takes the fire-and-forget path.
+      store.saveBlobRoutines(BLOB_ID, circular as never);
+      window.dispatchEvent(new Event("beforeunload"));
+      // Let the rejection settle and any unhandled-rejection event fire.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(rejections).toEqual([]);
+      // Named, so "the roster failed" and "one Blob's transcript failed" are
+      // not the same line in the console.
+      expect(reported[0]?.[0]).toContain(`blobs/${BLOB_ID}/routines`);
+    } finally {
+      window.removeEventListener("unhandledrejection", onRejection);
+      spy.mockRestore();
+    }
+  });
 });

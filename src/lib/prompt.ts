@@ -78,6 +78,11 @@ export interface PromptExtensions {
    * client-verified private enclave).
    */
   runtime?: "local" | "enclave";
+  /**
+   * Replace saved facts with a count. For the Settings preview only — a turn
+   * built this way would tell the model it knows things without saying what.
+   */
+  redactMemories?: boolean;
 }
 
 /** Render one titled section, or "" when it has no content. */
@@ -303,12 +308,25 @@ export function blobSystemPrompt(
   // change less often, so more of the cached prefix survives a Blob-scope
   // write. They are budgeted first for the same reason: a trim then only ever
   // moves the tail of the prompt.
-  const shared = renderMemories(extensions.userMemories ?? [], {
+  const redact = extensions.redactMemories === true;
+  // Budgeted from the real shared block even when redacting, so the preview
+  // counts the same facts a turn would actually carry: the redacted stand-in
+  // is far shorter, and budgeting from it would credit the Blob's own list
+  // with room that does not exist.
+  const sharedFull = renderMemories(extensions.userMemories ?? [], {
     scope: "user",
     budget: MEMORY_PROMPT_CHARS,
   });
+  const shared = redact
+    ? renderMemories(extensions.userMemories ?? [], {
+        scope: "user",
+        budget: MEMORY_PROMPT_CHARS,
+        redact,
+      })
+    : sharedFull;
   const memories = renderMemories(blob.memories ?? [], {
-    budget: MEMORY_PROMPT_CHARS - shared.length,
+    budget: MEMORY_PROMPT_CHARS - sharedFull.length,
+    redact,
   });
 
   // One closing note under whichever memory blocks rendered, never one each:
@@ -329,25 +347,41 @@ export function timeNote(user: UserContext, now: Date = new Date()): string {
   return `[Right now it is ${localNowLine(user.timezone, now)}.]`;
 }
 
+/** Chars per token, the usual English approximation. */
+const CHARS_PER_TOKEN = 4;
+/**
+ * Share of the window history may hold. The rest carries the system prompt
+ * (identity, memories, tool schemas) and the reply itself, which together ran
+ * to roughly a third of a 16k window in practice. At the local 16k window
+ * these shares reproduce the previous fixed caps (36k and 24k characters), so
+ * local behaviour is unchanged and only larger windows gain room.
+ */
+const HISTORY_SHARE = 0.55;
+/** Post-trim target, as a share of the window: trims stay rare. */
+const HISTORY_KEEP_SHARE = 0.36;
+
 /**
  * Cap what an ongoing conversation sends to the model, in ~4-chars-per-token
- * terms: the window is OLLAMA_NUM_CTX (16k) and the reply may take 4k, and
- * without a client-side cap the server truncates for us — silently,
+ * terms: without a client-side cap the server truncates for us — silently,
  * differently each turn, and with no say over what survives.
  *
- * Trims oldest-first in one block (down to KEEP) only once BUDGET is
- * exceeded, rather than sliding one message per turn: between trims the
- * surviving history is byte-stable, so the KV-cache prefix keeps hitting.
+ * `contextWindowTokens` is the selected model's real window, because one
+ * constant cannot fit both: a fixed 36k characters is about right for a local
+ * 16k window and throws away history at under 1% of deepseek-v4-flash's 1M
+ * one. The share is what stays constant, not the byte count.
+ *
+ * Trims oldest-first in one block (down to the keep share) only once the
+ * budget is exceeded, rather than sliding one message per turn: between trims
+ * the surviving history is byte-stable, so the KV-cache prefix keeps hitting.
  */
-const HISTORY_CHAR_BUDGET = 36_000; // ~9k tokens of history
-const HISTORY_CHAR_KEEP = 24_000; // post-trim target: trims stay rare
-
-export function trimHistory(messages: Message[]): Message[] {
+export function trimHistory(messages: Message[], contextWindowTokens: number): Message[] {
+  const budget = contextWindowTokens * HISTORY_SHARE * CHARS_PER_TOKEN;
+  const keep = contextWindowTokens * HISTORY_KEEP_SHARE * CHARS_PER_TOKEN;
   const size = (message: Message): number =>
     typeof message.content === "string"
       ? message.content.length
       : JSON.stringify(message.content).length;
-  if (messages.reduce((sum, message) => sum + size(message), 0) <= HISTORY_CHAR_BUDGET) {
+  if (messages.reduce((sum, message) => sum + size(message), 0) <= budget) {
     return messages;
   }
   const kept: Message[] = [];
@@ -359,7 +393,7 @@ export function trimHistory(messages: Message[]): Message[] {
     }
     total += size(message);
     // Always keep the newest message, however large it is.
-    if (total > HISTORY_CHAR_KEEP && kept.length > 0) {
+    if (total > keep && kept.length > 0) {
       break;
     }
     kept.unshift(message);

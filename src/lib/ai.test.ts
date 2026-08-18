@@ -280,13 +280,16 @@ describe("timeNote", () => {
 });
 
 describe("trimHistory", () => {
+  /** The local window; Tinfoil models pass their own, far larger, number. */
+  const LOCAL_WINDOW = 16_384;
+
   it("returns a short conversation untouched", async () => {
     const { trimHistory } = await import("@/lib/ai");
     const messages = [
       { role: "user" as const, content: "hi" },
       { role: "assistant" as const, content: "hello" },
     ];
-    expect(trimHistory(messages)).toEqual(messages);
+    expect(trimHistory(messages, LOCAL_WINDOW)).toEqual(messages);
   });
 
   it("drops the oldest turns in one block once over budget, keeping the newest", async () => {
@@ -295,11 +298,42 @@ describe("trimHistory", () => {
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
       content: `${index}:${"x".repeat(10_000)}`,
     }));
-    const kept = trimHistory(messages);
+    const kept = trimHistory(messages, LOCAL_WINDOW);
     expect(kept.length).toBeLessThan(messages.length);
     // The newest message always survives, and order is preserved.
     expect(kept[kept.length - 1]).toEqual(messages[messages.length - 1]);
     expect(kept).toEqual(messages.slice(messages.length - kept.length));
+  });
+
+  it("still trims a local conversation at the boundary it always did", async () => {
+    // The shares were chosen so the local 16k window reproduces the previous
+    // fixed caps (36k budget, 24k keep). Existing users must see no change in
+    // behaviour from the switch to window-relative sizing; only larger
+    // windows gain room.
+    const { trimHistory } = await import("@/lib/ai");
+    const conversation = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        content: `${index}:${"x".repeat(10_000)}`,
+      }));
+    // ~30k characters: under the old 36k budget, and still under this one.
+    expect(trimHistory(conversation(3), LOCAL_WINDOW)).toHaveLength(3);
+    // ~40k characters: over the old budget, and still over this one.
+    expect(trimHistory(conversation(4), LOCAL_WINDOW).length).toBeLessThan(4);
+  });
+
+  it("keeps on a large window what it would cut on a small one", async () => {
+    // The whole point of sizing per model. This conversation is over budget
+    // for a local 16k window and trivial against deepseek-v4-flash's 1M one;
+    // the old fixed 36k character cap cut both identically, throwing away
+    // history at well under 1% of the larger window.
+    const { trimHistory } = await import("@/lib/ai");
+    const messages = Array.from({ length: 8 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `${index}:${"x".repeat(10_000)}`,
+    }));
+    expect(trimHistory(messages, LOCAL_WINDOW).length).toBeLessThan(messages.length);
+    expect(trimHistory(messages, 1_048_576)).toEqual(messages);
   });
 });
 

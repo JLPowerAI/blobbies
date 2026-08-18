@@ -121,6 +121,26 @@ async function rawWrite(key: string, value: unknown): Promise<void> {
   backendSet(`slice:${key}`, JSON.stringify(value));
 }
 
+/**
+ * Start a write nobody is awaiting, and report a failure instead of dropping
+ * it on the floor.
+ *
+ * The debounced and unload paths are fire-and-forget by design — no caller is
+ * left to await them. Without this the rejection surfaces as an unhandled
+ * promise rejection with a bare Rust string and a stack pointing into this
+ * module, which says nothing about which slice failed.
+ *
+ * Deliberately not a retry: a write that failed here is already superseded by
+ * whatever is in memory, and the next change writes the whole slice again.
+ */
+function startWrite(key: string, value: unknown): void {
+  void rawWrite(key, value).catch((error: unknown) => {
+    // Naming the key is the point: "roster" failing and one Blob's transcript
+    // failing are very different problems.
+    console.error(`Could not save ${key}:`, error);
+  });
+}
+
 /** Write immediately, cancelling any pending debounce for the key. */
 async function flushWrite(key: string, value: unknown): Promise<void> {
   const timer = pendingWrites.get(key);
@@ -145,16 +165,23 @@ function queueWrite(key: string, value: unknown): void {
       pendingWrites.delete(key);
       const latest = pendingValues.get(key);
       pendingValues.delete(key);
-      void rawWrite(key, latest);
+      startWrite(key, latest);
     }, WRITE_DEBOUNCE_MS),
   );
 }
 
-/** Flush every pending write synchronously-ish; called on window unload. */
+/**
+ * Flush every pending write synchronously-ish; called on window unload.
+ *
+ * These are the writes most likely to fail: the window is going away, and in
+ * Tauri the Rust side may finish tearing down before the reply lands — which
+ * is where "Couldn't find callback id" comes from. Reporting beats an
+ * unhandled rejection thrown from a page that no longer exists.
+ */
 function flushAll(): void {
   for (const [key, timer] of pendingWrites) {
     clearTimeout(timer);
-    void rawWrite(key, pendingValues.get(key));
+    startWrite(key, pendingValues.get(key));
   }
   pendingWrites.clear();
   pendingValues.clear();

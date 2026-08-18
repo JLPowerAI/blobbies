@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronsRight } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { AvatarPicker } from "@/components/AvatarPicker";
 import { BlobAvatar } from "@/components/BlobAvatar";
+import { MemoriesModal } from "@/components/MemoriesModal";
 import { SystemPromptModal } from "@/components/SystemPromptModal";
 import { type Agent, MAX_BLOB_NAME_LENGTH } from "@/data/agents";
 import type { McpServerConfig } from "@/lib/mcp";
@@ -22,6 +23,8 @@ interface SettingsPanelProps {
   onUpdate: (patch: Partial<Agent> & { commitName?: boolean }) => void;
   /** Shared memories, so the prompt preview matches what a turn actually sends. */
   userMemories: BlobMemory[];
+  /** Writes from the Memories dialog; both scopes, same shape as the panel's. */
+  onChangeMemories: (next: { blob?: BlobMemory[]; user?: BlobMemory[] }) => void;
   /** App-wide local MCP servers (not per-Blob); named in the prompt preview. */
   mcpServers: McpServerConfig[];
   /** Back to the info (screen + routines) view. */
@@ -36,6 +39,7 @@ export function SettingsPanel({
   runtime,
   onUpdate,
   userMemories,
+  onChangeMemories,
   mcpServers,
   onBack,
   onClose,
@@ -47,6 +51,7 @@ export function SettingsPanel({
   // Blob the user has already navigated away from.
   const [exported, setExported] = useState<{ id: string; text: string } | null>(null);
   const [promptOpen, setPromptOpen] = useState(false);
+  const [memoriesOpen, setMemoriesOpen] = useState(false);
 
   // Auto-grow the description so long text is fully visible, never clipped.
   // Re-runs on description change: the Blob can rewrite its own description
@@ -142,22 +147,12 @@ export function SettingsPanel({
           </button>
         </div>
 
-        <div className="settings-card">
-          <span className="settings-card-text">
-            <span className="settings-card-title">Notifications</span>
-            <span className="settings-card-blurb">
-              Get notified when this agent finishes or needs input
-            </span>
-          </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={notifications}
-            aria-label="Notifications"
-            className={notifications ? "toggle toggle-on" : "toggle"}
-            onClick={() => onUpdate({ notifications: !notifications })}
-          >
-            <span className="toggle-knob" aria-hidden="true" />
+        <div className="settings-field">
+          {/* The count is the point: it answers "does it remember me?" without
+              opening anything, and both scopes reach the prompt so both are
+              counted. */}
+          <button type="button" className="settings-button" onClick={() => setMemoriesOpen(true)}>
+            Memories ({(agent.memories?.length ?? 0) + userMemories.length})
           </button>
         </div>
 
@@ -187,19 +182,48 @@ export function SettingsPanel({
             {exported?.id === agent.id ? exported.text : ""}
           </span>
         </div>
+
+        {/* Last, and the only switch here: the buttons above all open or write
+            something, so a setting that just sits on belongs after them rather
+            than splitting them in two. */}
+        <div className="settings-card">
+          <span className="settings-card-title">Notifications</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={notifications}
+            aria-label="Notifications"
+            className={notifications ? "toggle toggle-on" : "toggle"}
+            onClick={() => onUpdate({ notifications: !notifications })}
+          >
+            <span className="toggle-knob" aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       {promptOpen ? (
         <SystemPromptModal
           blobName={agent.name}
           // Every extension the real turn passes, or this is a preview of a
-          // prompt that does not exist.
+          // prompt that does not exist — except the saved facts, which stand
+          // down to a count here because the Memories dialog lists them.
           prompt={blobSystemPrompt(agent, user, {
             runtime,
             userMemories,
             mcpServers: mcpServers.filter((server) => server.enabled).map((server) => server.name),
+            redactMemories: true,
           })}
           onClose={() => setPromptOpen(false)}
+        />
+      ) : null}
+
+      {memoriesOpen ? (
+        <MemoriesModal
+          blobName={agent.name}
+          memories={agent.memories ?? []}
+          userMemories={userMemories}
+          onChange={onChangeMemories}
+          onClose={() => setMemoriesOpen(false)}
         />
       ) : null}
     </aside>

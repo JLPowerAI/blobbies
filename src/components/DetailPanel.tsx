@@ -1,14 +1,7 @@
-import { ChevronsRight, Clock, FileText, Plus, Settings, Trash2, User, Users } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ChevronsRight, Clock, FileText, Plus, Settings, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { Agent, Routine } from "@/data/agents";
 import { type HomeEntry, homeFor } from "@/lib/home";
-import {
-  applyMemoryWrite,
-  type BlobMemory,
-  MEMORY_LIMIT,
-  MEMORY_TEXT_LIMIT,
-  type MemoryWrite,
-} from "@/lib/memory";
 
 /** "12.4k", "380k", "1.2M" — a glance, not an invoice. */
 function formatTokens(count: number): string {
@@ -21,14 +14,11 @@ function formatTokens(count: number): string {
 interface DetailPanelProps {
   agent: Agent;
   routines: Routine[];
-  /** Memories shared by every Blob; edited here, stored in the `user` slice. */
-  userMemories: BlobMemory[];
   /** Tokens the last run spent, for the "this run" half of the usage line. */
   lastRunTokens?: number;
   /** Bumped whenever the folder may have changed (attachment saved, turn
       finished); re-lists the files without polling for writes. */
   filesKey?: number;
-  onChangeMemories: (next: { blob?: BlobMemory[]; user?: BlobMemory[] }) => void;
   onClose: () => void;
   onOpenSettings: () => void;
   onCreateRoutine: () => void;
@@ -153,227 +143,11 @@ function FilesSection({ blobId, filesKey }: { blobId: string; filesKey: number }
   );
 }
 
-/** Sentinel edit target for the row that does not exist yet. */
-const NEW_MEMORY = "new";
-
-/**
- * What the Blob remembers, in both scopes.
- *
- * The Blob's own facts are numbered exactly as `renderMemories` numbers them
- * in the prompt, so "forget 2" in chat and row 2 here are the same fact.
- * Shared facts are unnumbered for the same reason: the model addresses only
- * one list by position. Promotion between scopes is manual — the intent
- * router still writes Blob scope only.
- */
-function MemoriesSection({
-  memories,
-  userMemories,
-  onChange,
-}: {
-  memories: BlobMemory[];
-  userMemories: BlobMemory[];
-  onChange: (next: { blob?: BlobMemory[]; user?: BlobMemory[] }) => void;
-}) {
-  const [editing, setEditing] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  /**
-   * Live edit target, mirroring `editing`.
-   *
-   * Enter commits and unmounts the input, which can also fire `onBlur` — a
-   * second commit whose closure still holds the old `editing` (React state
-   * has not re-rendered yet), adding the same memory twice. Clearing this ref
-   * inside `commit` makes the second call a no-op, and makes Escape actually
-   * cancel instead of being undone by the blur behind it.
-   */
-  const target = useRef<string | null>(null);
-
-  const startEdit = (id: string, text: string) => {
-    target.current = id;
-    setDraft(text);
-    setEditing(id);
-  };
-
-  const cancel = () => {
-    target.current = null;
-    setEditing(null);
-  };
-
-  const rows = [
-    ...memories.map((memory, index) => ({ memory, scope: "blob" as const, position: index + 1 })),
-    ...userMemories.map((memory) => ({ memory, scope: "user" as const, position: 0 })),
-  ];
-
-  const listFor = (scope: "blob" | "user") => (scope === "blob" ? memories : userMemories);
-  const patchFor = (scope: "blob" | "user", next: BlobMemory[]) =>
-    scope === "blob" ? { blob: next } : { user: next };
-
-  /**
-   * Every edit here goes through the same reducer the `remember` tool and the
-   * group router use, so a fact typed by hand is deduped, reconciled against
-   * what it contradicts, and capped exactly like one the Blob saved itself.
-   */
-  const write = (scope: "blob" | "user", change: MemoryWrite) => {
-    const result = applyMemoryWrite(listFor(scope), change);
-    if (result.changed) {
-      onChange(patchFor(scope, result.memories));
-    }
-  };
-
-  const commit = () => {
-    const editedId = target.current;
-    target.current = null;
-    setEditing(null);
-    if (editedId === null) {
-      return;
-    }
-    const text = draft.trim();
-    if (editedId === NEW_MEMORY) {
-      write("blob", { kind: "save", text });
-      return;
-    }
-    const row = rows.find((candidate) => candidate.memory.id === editedId);
-    if (row === undefined) {
-      return;
-    }
-    // Emptying the text deletes the fact: the alternative is a blank row that
-    // costs prompt space and says nothing.
-    write(
-      row.scope,
-      text === "" ? { kind: "delete", ref: editedId } : { kind: "update", ref: editedId, text },
-    );
-  };
-
-  const remove = (id: string, scope: "blob" | "user") => {
-    write(scope, { kind: "delete", ref: id });
-  };
-
-  /**
-   * Move a fact between scopes, keeping its id and createdAt.
-   *
-   * The fact is reconciled on arrival, so promoting "trains on Fridays" into a
-   * shared scope that still says "trains on Mondays" replaces it instead of
-   * leaving both for every Blob to read. It only leaves the source scope if
-   * the destination accepted it: a destination that already knows the fact
-   * rejects the write, and dropping it from the source anyway would delete a
-   * memory the user asked to move. The full case never reaches here — the
-   * button is disabled at the cap, because a user looking at the list should
-   * prune it deliberately rather than have the oldest fact evicted under them.
-   */
-  const moveScope = (memory: BlobMemory, from: "blob" | "user") => {
-    const to = from === "blob" ? "user" : "blob";
-    const arrived = applyMemoryWrite(listFor(to), { kind: "adopt", memory });
-    if (!arrived.changed) {
-      return;
-    }
-    onChange({
-      ...patchFor(
-        from,
-        listFor(from).filter((candidate) => candidate.id !== memory.id),
-      ),
-      ...patchFor(to, arrived.memories),
-    });
-  };
-
-  const editor = (
-    <input
-      className="memory-input"
-      value={draft}
-      maxLength={MEMORY_TEXT_LIMIT}
-      aria-label="Memory text"
-      // biome-ignore lint/a11y/noAutofocus: the row was just clicked to edit it
-      autoFocus
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          commit();
-        } else if (event.key === "Escape") {
-          cancel();
-        }
-      }}
-    />
-  );
-
-  return (
-    <section className="routines" aria-label="Memories">
-      <div className="routines-header">
-        <h2 className="routines-title">Memories</h2>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="Add memory"
-          disabled={memories.length >= MEMORY_LIMIT}
-          onClick={() => startEdit(NEW_MEMORY, "")}
-        >
-          <Plus size={16} strokeWidth={1.8} aria-hidden="true" />
-        </button>
-      </div>
-      {rows.length === 0 && editing === null ? (
-        <p className="routines-empty-text">
-          Facts this Blob has learned about you show up here. You can add or edit them yourself.
-        </p>
-      ) : (
-        <ul className="routine-list">
-          {rows.map((row) => (
-            <li key={row.memory.id} className="file-row-item">
-              {editing === row.memory.id ? (
-                editor
-              ) : (
-                <button
-                  type="button"
-                  className="routine-row"
-                  onClick={() => startEdit(row.memory.id, row.memory.text)}
-                >
-                  <span className="routine-text">
-                    <span className="routine-name">
-                      {row.scope === "blob" ? `[${row.position}] ` : ""}
-                      {row.memory.text}
-                    </span>
-                    <span className="routine-schedule">
-                      {row.scope === "blob" ? "This Blob" : "All Blobs"}
-                    </span>
-                  </span>
-                </button>
-              )}
-              <button
-                type="button"
-                className="icon-button"
-                aria-label={
-                  row.scope === "blob" ? "Share with all Blobs" : "Keep to this Blob only"
-                }
-                disabled={listFor(row.scope === "blob" ? "user" : "blob").length >= MEMORY_LIMIT}
-                onClick={() => moveScope(row.memory, row.scope)}
-              >
-                {row.scope === "blob" ? (
-                  <Users size={15} strokeWidth={1.8} aria-hidden="true" />
-                ) : (
-                  <User size={15} strokeWidth={1.8} aria-hidden="true" />
-                )}
-              </button>
-              <button
-                type="button"
-                className="icon-button"
-                aria-label={`Delete memory: ${row.memory.text}`}
-                onClick={() => remove(row.memory.id, row.scope)}
-              >
-                <Trash2 size={15} strokeWidth={1.8} aria-hidden="true" />
-              </button>
-            </li>
-          ))}
-          {editing === NEW_MEMORY ? <li className="file-row-item">{editor}</li> : null}
-        </ul>
-      )}
-    </section>
-  );
-}
-
 export function DetailPanel({
   agent,
   routines,
-  userMemories,
   lastRunTokens,
   filesKey = 0,
-  onChangeMemories,
   onClose,
   onOpenSettings,
   onCreateRoutine,
@@ -470,12 +244,6 @@ export function DetailPanel({
       ) : null}
 
       <FilesSection blobId={agent.id} filesKey={filesKey} />
-
-      <MemoriesSection
-        memories={agent.memories ?? []}
-        userMemories={userMemories}
-        onChange={onChangeMemories}
-      />
     </aside>
   );
 }

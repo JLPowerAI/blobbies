@@ -1,9 +1,7 @@
-import { ArrowRight, Check, Search } from "lucide-react";
+import { ArrowRight, Check } from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
-import { PluginTile } from "@/components/PluginsModal";
 import type { AgentShape, AvatarTone } from "@/data/agents";
-import { plugins } from "@/data/plugins";
 import {
   composioCliVersion,
   composioSignedIn,
@@ -23,8 +21,15 @@ import { openExternal } from "@/lib/tauri";
  * name uniqueness, the roster cap and the store write. A second creator here
  * would be a copy of that screen drifting away from it.
  */
-/** The flow's screens. */
-const ALL_STEPS = ["welcome", "blobs", "permissions", "tinfoil", "composio", "plugins"] as const;
+/**
+ * The flow's screens.
+ *
+ * Picking plugins is deliberately not among them: a grid of twenty app tiles
+ * asks which tools you want before you have a Blob to use them, and the
+ * Plugins modal owns that list anyway. Composio stays — it is one sign-in that
+ * later covers every app, so it is setup rather than a shopping list.
+ */
+const ALL_STEPS = ["welcome", "blobs", "permissions", "tinfoil", "composio"] as const;
 
 type Step = (typeof ALL_STEPS)[number];
 
@@ -130,25 +135,21 @@ type ComposioState =
 const KEY_PATTERN = /^[A-Za-z0-9_-]{16,200}$/;
 
 interface OnboardingProps {
-  /** Plugins already installed; the step is a live editor of that list. */
-  installedPlugins: string[];
-  onSetPluginInstalled: (id: string, installed: boolean) => void;
   /** Flow is over: mark it done and open the app's Blob creator. */
   onDone: () => void;
 }
 
 /**
- * First-run flow: welcome, what a Blob is, permissions, Tinfoil, Composio and
- * plugins, ending on the app's Blob creator. Rendered over the app shell, so nothing
+ * First-run flow: welcome, what a Blob is, permissions, Tinfoil and Composio,
+ * ending on the app's Blob creator. Rendered over the app shell, so nothing
  * behind it is reachable until it finishes; `onDone` is the only way out
  * (plus the dev toggle in Settings, which re-opens it on demand).
  */
-export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: OnboardingProps) {
+export function Onboarding({ onDone }: OnboardingProps) {
   const [index, setIndex] = useState(0);
   const [notifications, setNotifications] = useState<PermissionState>("idle");
   const [key, setKey] = useState("");
   const [keyState, setKeyState] = useState<KeyState>("idle");
-  const [query, setQuery] = useState("");
   const [composio, setComposio] = useState<ComposioState>({ kind: "idle" });
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -248,11 +249,6 @@ export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: O
       setComposio(failure(error, "signIn"));
     }
   };
-
-  const trimmedQuery = query.trim().toLowerCase();
-  const matchingPlugins = plugins.filter(
-    (plugin) => trimmedQuery.length === 0 || plugin.name.toLowerCase().includes(trimmedQuery),
-  );
 
   const renderStep = () => {
     switch (step) {
@@ -500,49 +496,6 @@ export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: O
             </div>
           </div>
         );
-
-      case "plugins":
-        return (
-          <div className="onboarding-step">
-            <h1 className="onboarding-heading">What do you work in daily?</h1>
-            <div className="onboarding-search">
-              <Search size={13} strokeWidth={2} aria-hidden="true" className="search-glyph" />
-              <input
-                type="search"
-                className="search-input"
-                placeholder="Search"
-                aria-label="Search plugins"
-                value={query}
-                onChange={(event) => setQuery(event.currentTarget.value)}
-              />
-            </div>
-            <div className="onboarding-plugins">
-              {matchingPlugins.map((plugin) => {
-                const added = installedPlugins.includes(plugin.id);
-                return (
-                  <button
-                    type="button"
-                    key={plugin.id}
-                    className="onboarding-plugin"
-                    aria-pressed={added}
-                    onClick={() => onSetPluginInstalled(plugin.id, !added)}
-                  >
-                    <PluginTile plugin={plugin} size={30} />
-                    <span className="onboarding-plugin-name">{plugin.name}</span>
-                    {added ? (
-                      <span className="onboarding-plugin-check" aria-hidden="true">
-                        <Check size={12} strokeWidth={2.4} />
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
-              {matchingPlugins.length === 0 ? (
-                <p className="onboarding-blurb">No plugins match your search.</p>
-              ) : null}
-            </div>
-          </div>
-        );
     }
   };
 
@@ -613,17 +566,19 @@ export function Onboarding({ installedPlugins, onSetPluginInstalled, onDone }: O
           <button type="button" className="onboarding-back" onClick={back}>
             Back
           </button>
-          {/* The two key steps are the ones with something to decline, so they
-              say so outright rather than leaving "Next with an empty field" to
-              be inferred. Composio's wording names the cost of skipping: the
-              next screen is a list of apps that cannot connect without it. */}
+          {/* The two setup steps are the ones with something to decline, so
+              they say so outright rather than leaving "Next with an empty
+              field" to be inferred. */}
           {step === "tinfoil" && keyState !== "saved" ? (
             <button type="button" className="onboarding-skip" onClick={next}>
               Skip, I'll use the local model
             </button>
           ) : null}
+          {/* Composio is the last step, where `next` clamps and would do
+              nothing — declining here has to finish the flow, or Skip is a
+              dead button on the one screen that most needs it. */}
           {step === "composio" && composio.kind !== "signedIn" ? (
-            <button type="button" className="onboarding-skip" onClick={next}>
+            <button type="button" className="onboarding-skip" onClick={last ? onDone : next}>
               Skip, I'll connect my apps later
             </button>
           ) : null}

@@ -119,13 +119,14 @@ export const MEMORY_DATA_NOTE =
  */
 export function renderMemories(
   memories: BlobMemory[],
-  options: { scope?: "blob" | "user"; budget?: number } = {},
+  options: { scope?: "blob" | "user"; budget?: number; redact?: boolean } = {},
 ): string {
   const scope = MEMORY_SCOPES[options.scope ?? "blob"];
   const budget = options.budget ?? MEMORY_PROMPT_CHARS;
   if (memories.length === 0 || budget <= 0) {
     return "";
   }
+
   const lines: string[] = [];
   let used = 0;
   // Newest first so the most recent facts survive the budget.
@@ -145,6 +146,17 @@ export function renderMemories(
   }
   if (lines.length === 0) {
     return "";
+  }
+  // For the on-screen preview only: the section keeps its heading and lead so
+  // the reader sees where facts sit in the prompt, with the facts themselves
+  // left to the Memories dialog. Counted after the budget loop, so it reports
+  // what the model actually receives rather than what is stored — the two
+  // differ whenever the budget trims. Never use this for a real turn: the
+  // model would be told it knows things and then not told what they are.
+  if (options.redact === true) {
+    return `\n\n## ${scope.title}\n${scope.lead}\n- ${lines.length} ${
+      lines.length === 1 ? "fact" : "facts"
+    } — open Memories to read or edit`;
   }
   // Titled section so it reads as data, matching blobSystemPrompt's layout.
   // No tool instructions here: the chat loop has no memory tools (writes go

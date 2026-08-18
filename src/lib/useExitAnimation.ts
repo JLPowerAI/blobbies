@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { prefersReducedMotion } from "@/lib/motion";
 
 /**
  * Two-phase dismissal for animated popovers/dialogs. `requestClose` flips the
@@ -14,13 +15,9 @@ export function useExitAnimation(onClosed: () => void): {
   const [closing, setClosing] = useState(false);
 
   const requestClose = useCallback(() => {
-    // No matchMedia means a non-browser environment (jsdom) where CSS
-    // animations — and therefore animationend — never happen.
-    if (typeof window.matchMedia !== "function") {
-      onClosed();
-      return;
-    }
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    // Without an exit animation there is no `animationend` to wait for, so
+    // closing has to happen now or it never happens at all.
+    if (prefersReducedMotion()) {
       onClosed();
       return;
     }

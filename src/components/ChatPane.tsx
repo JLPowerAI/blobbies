@@ -623,6 +623,14 @@ export function ChatPane({
   /** True while a programmatic smooth scroll is in flight; its intermediate
       scroll events must not be mistaken for the user scrolling up. */
   const autoScrollRef = useRef(false);
+  /**
+   * Whether a pane resize is in flight, and whether it should hold the bottom.
+   *
+   * `null` when idle. Set once at the start of a resize burst and read for its
+   * duration, because the reflow fires scroll events that would otherwise
+   * rewrite the answer halfway through.
+   */
+  const resizingRef = useRef<boolean | null>(null);
   const flipRects = useRef(new Map<string, DOMRect>());
 
   /** What "this conversation" means here: one Blob, or one group. */
@@ -719,6 +727,11 @@ export function ChatPane({
     // belongs to the old conversation, and a stale anchor blocks paging.
     loadAnchorRef.current = null;
     nearBottomRef.current = true;
+    // Same for a resize still in flight. Its settle timer would otherwise fire
+    // against the new conversation and overwrite the line above with the old
+    // one's geometry, leaving a chat that opens at the bottom convinced the
+    // user had scrolled up.
+    resizingRef.current = null;
   }, [conversationKey]);
 
   // Older page mounted above the viewport: keep what the user was looking at
@@ -729,9 +742,65 @@ export function ChatPane({
     const anchor = loadAnchorRef.current;
     loadAnchorRef.current = null;
     if (el !== null && anchor !== null) {
-      el.scrollTop = anchor.top + (el.scrollHeight - anchor.height);
+      // `behavior: "instant"`, because the pane sets `scroll-behavior: smooth`
+      // and would otherwise animate this correction — turning a page-in that
+      // should be invisible into a visible slide.
+      el.scrollTo({ top: anchor.top + (el.scrollHeight - anchor.height), behavior: "instant" });
     }
   }, [visibleCount]);
+
+  // Hold the bottom while the pane is resized.
+  //
+  // Showing or hiding a side panel animates the chat's width for 260ms, and a
+  // narrower pane wraps the same text into more lines. The transcript grows
+  // downward from a fixed scrollTop, so the newest message walks up off the
+  // bottom edge — the view scrolls itself while the user is doing nothing but
+  // opening a sidebar, and the "jump to latest" arrow appears over a
+  // conversation they never left.
+  //
+  // The burst has to be treated as one gesture, exactly as a programmatic
+  // glide is. Each reflow frame fires a scroll event, and by the time the
+  // observer runs, that handler has already recorded the grown transcript as
+  // "user scrolled up" — so pinning on `nearBottomRef` alone reads a flag the
+  // resize itself just falsified, and does nothing. Deciding once, at the
+  // start of the burst, is what makes it hold.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el === null || typeof ResizeObserver !== "function") {
+      return;
+    }
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const observer = new ResizeObserver(() => {
+      // First frame of the burst: was the user following the conversation
+      // before any of this reflow happened?
+      if (resizingRef.current === null) {
+        resizingRef.current = nearBottomRef.current;
+      }
+      if (resizingRef.current) {
+        // `behavior: "instant"` rather than assigning `scrollTop`, which the
+        // pane's own `scroll-behavior: smooth` turns into an animation: the
+        // correction then chases the reflow a frame behind, which is the
+        // spring — content lands, then visibly slides down to settle. The
+        // keyword overrides the stylesheet, so each frame is placed outright.
+        el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
+        // Called every frame of the transition, which is fine: React bails
+        // out of re-rendering when the state is already `false`.
+        setShowJump(false);
+      }
+      clearTimeout(settle);
+      // Comfortably past the 260ms panel transition, so a burst is not split
+      // into two and judged twice.
+      settle = setTimeout(() => {
+        resizingRef.current = null;
+        nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      }, 320);
+    });
+    observer.observe(el);
+    return () => {
+      clearTimeout(settle);
+      observer.disconnect();
+    };
+  }, []);
 
   const scrollToLatest = (behavior: ScrollBehavior = "smooth") => {
     const el = scrollRef.current;
@@ -1208,6 +1277,12 @@ export function ChatPane({
           ) {
             loadAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
             setVisibleCount((count) => count + MESSAGE_PAGE_SIZE);
+          }
+          // Reflow from a pane resize is not the user scrolling: the scroll
+          // events it fires would flip this to "scrolled up" and raise the
+          // jump arrow over a conversation nobody left.
+          if (resizingRef.current !== null) {
+            return;
           }
           // A glide we started passes through "scrolled up" positions; ignore
           // those until it lands so it isn't mistaken for user intent.

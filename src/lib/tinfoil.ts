@@ -7,8 +7,6 @@ import {
   type ThinkingLevel,
 } from "@kenkaiiii/gg-ai";
 import { SecureClient } from "tinfoil";
-import { getSecret, setSecret } from "@/lib/secrets";
-
 /**
  * Tinfoil: the one non-local model path, by explicit product decision.
  *
@@ -21,6 +19,8 @@ import { getSecret, setSecret } from "@/lib/secrets";
  * The id helpers below live in the leaf `tinfoil-model.ts` so UI modules can
  * check a model id without loading this stack; re-exported for back-compat.
  */
+import { rememberTinfoilWindows } from "@/lib/context-window";
+import { getSecret, setSecret } from "@/lib/secrets";
 import { TINFOIL_BASE_URL, tinfoilModelId } from "@/lib/tinfoil-model";
 
 export {
@@ -192,6 +192,8 @@ export function registerTinfoilProvider(): void {
 export interface TinfoilModel {
   id: string;
   name: string;
+  /** Tokens the model accepts; absent when the catalog omits it. */
+  contextWindow?: number;
 }
 
 /**
@@ -205,11 +207,28 @@ export async function listTinfoilModels(): Promise<TinfoilModel[]> {
       return [];
     }
     const payload = (await response.json()) as {
-      data?: { id?: string; name?: string; type?: string }[];
+      data?: { id?: string; name?: string; type?: string; context_window?: number }[];
     };
-    return (payload.data ?? [])
+    const models = (payload.data ?? [])
       .filter((model) => model.type === "chat" && typeof model.id === "string")
-      .map((model) => ({ id: model.id as string, name: model.name ?? (model.id as string) }));
+      .map((model) => ({
+        id: model.id as string,
+        name: model.name ?? (model.id as string),
+        // Each model's real window: 131072 for gpt-oss-120b, 1048576 for
+        // deepseek-v4-flash. Sized against this, a long conversation survives
+        // on a big model instead of being cut to a local model's budget.
+        //
+        // Checked rather than cast: this is a network payload, and `typeof
+        // NaN` is "number". A NaN window would make every budget comparison
+        // false and silently disable trimming.
+        ...(typeof model.context_window === "number" &&
+        Number.isFinite(model.context_window) &&
+        model.context_window > 0
+          ? { contextWindow: model.context_window }
+          : {}),
+      }));
+    rememberTinfoilWindows(models);
+    return models;
   } catch {
     return [];
   }

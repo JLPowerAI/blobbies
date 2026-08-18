@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "@/App";
@@ -650,26 +650,40 @@ describe("App", () => {
     expect(screen.queryByRole("dialog", { name: "Plugins" })).not.toBeInTheDocument();
   });
 
-  it("adds a memory and promotes it from this Blob to all Blobs", async () => {
+  /** Open Settings → Memories, where the facts now live. */
+  const openMemories = async (user: ReturnType<typeof userEvent.setup>, blobName: string) => {
+    await user.click(screen.getByRole("button", { name: "Show details panel" }));
+    await user.click(screen.getByRole("button", { name: "Open settings" }));
+    await user.click(screen.getByRole("button", { name: /^Memories/ }));
+    return screen.getByRole("dialog", { name: `${blobName} memories` });
+  };
+
+  it("promotes a memory from this Blob to all Blobs", async () => {
+    // Seeded on disk rather than typed in: the dialog has no add button, and
+    // it should not — a fact is something the Blob saved while you talked.
+    await flushRoster([
+      seedBlob(1, "Ken", {
+        memories: [{ id: "aaa11111", text: "Biscuit is a beagle", createdAt: 1 }],
+      }),
+    ]);
     const user = userEvent.setup();
     render(<App />);
-    await createFirstBlob(user, "Ken");
+    await screen.findByRole("navigation", { name: "Conversations" });
 
-    await user.click(screen.getByRole("button", { name: "Show details panel" }));
-    const details = screen.getByRole("complementary", { name: "Ken details" });
-
-    await user.click(within(details).getByRole("button", { name: "Add memory" }));
-    await user.type(within(details).getByLabelText("Memory text"), "Biscuit is a beagle{Enter}");
+    const memories = await openMemories(user, "Ken");
 
     // Numbered to match renderMemories, so "forget 1" in chat means this row.
-    expect(within(details).getByText(/\[1\] Biscuit is a beagle/)).toBeInTheDocument();
-    expect(within(details).getByText("This Blob")).toBeInTheDocument();
+    const row = within(memories).getByRole("row", { name: /Biscuit is a beagle/ });
+    expect(within(row).getByRole("cell", { name: "1" })).toBeInTheDocument();
+    expect(within(row).getByRole("cell", { name: "Ken" })).toBeInTheDocument();
     expect(await loadUserMemories()).toBeNull();
 
     // Promote: the fact leaves the Blob's config for the shared `user` slice.
-    await user.click(within(details).getByRole("button", { name: "Share with all Blobs" }));
-    expect(within(details).getByText("All Blobs")).toBeInTheDocument();
-    expect(within(details).queryByText(/\[1\]/)).not.toBeInTheDocument();
+    await user.click(within(memories).getByRole("button", { name: "Share with all Blobs" }));
+    const shared = within(memories).getByRole("row", { name: /Biscuit is a beagle/ });
+    expect(within(shared).getByRole("cell", { name: "All Blobs" })).toBeInTheDocument();
+    // Shared facts are unnumbered: the model addresses one list by position.
+    expect(within(shared).getByRole("cell", { name: "\u2014" })).toBeInTheDocument();
 
     window.dispatchEvent(new Event("beforeunload"));
     expect(await loadUserMemories()).toEqual([
@@ -679,24 +693,41 @@ describe("App", () => {
     expect(roster?.[0]?.memories ?? []).toEqual([]);
 
     // And back again, so the toggle is not one-way.
-    await user.click(within(details).getByRole("button", { name: "Keep to this Blob only" }));
-    expect(within(details).getByText("This Blob")).toBeInTheDocument();
+    await user.click(within(memories).getByRole("button", { name: "Keep to this Blob only" }));
+    expect(
+      within(within(memories).getByRole("row", { name: /Biscuit is a beagle/ })).getByRole("cell", {
+        name: "Ken",
+      }),
+    ).toBeInTheDocument();
   });
 
-  it("deletes a memory from the details panel", async () => {
+  it("deletes a memory from the memories dialog", async () => {
+    await flushRoster([
+      seedBlob(1, "Ken", {
+        memories: [{ id: "bbb22222", text: "Temporary", createdAt: 1 }],
+      }),
+    ]);
     const user = userEvent.setup();
     render(<App />);
-    await createFirstBlob(user, "Ken");
+    await screen.findByRole("navigation", { name: "Conversations" });
 
-    await user.click(screen.getByRole("button", { name: "Show details panel" }));
-    const details = screen.getByRole("complementary", { name: "Ken details" });
-    await user.click(within(details).getByRole("button", { name: "Add memory" }));
-    await user.type(within(details).getByLabelText("Memory text"), "Temporary{Enter}");
+    const memories = await openMemories(user, "Ken");
 
-    await user.click(within(details).getByRole("button", { name: "Delete memory: Temporary" }));
-    expect(within(details).queryByText(/Temporary/)).not.toBeInTheDocument();
+    // Arming is not deleting: the fact survives until the pill is clicked, and
+    // the pill is not where the delete button was, so a stray double-click
+    // cannot destroy a memory the Blob spent a conversation learning.
+    await user.click(within(memories).getByRole("button", { name: "Delete memory: Temporary" }));
+    expect(within(memories).getByText("Temporary")).toBeInTheDocument();
+
+    // And it can be called off.
+    await user.click(within(memories).getByRole("button", { name: "Keep memory" }));
+    expect(within(memories).getByText("Temporary")).toBeInTheDocument();
+
+    await user.click(within(memories).getByRole("button", { name: "Delete memory: Temporary" }));
+    await user.click(within(memories).getByRole("button", { name: "Confirm delete: Temporary" }));
+    expect(within(memories).queryByText("Temporary")).not.toBeInTheDocument();
     expect(
-      within(details).getByText(/Facts this Blob has learned about you show up here/),
+      within(memories).getByText(/Facts this Blob learns as you talk show up here/),
     ).toBeInTheDocument();
   });
 
@@ -852,6 +883,131 @@ describe("App", () => {
     }
   });
 
+  it("creates, renames and deletes a group from the right-click menu", async () => {
+    const store = new Map<string, string>([["pref:onboarded", "true"]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+    try {
+      await flushRoster([seedBlob(1, "Ken")]);
+      const user = userEvent.setup();
+      render(<App />);
+      const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+
+      // With no groups yet there is no group header to right-click, so the
+      // first one has to come from a Blob's menu — otherwise groups are a
+      // feature you can only use if you already have one.
+      fireEvent.contextMenu(within(conversations).getByRole("button", { name: /Say hello/ }));
+      await user.click(screen.getByRole("menuitem", { name: "New group" }));
+
+      // Created and dropped straight into rename: "New Group" is nobody's
+      // intended name.
+      const field = await screen.findByLabelText("Rename group New Group");
+      await user.clear(field);
+      await user.type(field, "Launch{Enter}");
+      expect(within(conversations).getByRole("button", { name: /^Launch/ })).toBeInTheDocument();
+
+      // A second group off the first's own menu, and its name must not collide
+      // — the name is the membership key, so two "New Group"s would share rows.
+      fireEvent.contextMenu(within(conversations).getByRole("button", { name: /^Launch/ }));
+      await user.click(screen.getByRole("menuitem", { name: "New group" }));
+      expect(await screen.findByLabelText("Rename group New Group")).toBeInTheDocument();
+      await user.keyboard("{Escape}");
+
+      // Delete asks first — same dialog a Blob's delete uses.
+      fireEvent.contextMenu(within(conversations).getByRole("button", { name: /^Launch/ }));
+      await user.click(screen.getByRole("menuitem", { name: "Delete group" }));
+      const confirm = await screen.findByRole("alertdialog", { name: "Delete group Launch" });
+      expect(within(conversations).getByRole("button", { name: /^Launch/ })).toBeInTheDocument();
+
+      await user.click(within(confirm).getByRole("button", { name: "Delete" }));
+      expect(
+        within(conversations).queryByRole("button", { name: /^Launch/ }),
+      ).not.toBeInTheDocument();
+      expect(within(conversations).getByRole("button", { name: /Say hello/ })).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a deleted group does not hand its Blobs to the next group", async () => {
+    // Membership is the group NAME. Deleting a group without clearing that
+    // name off its members leaves it on disk, and the next group to take the
+    // same name silently adopts Blobs the user never put in it — "I deleted
+    // the group and the Blob came back".
+    const store = new Map<string, string>([
+      ["pref:onboarded", "true"],
+      ["pref:sections", JSON.stringify(["Work"])],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+    try {
+      await flushRoster([seedBlob(1, "Ken", { section: "Work" })]);
+      const user = userEvent.setup();
+      render(<App />);
+      const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+
+      fireEvent.contextMenu(within(conversations).getByRole("button", { name: /^Work/ }));
+      await user.click(screen.getByRole("menuitem", { name: "Delete group" }));
+      const confirm = await screen.findByRole("alertdialog", { name: "Delete group Work" });
+      // The member is named, because deleting the group moves it out.
+      expect(within(confirm).getByText(/1 Blob/)).toBeInTheDocument();
+      await user.click(within(confirm).getByRole("button", { name: "Delete" }));
+
+      // Released, not left pointing at a group that no longer exists.
+      window.dispatchEvent(new Event("beforeunload"));
+      expect((await loadRoster())?.[0]?.section ?? "").toBe("");
+
+      // And a fresh group starts empty rather than re-adopting it.
+      fireEvent.contextMenu(within(conversations).getByRole("button", { name: /Say hello/ }));
+      await user.click(screen.getByRole("menuitem", { name: "New group" }));
+      const field = await screen.findByLabelText("Rename group New Group");
+      await user.clear(field);
+      await user.type(field, "Work{Enter}");
+      expect(conversations.querySelector('[data-drop="section:Work"] .agent-row')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("renaming a group carries its members with it", async () => {
+    // A Blob's `section` stores the group NAME, so a rename that only touched
+    // the group would orphan every member into the ungrouped run.
+    const store = new Map<string, string>([
+      ["pref:onboarded", "true"],
+      ["pref:sections", JSON.stringify(["Work"])],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+    try {
+      await flushRoster([seedBlob(1, "Ken", { section: "Work" })]);
+      const user = userEvent.setup();
+      render(<App />);
+      const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+
+      fireEvent.contextMenu(within(conversations).getByRole("button", { name: /^Work/ }));
+      await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+      const field = await screen.findByLabelText("Rename group Work");
+      await user.clear(field);
+      await user.type(field, "Launch{Enter}");
+
+      // The member moved with the name rather than being left behind.
+      expect(conversations.querySelector('[data-drop="section:Launch"] .agent-row')).not.toBeNull();
+      window.dispatchEvent(new Event("beforeunload"));
+      expect((await loadRoster())?.[0]?.section).toBe("Launch");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("opens the compose palette on Cmd+N", async () => {
     await flushRoster([seedBlob(1, "Ken")]);
     const user = userEvent.setup();
@@ -936,21 +1092,17 @@ describe("onboarding", () => {
 
     // Composio is optional in the same way. It asks for no key at all — the
     // CLI owns that credential — so the only way past an unsigned-in state is
-    // Skip, and Next stays shut.
+    // Skip, and the primary button stays shut.
     expect(flow().queryByLabelText(/API key/)).not.toBeInTheDocument();
-    expect(flow().getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(flow().getByRole("button", { name: "Make your first Blob" })).toBeDisabled();
+    // And it is the last step: picking plugins is not part of setup, because
+    // it asks which apps you want before you have a Blob to use them with.
+    // The Plugins modal owns that list.
+    expect(flow().queryByLabelText("Search plugins")).not.toBeInTheDocument();
+
+    // Skipping hands over to the real creator rather than carrying a second
+    // copy of it, so the Blob is made by the same code every other path uses.
     await user.click(flow().getByRole("button", { name: /Skip, I'll connect my apps later/ }));
-
-    // Plugins picked here are the app's installed list, not a separate one.
-    const gmail = flow().getByRole("button", { name: /Gmail/ });
-    expect(gmail).toHaveAttribute("aria-pressed", "false");
-    await user.click(gmail);
-    expect(gmail).toHaveAttribute("aria-pressed", "true");
-
-    // The last step hands over to the real creator rather than carrying a
-    // second copy of it, so the Blob is made by the same code every other
-    // path uses.
-    await user.click(flow().getByRole("button", { name: "Make your first Blob" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const creator = screen.getByRole("region", { name: "New Blob" });
 
@@ -1015,8 +1167,8 @@ describe("onboarding", () => {
     await user.click(flow().getByRole("button", { name: "Next" }));
     await user.click(flow().getByRole("button", { name: "Next" }));
     await user.click(flow().getByRole("button", { name: /Skip, I'll use the local model/ }));
+    // Composio is the last step, so declining it ends the flow.
     await user.click(flow().getByRole("button", { name: /Skip, I'll connect my apps later/ }));
-    await user.click(flow().getByRole("button", { name: "Make your first Blob" }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "New Blob" })).toBeInTheDocument();

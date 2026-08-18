@@ -26,6 +26,8 @@ import {
   MAX_BLOBS,
   type Message,
   type Routine,
+  SAMPLE_MEMORIES,
+  SAMPLE_USER_MEMORIES,
   agents as seedAgents,
   transcriptFor,
   uniqueBlobName,
@@ -40,6 +42,7 @@ import {
 } from "@/lib/attachments";
 import type { BlobMemory, RosterAccess } from "@/lib/blob-tools";
 import { connectedAppNames } from "@/lib/composio";
+import { contextWindow } from "@/lib/context-window";
 import {
   addressedResponders,
   type Group,
@@ -445,6 +448,12 @@ export function App() {
       }
       if (shared !== null) {
         setUserMemories(shared);
+      } else if (import.meta.env.DEV && import.meta.env.MODE !== "test") {
+        // Dev server only, and only when nothing is saved yet: something to
+        // look at in the Memories dialog, including for a Blob created before
+        // the per-Blob samples existed. Not persisted — editing one writes the
+        // list for real, but until then a restart brings back a clean slate.
+        setUserMemories(SAMPLE_USER_MEMORIES);
       }
       if (settings !== null) {
         if (typeof settings.userName === "string") {
@@ -867,6 +876,22 @@ export function App() {
     setDetailOpen(true);
   };
 
+  /**
+   * Persist a memory edit from the Memories dialog.
+   *
+   * Either scope may be absent: a write touches one list at a time, except a
+   * promotion, which moves a fact between both in a single call.
+   */
+  const changeMemories = (next: { blob?: BlobMemory[]; user?: BlobMemory[] }) => {
+    if (agent !== undefined && next.blob !== undefined) {
+      updateBlob(agent.id, { memories: next.blob });
+    }
+    if (next.user !== undefined) {
+      setUserMemories(next.user);
+      store.saveUserMemories(next.user);
+    }
+  };
+
   const openSettingsModal = (tab: SettingsTab) => {
     setSettingsTab(tab);
     setSettingsOpen(true);
@@ -1122,6 +1147,14 @@ export function App() {
       snippet: GREETING,
       tone,
       shape,
+      // Dev server only: something to look at in the Memories dialog before a
+      // Blob has learned anything. A production build must never claim to
+      // remember things about a user it has never spoken to, and vitest also
+      // runs with DEV set — seeding there would let this fixture define what
+      // the tests think a fresh Blob knows.
+      ...(import.meta.env.DEV && import.meta.env.MODE !== "test"
+        ? { memories: SAMPLE_MEMORIES }
+        : {}),
     };
     // Creation is not debounced: the roster and config must exist on disk
     // before anything else references the new id.
@@ -1364,7 +1397,7 @@ export function App() {
       // the message that carried it — the chat catalog has no file tool, so
       // this is the only way an attachment reaches the model there. Per-message
       // and content-stable, so the cached prefix survives; trimHistory sizes
-      // the result like any other history.
+      // the result like any other history, against this model's own window.
       ...trimHistory(
         await Promise.all(
           history
@@ -1390,6 +1423,7 @@ export function App() {
               return { role, content };
             }),
         ),
+        contextWindow(model),
       ),
     ];
     // Routine (and answer-to-routine) turns carry the instruction as the
@@ -2215,6 +2249,7 @@ export function App() {
         selectedGroupId={selectedGroupId}
         onSelectGroup={openGroup}
         onChangeGroups={changeGroups}
+        onRenameGroup={renameGroup}
         composing={composing}
         userName={userName}
         onSelect={openConversation}
@@ -2304,6 +2339,7 @@ export function App() {
                   runtime={isTinfoilModel(model) ? "enclave" : "local"}
                   onUpdate={(patch) => updateBlob(agent.id, patch)}
                   userMemories={userMemories}
+                  onChangeMemories={changeMemories}
                   mcpServers={mcpServers}
                   onBack={() => setDetailView({ kind: "info" })}
                   onClose={() => setDetailOpen(false)}
@@ -2332,21 +2368,11 @@ export function App() {
               <DetailPanel
                 agent={agent}
                 routines={agentRoutines}
-                userMemories={userMemories}
                 lastRunTokens={
                   (runsByBlob[agent.id]?.inputTokens ?? 0) +
                   (runsByBlob[agent.id]?.outputTokens ?? 0)
                 }
                 filesKey={filesKey}
-                onChangeMemories={(next) => {
-                  if (next.blob !== undefined) {
-                    updateBlob(agent.id, { memories: next.blob });
-                  }
-                  if (next.user !== undefined) {
-                    setUserMemories(next.user);
-                    store.saveUserMemories(next.user);
-                  }
-                }}
                 onClose={() => setDetailOpen(false)}
                 onOpenSettings={openSettings}
                 onCreateRoutine={() => createRoutine(agent.id)}
@@ -2399,13 +2425,7 @@ export function App() {
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}
-      {onboarding ? (
-        <Onboarding
-          installedPlugins={installedPlugins}
-          onSetPluginInstalled={setPluginInstalled}
-          onDone={finishOnboarding}
-        />
-      ) : null}
+      {onboarding ? <Onboarding onDone={finishOnboarding} /> : null}
     </div>
   );
 }

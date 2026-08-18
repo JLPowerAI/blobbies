@@ -128,7 +128,6 @@ body {
 .search-results,
 .trigger-menu,
 .onboarding,
-.onboarding-plugins,
 .composer-input {
   overscroll-behavior: none;
   scroll-behavior: smooth;
@@ -1558,6 +1557,22 @@ select:focus:not(:focus-visible) {
    Full-width, with the chevron and the remove button overlaying its right
    edge rather than sitting beside it — as flex siblings they ate into this
    box, and the highlight stopped short of the row edges below it. */
+/* Inline rename, sized and positioned to match the name button it replaces so
+   the header does not jump when renaming starts. */
+.section-rename {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 11px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+
 .section-toggle {
   display: flex;
   align-items: center;
@@ -1818,9 +1833,21 @@ select:focus:not(:focus-visible) {
    override has to out-specify a rule defined later in the file, which is the
    descending-specificity trap. */
 .prompt-modal-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   margin: 0;
   font-size: 17px;
   font-weight: 700;
+}
+
+/* The count beside the title: present but subordinate, so the heading still
+   reads as one word at a glance. */
+.prompt-modal-note {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .prompt-modal-body {
@@ -2647,6 +2674,15 @@ a.modal-button {
   /* The side hover bars and long tokens must never open a horizontal
      scrollbar on a narrow pane — they clip into the edge padding instead. */
   overflow-x: hidden;
+  /* This pane does its own scroll anchoring, in two places: paging older
+     messages in (`loadAnchorRef`) and holding the bottom while a side panel
+     animates the width. The browser's built-in anchoring targets a node near
+     the TOP of the scrollport, so during a reflow it pulls one way while the
+     code pulls the other — within the same frame. That fight is what reads as
+     a spring: content lands, then visibly repositions itself. One mechanism
+     has to own the scroll position, and it is the one that knows the bottom
+     is what matters here. */
+  overflow-anchor: none;
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -2734,7 +2770,23 @@ a.modal-button {
   position: relative;
   display: flex;
   width: fit-content;
-  max-width: 72%;
+  /* The `ch` cap is what stops text rewrapping while a side panel opens.
+
+     At 72% alone, every frame of that 260ms width animation rewrapped the
+     text, and lines reflowing a word at a time read as a typewriter effect.
+     The cap has to bind in the NARROWEST panel state or it does nothing: at a
+     1280px window with both panels open the pane is ~670px, so 72% is 482px —
+     55.7ch at this font. Anything above that (68ch was) never applies, and
+     the wrap width still moves with the pane.
+
+     52ch sits under that floor, so the column is the same width with both
+     panels open, one open, or none: the bubbles move, the text does not
+     reflow, and the transcript's height stops changing (which is what pushed
+     the scrollbar up). It is also a comfortable measure to read at.
+
+     Below ~940px of window the 72% takes over again and text does rewrap —
+     unavoidable, since the pane is then narrower than the column. */
+  max-width: min(72%, 52ch);
 }
 
 /* One message can be several bubbles (prose, table, prose). They stack and
@@ -3021,6 +3073,9 @@ a.modal-button {
 /* Inline memory editor: sits in the row the text button occupied. */
 .memory-input {
   flex: 1;
+  /* The table cell is already narrow; without this the input keeps its
+     default intrinsic width and pushes the row wider than the dialog. */
+  width: 100%;
   min-width: 0;
   padding: 7px 8px;
   border: 1.5px solid var(--border-strong);
@@ -3029,6 +3084,146 @@ a.modal-button {
   color: inherit;
   font: inherit;
   font-size: 13.5px;
+}
+
+/* `fixed` is what makes a fact wrap instead of stretching the table: with the
+   default `auto`, one long sentence sizes the column to its own content and
+   the row runs off the dialog no matter what the cells say. */
+.memories-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.memories-table th {
+  padding: 0 8px 8px;
+  border-block-end: 1px solid var(--border-hairline);
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: start;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.memories-table td {
+  padding: 9px 8px;
+  border-block-end: 1px solid var(--border-hairline);
+  /* Long facts wrap; a pasted URL breaks rather than widening the column. */
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.memories-table tr:last-child td {
+  border-block-end: 0;
+}
+
+/* The three fixed columns leave the rest for the fact itself. Sized in ch so
+   they hold their content at any font scale. */
+.memories-col-position {
+  width: 3ch;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.memories-col-scope {
+  width: 10ch;
+  color: var(--text-secondary);
+}
+
+.memories-col-actions {
+  /* Fits the confirm pill, which is wider than the two icons it replaces, so
+     arming a delete never reflows the fact column beside it. */
+  width: 7.5rem;
+  white-space: nowrap;
+  text-align: end;
+}
+
+/* The cell is top-aligned so a three-line fact keeps its number beside the
+   first line — which left these buttons hanging below the text they act on.
+   The negative block margin absorbs the difference between the 28px button
+   and the ~20px line it sits on, centring the pair on that first line. */
+.memories-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-block: -4px;
+}
+
+/* Reads as the consequence, not as a second icon to guess at. Sized to the
+   row's own text so it never dominates the fact it is asking about, and
+   styled from the app's existing control tokens — there is no destructive-red
+   token here, and inventing one for a single pill would be a new colour the
+   rest of the app never uses. */
+.memories-confirm {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.memories-confirm:hover {
+  background: var(--surface-selected);
+}
+
+/* Leaves to the right and fades, then the row is deleted for real on
+   animationend. Sideways rather than a height collapse: a table row cannot
+   animate its own height reliably, and the survivors gliding up (FLIP) is what
+   carries the sense of the list closing over the gap. */
+@keyframes memories-row-leave {
+  to {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+
+/* Deliberately absent from the reduced-motion block below: the delete commits
+   on animationend, so killing this animation would leave the fact on screen
+   for good. The component skips this state entirely when motion is reduced. */
+.memories-row-leaving {
+  animation: memories-row-leave 140ms var(--ease-exit) forwards;
+}
+
+/* Nothing in a row on its way out should be clickable: a second click would
+   arm a confirm on a fact that is already gone. */
+.memories-row-leaving button {
+  pointer-events: none;
+}
+
+/* The fact is a button so it can be clicked to edit, but it must read as
+   text: full width, wrapping, left-aligned, no chrome. */
+.memories-text {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.memories-text:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* One column of controls is enough on a narrow window; the scope column is
+   the first thing to go, because the row's own icon already says which it is. */
+@media (max-width: 620px) {
+  .memories-col-scope {
+    display: none;
+  }
 }
 
 .file-preview {
@@ -3441,6 +3636,11 @@ a.modal-button {
   border-radius: 50%;
   background: var(--surface-control);
   color: var(--text-primary);
+  /* Same pairing as .icon-button: without it the hover below swaps colour on
+     one frame, which reads as a flicker rather than a response. */
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
 
 .composer-add:disabled {
@@ -3789,7 +3989,21 @@ a.modal-button {
   color: var(--text-on-dark);
   transition:
     background var(--duration-compose) var(--ease-standard),
-    color var(--duration-compose) var(--ease-standard);
+    color var(--duration-compose) var(--ease-standard),
+    filter var(--duration-fast) var(--ease-standard),
+    transform 200ms var(--ease-squish);
+}
+
+/* A filled circle cannot take the usual translucent overlay — it would tint
+   toward its own background and barely move. Brightness plus the same squish
+   the rows use reads on both themes and on the red stop state, without
+   respelling a hover colour for each. */
+.composer-mic:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+.composer-mic:active:not(:disabled) {
+  transform: scale(0.92);
 }
 
 :root[data-theme="dark"] .composer-mic {
@@ -3836,7 +4050,17 @@ a.modal-button {
   flex-shrink: 0;
   border-radius: 50%;
   color: var(--text-secondary);
-  transition: opacity var(--duration-compose) var(--ease-standard);
+  transition:
+    opacity var(--duration-compose) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+/* Ghost icon, so it takes the same overlay as every other .icon-button rather
+   than the filled circle's brightness trick. */
+.composer-mic-plain:hover {
+  background: var(--hover-overlay);
+  color: var(--text-primary);
 }
 
 .composer-mic-plain-hidden {
@@ -3960,22 +4184,12 @@ a.modal-button {
   background: var(--surface-sidebar);
 }
 
-.settings-card-text {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
+/* Takes the space so the switch sits hard against the right edge, matching
+   the buttons above it. */
 .settings-card-title {
+  flex: 1;
   font-size: 13.5px;
   font-weight: 600;
-}
-
-.settings-card-blurb {
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.35;
 }
 
 .toggle {
@@ -4838,70 +5052,6 @@ a.modal-button {
   text-underline-offset: 2px;
 }
 
-.onboarding-search {
-  position: relative;
-  width: min(300px, 100%);
-}
-
-.onboarding-search .search-input {
-  height: 36px;
-  border-radius: 999px;
-}
-
-.onboarding-plugins {
-  display: grid;
-  width: 100%;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
-  max-height: 42vh;
-  padding: 2px;
-  overflow-y: auto;
-}
-
-.onboarding-plugin {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  background: var(--surface-control);
-  text-align: start;
-  transition:
-    background-color var(--duration-fast) var(--ease-standard),
-    border-color var(--duration-fast) var(--ease-standard);
-}
-
-.onboarding-plugin:hover {
-  border-color: var(--border-strong);
-  background-color: var(--surface-selected);
-}
-
-.onboarding-plugin[aria-pressed="true"] {
-  border-color: var(--text-primary);
-}
-
-.onboarding-plugin-name {
-  flex: 1;
-  overflow: hidden;
-  font-size: 14px;
-  color: var(--text-primary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.onboarding-plugin-check {
-  display: inline-flex;
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--bubble-user);
-  color: var(--text-on-dark);
-}
-
 .onboarding-actions {
   display: flex;
   width: min(340px, 100%);
@@ -4969,10 +5119,6 @@ a.modal-button {
   .onboarding-row-blurb {
     font-size: 12px;
   }
-
-  .onboarding-plugins {
-    max-height: 38vh;
-  }
 }
 
 /* ----------------------------------------------- dark-only recolors */
@@ -5011,6 +5157,7 @@ a.modal-button {
   .icon-button,
   .agent-row,
   .footer-row,
+  .composer-add,
   .composer-mic,
   .composer-mic-glyph,
   .composer-mic-plain,
@@ -5049,7 +5196,6 @@ a.modal-button {
   .onboarding-trio-label,
   .onboarding-start,
   .onboarding-allow,
-  .onboarding-plugin,
   .onboarding-next,
   .onboarding-back,
   .onboarding-skip,
@@ -5108,6 +5254,7 @@ a.modal-button {
   .section-toggle:active,
   .agent-row-dragging,
   .pin-tile:active,
+  .composer-mic:active:not(:disabled),
   .drag-tile-armed {
     transform: none;
     scale: none;
@@ -5130,7 +5277,6 @@ a.modal-button {
   .search-results,
   .trigger-menu,
   .onboarding,
-  .onboarding-plugins,
   .composer-input {
     scroll-behavior: auto;
   }
