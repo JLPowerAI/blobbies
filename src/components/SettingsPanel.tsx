@@ -14,8 +14,6 @@ interface SettingsPanelProps {
   agent: Agent;
   /** Name + timezone from app settings; completes the prompt preview. */
   user: UserContext;
-  /** Where the selected model runs; keeps the preview's identity line honest. */
-  runtime: "local" | "enclave";
   /**
    * `commitName` marks the end of a rename — the app settles name uniqueness
    * only then, so it never fights a half-typed name.
@@ -36,7 +34,6 @@ interface SettingsPanelProps {
 export function SettingsPanel({
   agent,
   user,
-  runtime,
   onUpdate,
   userMemories,
   onChangeMemories,
@@ -204,11 +201,10 @@ export function SettingsPanel({
       {promptOpen ? (
         <SystemPromptModal
           blobName={agent.name}
-          // Every extension the real turn passes, or this is a preview of a
-          // prompt that does not exist — except the saved facts, which stand
-          // down to a count here because the Memories dialog lists them.
+          // The real prompt minus the saved facts: the memory sections are
+          // omitted entirely (redactMemories) because the Memories dialog lists
+          // them — two screens of the same facts is two places to keep in sync.
           prompt={blobSystemPrompt(agent, user, {
-            runtime,
             userMemories,
             mcpServers: mcpServers.filter((server) => server.enabled).map((server) => server.name),
             redactMemories: true,

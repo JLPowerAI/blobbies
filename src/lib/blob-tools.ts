@@ -1,10 +1,11 @@
 import type { AgentTool } from "@kenkaiiii/gg-agent";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { z } from "zod";
-import { MAX_BLOB_NAME_LENGTH, MAX_BLOBS } from "@/data/agents";
+import { MAX_BLOB_NAME_LENGTH, MAX_BLOBS, MAX_ROUTINES, type Routine } from "@/data/agents";
 import { composioExecute, composioSchema, composioSearch } from "@/lib/composio";
 import type { HomeBackend } from "@/lib/home";
 import { applyMemoryWrite, type BlobMemory, knownFact, normaliseFact } from "@/lib/memory";
+import { coerceSchedule, describeSchedule, type RoutineSchedule } from "@/lib/schedule";
 import { hostIsPublic, isTauri, runCommand } from "@/lib/tauri";
 
 /**
@@ -850,6 +851,232 @@ export function makeRosterTools(roster: RosterAccess, selfName: string): AgentTo
   };
 
   return [spawn, remove, message];
+}
+
+/**
+ * This Blob's own routines, as the routine catalog and the chat router's
+ * schedule round touch them.
+ *
+ * Name-addressed like the roster: names are what the model sees and what the
+ * user reads in the Routines panel, and refusing a duplicate name is what
+ * makes `create_routine` idempotent without per-run bookkeeping. Updates and
+ * deletes resolve case-insensitively to the first match, exactly as
+ * `@`-addressing resolves Blob names.
+ */
+export interface RoutineAccess {
+  list: () => Routine[];
+  /** Append a routine; the tool layer guards names and the cap. */
+  create: (routine: { name: string; instruction: string; schedule?: RoutineSchedule }) => void;
+  /** Patch the first routine matching `name`; false when no routine has it. */
+  update: (name: string, patch: { instruction?: string; schedule?: RoutineSchedule }) => boolean;
+  /** Delete the first routine matching `name`; false when no routine has it. */
+  delete: (name: string) => boolean;
+}
+
+/** Validation refusal shared by every routine tool that carries a schedule. */
+const BAD_SCHEDULE =
+  "Not done: the schedule is not valid. kind 'interval' needs minutes " +
+  "(5-1440); 'once' needs minutes (1-1440); 'daily' needs hour 0-23; " +
+  "'weekly' needs weekday 0-6 and hour 0-23. Times are the user's local time.";
+
+/**
+ * The specific miss a small model makes (sim, qwen3.5:9b): it calls with
+ * kind 'daily' but no hour, gets BAD_SCHEDULE, and retries the same call —
+ * twice — where the right move is to ask. This refusal names that move.
+ * Wording fits both create and update paths.
+ */
+const MISSING_TIME_OF_DAY =
+  "Not done: a daily or weekly schedule needs a time of day (hour 0-23), " +
+  "and the user has not given one. Ask them what time they want — do not " +
+  "guess a time and do not call again before they answer.";
+
+/** Cap routine names/instructions like every other model-written field. */
+const ROUTINE_NAME_MAX = 80;
+const ROUTINE_INSTRUCTION_MAX = 600;
+
+/** Find a routine by name, case-insensitively — how @-addressing resolves. */
+function findRoutine(routines: RoutineAccess, name: string): Routine | undefined {
+  const wanted = name.trim().toLowerCase();
+  return routines.list().find((routine) => routine.name.trim().toLowerCase() === wanted);
+}
+
+/**
+ * Routine tools, carried by every turn that has routine access (chat and
+ * routine scope alike — the model calls them directly). A routine created
+ * here is armed immediately: the scheduler picks up nextRunAt on its next
+ * tick, and its fires appear in this Blob's own conversation.
+ */
+export function makeRoutineTools(routines: RoutineAccess): AgentTool[] {
+  const scheduleFields = {
+    kind: z
+      .enum(["interval", "once", "daily", "weekly"])
+      .describe(
+        "'interval' = every N minutes; 'once' = one time, N minutes from now; " +
+          "'daily' = once a day at a time; 'weekly' = on one weekday at a time",
+      ),
+    minutes: z
+      .number()
+      .int()
+      .optional()
+      .describe("For interval (5-1440) and once (1-1440): how many minutes"),
+    hour: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        "For daily/weekly: hour of day 0-23, the user's local time. Only pass " +
+          "an hour the user actually stated: if they asked for a daily/weekly " +
+          "routine without naming a time, ask them what time they want instead " +
+          "of calling this tool.",
+      ),
+    minute: z.number().int().optional().describe("For daily/weekly: 0-59, default 0"),
+    weekday: z.number().int().optional().describe("For weekly: 0=Sunday through 6=Saturday"),
+  };
+
+  const createParameters = z.object({
+    name: z.string().describe("Short name for the routine, e.g. 'Morning check-in'"),
+    instruction: z
+      .string()
+      .describe("What to do each time it runs, written as an instruction to yourself"),
+    ...scheduleFields,
+  });
+  const create: AgentTool<typeof createParameters> = {
+    name: "create_routine",
+    description:
+      "Set up a routine for yourself — recurring, or a one-shot delay " +
+      "('check on the user in 10 minutes' is kind 'once'). It runs on its own " +
+      "on the schedule you give, in this conversation. For a task you can " +
+      "just do now, do the task. A name that already exists is " +
+      "refused; change an existing one with update_routine.",
+    parameters: createParameters,
+    executionMode: "sequential",
+    execute: (args) => {
+      const name = args.name.trim().slice(0, ROUTINE_NAME_MAX);
+      const instruction = args.instruction.trim().slice(0, ROUTINE_INSTRUCTION_MAX);
+      if (name === "" || instruction === "") {
+        return "Not created: a routine needs both a name and an instruction.";
+      }
+      if (
+        (args.kind === "daily" || args.kind === "weekly") &&
+        (typeof args.hour !== "number" || !Number.isFinite(args.hour))
+      ) {
+        return MISSING_TIME_OF_DAY;
+      }
+      const schedule = coerceSchedule(args);
+      if (schedule === null) {
+        return BAD_SCHEDULE;
+      }
+      if (findRoutine(routines, name) !== undefined) {
+        return `A routine named ${name} already exists. Use update_routine to change it.`;
+      }
+      if (routines.list().length >= MAX_ROUTINES) {
+        return `There are already ${MAX_ROUTINES} routines, the maximum. Delete one first.`;
+      }
+      routines.create({ name, instruction, schedule });
+      return `Created ${name} — ${describeSchedule(schedule)}. It runs on its own from now on.`;
+    },
+  };
+
+  // Same shapes as create's, minus `kind`, which update makes optional so
+  // "not changing the schedule" is expressible: an absent kind leaves the
+  // schedule alone, which a nested required object cannot say.
+  const { kind: _scheduleKind, ...scheduleFieldRest } = scheduleFields;
+  const updateParameters = z.object({
+    name: z.string().describe("Name of the routine to change"),
+    instruction: z
+      .string()
+      .optional()
+      .describe("New instruction; leave out to keep the current one"),
+    kind: z.enum(["interval", "once", "daily", "weekly"]).optional(),
+    ...scheduleFieldRest,
+  });
+  const update: AgentTool<typeof updateParameters> = {
+    name: "update_routine",
+    description:
+      "Change an existing routine's instruction or schedule, by name. Leave a " +
+      "field out to keep it as it is. The new schedule takes effect from now.",
+    parameters: updateParameters,
+    executionMode: "sequential",
+    execute: (args) => {
+      const existing = findRoutine(routines, args.name);
+      if (existing === undefined) {
+        return `No routine named ${args.name.trim()}.`;
+      }
+      const patch: { instruction?: string; schedule?: RoutineSchedule } = {};
+      const instruction = args.instruction?.trim().slice(0, ROUTINE_INSTRUCTION_MAX) ?? "";
+      if (instruction !== "") {
+        patch.instruction = instruction;
+      }
+      if (args.kind !== undefined) {
+        if (
+          (args.kind === "daily" || args.kind === "weekly") &&
+          (typeof args.hour !== "number" || !Number.isFinite(args.hour))
+        ) {
+          return MISSING_TIME_OF_DAY;
+        }
+        const schedule = coerceSchedule(args);
+        if (schedule === null) {
+          return BAD_SCHEDULE;
+        }
+        patch.schedule = schedule;
+      }
+      if (patch.instruction === undefined && patch.schedule === undefined) {
+        return "Not updated: give a new instruction or a new schedule.";
+      }
+      return routines.update(args.name.trim(), patch)
+        ? `Updated ${existing.name}${patch.schedule === undefined ? "" : ` — ${describeSchedule(patch.schedule)}`}.`
+        : `No routine named ${args.name.trim()}.`;
+    },
+  };
+
+  const deleteParameters = z.object({
+    name: z.string().describe("Name of the routine to remove"),
+  });
+  const remove: AgentTool<typeof deleteParameters> = {
+    name: "delete_routine",
+    description:
+      "Remove one of your routines by name; it stops firing immediately. " +
+      "Deleting is permanent, so use it when the user wants it gone — not to " +
+      "pause one.",
+    parameters: deleteParameters,
+    executionMode: "sequential",
+    execute: (args) => {
+      const name = args.name.trim();
+      const existing = findRoutine(routines, name);
+      if (existing === undefined) {
+        return `No routine named ${name}.`;
+      }
+      return routines.delete(name) ? `Deleted ${existing.name}.` : `No routine named ${name}.`;
+    },
+  };
+
+  const listParameters = z.object({});
+  const list: AgentTool<typeof listParameters> = {
+    name: "list_routines",
+    description:
+      "Your routines with their schedules. Check this before creating one, so " +
+      "you update or reuse instead of duplicating.",
+    parameters: listParameters,
+    executionMode: "sequential",
+    execute: () => {
+      const current = routines.list();
+      if (current.length === 0) {
+        return "No routines yet.";
+      }
+      return current
+        .map((routine) => {
+          const name = routine.name.trim() === "" ? "(unnamed)" : routine.name.trim();
+          const when =
+            routine.schedule === undefined
+              ? "no schedule, manual only"
+              : describeSchedule(routine.schedule);
+          return `${name} — ${when}${routine.active ? "" : " (paused)"}`;
+        })
+        .join("\n");
+    },
+  };
+
+  return [create, update, remove, list];
 }
 
 /**

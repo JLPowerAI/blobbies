@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { Routine } from "@/data/agents";
 import { streamBlobTurn, streamLocalChat, type ToolCallRecord } from "@/lib/ai";
-import type { PendingAsk } from "@/lib/blob-tools";
+import type { PendingAsk, RoutineAccess } from "@/lib/blob-tools";
 import { memoryHome } from "@/lib/home";
 
 // Stub `fetch` once with a stable dispatcher and swap the handler per test,
@@ -52,6 +53,24 @@ const toolCallChunks = (name: string, args: object, preamble?: string) => [
 ];
 
 /**
+ * A stream that delivers partial text, then dies — a genuine mid-stream drop.
+ * The error must land on a later tick: erroring synchronously in start()
+ * discards the already-enqueued chunk, so the partial never reaches the
+ * consumer — not how a real socket drop behaves.
+ */
+const dyingStream = (partial: string) =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(`${JSON.stringify({ message: { content: partial } })}\n`),
+        );
+        setTimeout(() => controller.error(new TypeError("socket hang up")), 5);
+      },
+    }),
+  );
+
+/**
  * End-to-end through the app's native Ollama provider (registered over gg-ai's
  * "local" entry) in a browser-like environment, exactly like the Tauri webview.
  */
@@ -91,16 +110,19 @@ describe("blobSystemPrompt", () => {
     expect(prompt).not.toMatch(/\d{1,2}:\d{2}/);
   });
 
-  it("tells the truth about where inference runs, per runtime", async () => {
+  it("makes no data-flow claim in the identity line", async () => {
     const { blobSystemPrompt } = await import("@/lib/ai");
     const blob = { name: "Ken", title: "Coach", description: "Helps." };
-    // Local (default): on-device, nothing leaves the machine.
-    expect(blobSystemPrompt(blob)).toContain("Nothing you see or store leaves this machine.");
-    // Enclave: encrypted end-to-end into a verified enclave — claiming
-    // "never leaves this machine" here would be a lie the Blob repeats.
-    const enclave = blobSystemPrompt(blob, undefined, { runtime: "enclave" });
-    expect(enclave).toContain("verified private enclave");
-    expect(enclave).not.toContain("leaves this machine");
+    // The old variants ("nothing leaves this machine" / "encrypted into an
+    // enclave") stopped being true once web tools and connected apps existed;
+    // the persona wording ("personal assistant… warm and helpful") could
+    // contradict the Role section the configure round writes. The name is all
+    // this line owes.
+    const prompt = blobSystemPrompt(blob);
+    expect(prompt).toContain("You are Ken.\n");
+    expect(prompt).not.toContain("leaves this machine");
+    expect(prompt).not.toContain("enclave");
+    expect(prompt).not.toContain("warm and helpful");
   });
 
   it("names connected apps and the exact route to use them", async () => {
@@ -172,16 +194,17 @@ describe("blobSystemPrompt", () => {
     expect(blobSystemPrompt(blob)).not.toContain("## Skills");
   });
 
-  it("contrasts spawn_blob with run_subagent in one line of the Tools section", async () => {
+  it("contrasts spawn_blob with run_subagent across their catalog lines", async () => {
     const { blobSystemPrompt } = await import("@/lib/ai");
     // A model that spawns a Blob per subtask fills the user's roster with
     // junk, so the contrast has to be in the guidance, not just both names
-    // appearing somewhere in the prompt.
-    const line = blobSystemPrompt({ name: "Ken" })
-      .split("\n")
-      .find((candidate) => candidate.includes("spawn_blob"));
-    expect(line).toBeDefined();
-    expect(line).toContain("run_subagent");
+    // appearing somewhere in the prompt: spawn is "a separate ongoing job",
+    // subagent is "inside this task".
+    const lines = blobSystemPrompt({ name: "Ken" }).split("\n");
+    const spawn = lines.find((candidate) => candidate.includes("spawn_blob:"));
+    const subagent = lines.find((candidate) => candidate.includes("run_subagent:"));
+    expect(spawn).toContain("never a step of this task");
+    expect(subagent).toContain("inside this task");
   });
 
   it("names the other members of a group, and only in a group", async () => {
@@ -368,6 +391,183 @@ describe("streamBlobTurn", () => {
     });
     expect(configured).toEqual([{ title: "Therapist", description: "Listens first." }]);
     expect(text).toBe("All set.");
+  });
+
+  it("asks instead of self-configuring when the first message gives no role", async () => {
+    const requests: Record<string, unknown>[] = [];
+    fetchHandler = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push(request);
+      if (request.format !== undefined) {
+        // The abstention the configure prompt asks for on a bare greeting.
+        return new Response(
+          JSON.stringify({
+            message: { content: JSON.stringify({ title: "", description: "" }) },
+          }),
+        );
+      }
+      return ndjson(textChunks("Hi! What should I handle for you?"));
+    };
+    const configured: unknown[] = [];
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "hi" }],
+      forceConfigure: true,
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: (patch) => configured.push(patch),
+    });
+    // Nothing written: an invented role is worse than an unset one, and the
+    // still-empty config re-fires the round on the user's answer.
+    expect(configured).toEqual([]);
+    expect(text).toBe("Hi! What should I handle for you?");
+    // The configure round's own prompt keeps abstention narrow (sim finding,
+    // 2026-08-19: "be my writing coach instead" sometimes abstained and kept
+    // the old role) — role requests must never abstain. Matched by the
+    // configure schema (title/description), not just any `format` call: the
+    // router's structured round runs first in the same turn.
+    const configureRound = requests.find((request) => {
+      const format = JSON.stringify(request.format ?? {});
+      return format.includes('"title"') && format.includes('"description"');
+    });
+    const configureSystem = (
+      (configureRound?.messages ?? []) as { role: string; content: unknown }[]
+    ).find((entry) => entry.role === "system");
+    expect(String(configureSystem?.content)).toContain("never abstain for those");
+    // The streamed turn is told why nothing was configured, so it asks the
+    // user rather than answering from a role it does not have.
+    const streamedMessages = (requests[requests.length - 1]?.messages ?? []) as {
+      role: string;
+      content: string;
+    }[];
+    const last = streamedMessages[streamedMessages.length - 1];
+    expect(last?.role).toBe("system");
+    expect(last?.content).toContain("no configuration was saved");
+  });
+
+  it("hands a chat turn the routine tools directly — the model can create one itself", async () => {
+    // Live transcripts (2026-08-19): the system prompt named create_routine
+    // while the chat catalog withheld it, so the model went digging for
+    // schedulers in connected apps (Slack, BigQuery, Honeybadger) instead.
+    // The tools now ride in the catalog like the web pair: a request like
+    // "check in on me every day at 3pm" is answered by the model calling
+    // create_routine itself, with the tool's own guards (name-idempotency,
+    // coerced schedules, MAX_ROUTINES) as the only gate.
+    const requests: Record<string, unknown>[] = [];
+    let offeredTools: string[] = [];
+    let loopCall = 0;
+    fetchHandler = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push(request);
+      if (request.format !== undefined) {
+        return new Response(
+          JSON.stringify({
+            message: { content: JSON.stringify({ action: "none", fact: "", memory_number: 0 }) },
+          }),
+        );
+      }
+      offeredTools = ((request.tools ?? []) as { function: { name: string } }[]).map(
+        (tool) => tool.function.name,
+      );
+      // The model does what the round used to do badly: calls the tool, then
+      // confirms from its result.
+      loopCall += 1;
+      return loopCall === 1
+        ? ndjson(
+            toolCallChunks("create_routine", {
+              name: "Afternoon check-in",
+              instruction: "Ask the user how they are doing.",
+              kind: "daily",
+              hour: 15,
+              minute: 0,
+            }),
+          )
+        : ndjson(textChunks("Done — every day at 15:00."));
+    };
+    let routines: Routine[] = [];
+    const access: RoutineAccess = {
+      list: () => routines,
+      create: (input) => {
+        routines = [...routines, { id: "r1", active: true, triggers: [], ...input }];
+      },
+      update: () => false,
+      delete: () => false,
+    };
+    const calls: ToolCallRecord[] = [];
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "check in on me every day at 3pm" }],
+      routines: access,
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+      onToolCall: (call) => calls.push(call),
+    });
+    // The tool was callable and its result fed back — the model confirms
+    // facts, not hopes.
+    expect(calls[0]?.name).toBe("create_routine");
+    expect(routines[0]?.schedule).toEqual({ kind: "daily", hour: 15, minute: 0 });
+    const streamed = requests[requests.length - 1];
+    const exchange = JSON.stringify(((streamed?.messages ?? []) as unknown[]).slice(-2));
+    expect(exchange).toContain("Created Afternoon check-in");
+    // The catalog the model actually saw: web pair plus the four routine
+    // tools. No hidden round ever runs — a routine is a tool call now.
+    expect(offeredTools.slice().sort()).toEqual([
+      "create_routine",
+      "delete_routine",
+      "list_routines",
+      "update_routine",
+      "web_fetch",
+      "web_search",
+    ]);
+    // No op-round ever ran — the router's format schema contains "action",
+    // never "op"; a routine is a plain tool call now.
+    expect(requests.some((request) => JSON.stringify(request.format ?? {}).includes('"op"'))).toBe(
+      false,
+    );
+  });
+
+  it("puts a paragraph break at a stall-retry seam, never a glued sentence", async () => {
+    // Real transcripts (2026-08-19, Tinfoil deepseek): a stream stall mid-reply
+    // preserves the partial and retries, and the continuation starts a fresh
+    // sentence — nothing on the wire separates the two, which rendered as
+    // "Explain honestly.I tried" and "Keep it brief.Happy to be here".
+    // ≥ 200 chars: below gg-agent's MIN_PARTIAL_PRESERVE_CHARS the retry
+    // regenerates from scratch instead of continuing, so no seam exists.
+    const partial =
+      "I hear you — you want this to actually happen, not to be promised. " +
+      "So let me be straight about what just went wrong and where that " +
+      "leaves us. The system note is clear — do not create a routine, do " +
+      "not claim one. Explain honestly.";
+    const seamGlue = "Explain honestly.I tried";
+    let call = 0;
+    fetchHandler = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      // The router's structured call must answer cleanly; only the loop's
+      // first attempt dies, and its retry continues.
+      if (request.format !== undefined) {
+        return new Response(
+          JSON.stringify({
+            message: { content: JSON.stringify({ action: "none", fact: "", memory_number: 0 }) },
+          }),
+        );
+      }
+      call += 1;
+      return call === 1 ? dyingStream(partial) : ndjson(textChunks("I tried, and it worked."));
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "try it now" }],
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    // The stall preserved the partial and the retry continued: both halves
+    // present, joined as two paragraphs — never glued at the period.
+    expect(text).toContain("Explain honestly.");
+    expect(text).toContain("I tried");
+    expect(text).not.toContain(seamGlue);
+    expect(text).toContain("Explain honestly.\n\nI tried");
   });
 
   it("a pre-classified turn neither routes, writes memory, nor reconfigures", async () => {
@@ -630,8 +830,42 @@ describe("streamBlobTurn routine scope", () => {
     ]);
   });
 
-  it("chat scope keeps the tuned web-only catalog even when a home is passed", async () => {
-    // The interactive path is sim-tuned: new tools must never leak into it.
+  it("adds the routine tools when routine access is given, armed with real schedules", async () => {
+    // The catalog above (no `routines`) documents the option-less case; App
+    // always passes access, so this pins what an autonomous turn really holds.
+    let offeredTools: string[] = [];
+    fetchHandler = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      offeredTools = ((request.tools ?? []) as { function: { name: string } }[]).map(
+        (tool) => tool.function.name,
+      );
+      return ndjson(textChunks("Checked."));
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "Check the news and save a summary" }],
+      scope: "routine",
+      home: memoryHome(),
+      roster: {
+        access: { list: () => [], create: () => {}, delete: () => {}, message: () => "sent" },
+        selfName: "Ken",
+      },
+      routines: { list: () => [], create: () => {}, update: () => false, delete: () => false },
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    expect(text).toBe("Checked.");
+    for (const name of ["create_routine", "update_routine", "delete_routine", "list_routines"]) {
+      expect(offeredTools).toContain(name);
+    }
+  });
+
+  it("chat scope keeps its tuned catalog: no fs/roster tools, but the routine tools ride along", async () => {
+    // The interactive path is sim-tuned: fs/shell/roster/MCP tools must never
+    // leak into it. The routine tools are the exception by design (2026-08-19:
+    // hiding them behind a router round sent the model fishing for schedulers
+    // in connected apps) — pinned here so the exception is deliberate.
     let offeredTools: string[] = [];
     fetchHandler = async (_input, init) => {
       const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -643,6 +877,7 @@ describe("streamBlobTurn routine scope", () => {
       );
       return ndjson(textChunks("Hi."));
     };
+    let routines: Routine[] = [];
     await streamBlobTurn({
       model: "llama3.2:latest",
       messages: [{ role: "user", content: "hello" }],
@@ -651,11 +886,26 @@ describe("streamBlobTurn routine scope", () => {
         access: { list: () => [], create: () => {}, delete: () => {}, message: () => "sent" },
         selfName: "Ken",
       },
+      routines: {
+        list: () => routines,
+        create: (input) => {
+          routines = [...routines, { id: "r1", active: true, triggers: [], ...input }];
+        },
+        update: () => false,
+        delete: () => false,
+      },
       memory: { list: () => [], save: () => {} },
       onSegment: () => {},
       onConfigure: () => {},
     });
-    expect([...offeredTools].sort()).toEqual(["web_fetch", "web_search"]);
+    expect([...offeredTools].sort()).toEqual([
+      "create_routine",
+      "delete_routine",
+      "list_routines",
+      "update_routine",
+      "web_fetch",
+      "web_search",
+    ]);
   });
 
   it("never offers an MCP server's tools on the tuned chat path", async () => {

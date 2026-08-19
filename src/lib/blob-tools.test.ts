@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { MAX_BLOBS } from "@/data/agents";
+import { MAX_BLOBS, MAX_ROUTINES, type Routine } from "@/data/agents";
 import {
   type BlobMemory,
   cleanResults,
@@ -12,6 +12,7 @@ import {
   makeComposioTools,
   makeFsTools,
   makeRosterTools,
+  makeRoutineTools,
   makeShellTool,
   type PendingAsk,
   parseDdgLite,
@@ -21,6 +22,7 @@ import {
   wrapUntrusted,
 } from "@/lib/blob-tools";
 import { memoryHome } from "@/lib/home";
+import type { RoutineSchedule } from "@/lib/schedule";
 
 const context = { signal: new AbortController().signal, toolCallId: "t1" };
 
@@ -587,5 +589,201 @@ describe("connected-app tools", () => {
     // so a failed command never aborts the turn.
     const result = await tool.execute({ program: "ls", args: [] }, context);
     expect(String(result)).toContain("desktop app");
+  });
+});
+
+describe("routine tools", () => {
+  /** In-memory RoutineAccess: the same semantics App's implementation has. */
+  const fakeRoutines = (seed: Routine[] = []) => {
+    let list = seed;
+    return {
+      get current() {
+        return list;
+      },
+      access: {
+        list: () => list,
+        create: (routine: { name: string; instruction: string; schedule?: RoutineSchedule }) => {
+          list = [...list, { id: `r-${list.length}`, active: true, triggers: [], ...routine }];
+        },
+        update: (name: string, patch: { instruction?: string; schedule?: RoutineSchedule }) => {
+          const at = list.findIndex(
+            (routine) => routine.name.trim().toLowerCase() === name.trim().toLowerCase(),
+          );
+          if (at === -1) {
+            return false;
+          }
+          list = list.map((routine, index) => (index === at ? { ...routine, ...patch } : routine));
+          return true;
+        },
+        delete: (name: string) => {
+          const at = list.findIndex(
+            (routine) => routine.name.trim().toLowerCase() === name.trim().toLowerCase(),
+          );
+          if (at === -1) {
+            return false;
+          }
+          list = list.filter((_, index) => index !== at);
+          return true;
+        },
+      },
+    };
+  };
+  const find = (access: ReturnType<typeof fakeRoutines>["access"], name: string) =>
+    makeRoutineTools(access).find((tool) => tool.name === name);
+
+  it("creates an armed routine with a specific time, which is the point", async () => {
+    const routines = fakeRoutines();
+    const result = await find(routines.access, "create_routine")?.execute(
+      {
+        name: "Afternoon check-in",
+        instruction: "Ask Ken how the day is going.",
+        kind: "daily",
+        hour: 15,
+        minute: 30,
+      },
+      context,
+    );
+    expect(result).toContain("Created Afternoon check-in");
+    expect(result).toContain("Every day at 15:30");
+    expect(routines.current[0]?.schedule).toEqual({ kind: "daily", hour: 15, minute: 30 });
+  });
+
+  it("creates a one-shot delay, the 'check on me in a minute' case", async () => {
+    const routines = fakeRoutines();
+    const result = await find(routines.access, "create_routine")?.execute(
+      {
+        name: "Quick check",
+        instruction: "Ask how the user is doing right now.",
+        kind: "once",
+        minutes: 1,
+      },
+      context,
+    );
+    expect(result).toContain("Created Quick check");
+    expect(result).toContain("Once, in a minute");
+    expect(routines.current[0]?.schedule).toEqual({ kind: "once", minutes: 1 });
+  });
+
+  it("refuses a duplicate name, which is what makes create_routine idempotent", async () => {
+    const routines = fakeRoutines([
+      { id: "r0", name: "Digest", instruction: "x", triggers: [], active: true },
+    ]);
+    const result = await find(routines.access, "create_routine")?.execute(
+      { name: "digest", instruction: "y", kind: "interval", minutes: 60 },
+      context,
+    );
+    expect(result).toContain("already exists");
+    expect(routines.current).toHaveLength(1);
+  });
+
+  it("refuses to grow past the cap, so a routine turn cannot amplify its own workload", async () => {
+    const routines = fakeRoutines(
+      Array.from({ length: MAX_ROUTINES }, (_, index) => ({
+        id: `r${index}`,
+        name: `Routine ${index}`,
+        instruction: "x",
+        triggers: [],
+        active: true,
+      })),
+    );
+    const result = await find(routines.access, "create_routine")?.execute(
+      { name: "One more", instruction: "y", kind: "interval", minutes: 60 },
+      context,
+    );
+    expect(result).toContain(`${MAX_ROUTINES}`);
+    expect(routines.current).toHaveLength(MAX_ROUTINES);
+  });
+
+  it("refuses a daily schedule with no time of day by telling the model to ask", async () => {
+    const routines = fakeRoutines();
+    const result = await find(routines.access, "create_routine")?.execute(
+      // No hour: a daily schedule without a time of day must not become a
+      // guessed 9am (sim-run finding: the model invents one when the refusal
+      // is generic), so the refusal names the move — ask, don't retry.
+      { name: "X", instruction: "y", kind: "daily", minute: 0 },
+      context,
+    );
+    expect(result).toContain("needs a time of day");
+    expect(result).toContain("Ask them");
+    expect(routines.current).toHaveLength(0);
+  });
+
+  it("refuses a schedule whose fields are out of range", async () => {
+    const routines = fakeRoutines();
+    const result = await find(routines.access, "create_routine")?.execute(
+      // Hour present but impossible: the generic invalid-schedule refusal.
+      { name: "X", instruction: "y", kind: "daily", hour: 24, minute: 0 },
+      context,
+    );
+    expect(result).toContain("not valid");
+    expect(routines.current).toHaveLength(0);
+  });
+
+  it("updates a schedule by name, case-insensitively, leaving the rest alone", async () => {
+    const routines = fakeRoutines([
+      {
+        id: "r0",
+        name: "Digest",
+        instruction: "Weekly summary.",
+        triggers: [],
+        active: true,
+        schedule: { kind: "daily", hour: 9, minute: 0 },
+      },
+    ]);
+    const result = await find(routines.access, "update_routine")?.execute(
+      { name: "digest", kind: "weekly", weekday: 5, hour: 16, minute: 0 },
+      context,
+    );
+    expect(result).toContain("Updated Digest");
+    expect(result).toContain("Every Friday at 16:00");
+    // Instruction untouched: an absent field means "keep it".
+    expect(routines.current[0]?.instruction).toBe("Weekly summary.");
+    expect(routines.current[0]?.schedule).toEqual({
+      kind: "weekly",
+      weekday: 5,
+      hour: 16,
+      minute: 0,
+    });
+  });
+
+  it("refuses an update that changes nothing", async () => {
+    const routines = fakeRoutines([
+      { id: "r0", name: "Digest", instruction: "x", triggers: [], active: true },
+    ]);
+    const result = await find(routines.access, "update_routine")?.execute(
+      { name: "Digest" },
+      context,
+    );
+    expect(result).toContain("give a new instruction or a new schedule");
+  });
+
+  it("deletes by name and says when there is nothing to delete", async () => {
+    const routines = fakeRoutines([
+      { id: "r0", name: "Digest", instruction: "x", triggers: [], active: true },
+    ]);
+    expect(
+      await find(routines.access, "delete_routine")?.execute({ name: "DIGEST" }, context),
+    ).toBe("Deleted Digest.");
+    expect(routines.current).toHaveLength(0);
+    expect(await find(routines.access, "delete_routine")?.execute({ name: "Ghost" }, context)).toBe(
+      "No routine named Ghost.",
+    );
+  });
+
+  it("lists routines with their schedules, for update/delete discovery", async () => {
+    const routines = fakeRoutines([
+      {
+        id: "r0",
+        name: "Digest",
+        instruction: "x",
+        triggers: [],
+        active: true,
+        schedule: { kind: "daily", hour: 15, minute: 30 },
+      },
+      { id: "r1", name: "Paused thing", instruction: "y", triggers: [], active: false },
+    ]);
+    const result = await find(routines.access, "list_routines")?.execute({}, context);
+    expect(String(result)).toContain("Digest — Every day at 15:30");
+    expect(String(result)).toContain("Paused thing — no schedule, manual only (paused)");
   });
 });

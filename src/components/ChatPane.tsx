@@ -791,6 +791,17 @@ export function ChatPane({
       // Comfortably past the 260ms panel transition, so a burst is not split
       // into two and judged twice.
       settle = setTimeout(() => {
+        // WebKit can leave the scroll extent stale after a width transition:
+        // the last per-frame pin read `scrollHeight` mid-reflow, so scrollTop
+        // can sit past the final, shorter content — a pane that shows blank
+        // until the user scrolls and the engine re-clamps (seen live in the
+        // Tauri webview, 2026-08-19). One clamp at settle ends the burst at a
+        // position that actually exists, without stealing a scrolled-up
+        // user's position (it only corrects overscroll).
+        const max = el.scrollHeight - el.clientHeight;
+        if (el.scrollTop > max) {
+          el.scrollTo({ top: max, behavior: "instant" });
+        }
         resizingRef.current = null;
         nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
       }, 320);

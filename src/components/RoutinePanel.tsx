@@ -13,7 +13,12 @@ import {
 } from "lucide-react";
 import { type ComponentType, useEffect, useRef, useState } from "react";
 import type { Routine } from "@/data/agents";
-import { describeSchedule, type RoutineSchedule } from "@/lib/schedule";
+import {
+  coerceSchedule,
+  describeSchedule,
+  type RoutineSchedule,
+  WEEKDAY_NAMES,
+} from "@/lib/schedule";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 interface RoutinePanelProps {
@@ -37,6 +42,9 @@ const SCHEDULE_OPTIONS: ReadonlyArray<{ label: string; schedule: RoutineSchedule
   { label: "Every week", schedule: { kind: "weekly", weekday: 1, hour: 9, minute: 0 } },
   { label: "Every 30 minutes", schedule: { kind: "interval", minutes: 30 } },
 ];
+
+/** Hour-of-day options, 0–23, shown 24-hour to match describeSchedule. */
+const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
 interface EventTrigger {
   label: string;
@@ -73,6 +81,15 @@ export function RoutinePanel({
 }: RoutinePanelProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  // Custom-schedule editor state, shown in place of the preset list. Prefilled
+  // from the current schedule so tweaking a time starts from it, not from 9am.
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customKind, setCustomKind] = useState<"interval" | "once" | "daily" | "weekly">("daily");
+  const [customMinutes, setCustomMinutes] = useState("60");
+  const [customHour, setCustomHour] = useState("9");
+  const [customMinute, setCustomMinute] = useState("0");
+  const [customWeekday, setCustomWeekday] = useState("1");
+  const [customError, setCustomError] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
   const { closing, requestClose, finishClose } = useExitAnimation(() => {
     setMenuOpen(false);
@@ -111,12 +128,59 @@ export function RoutinePanel({
 
   /** A schedule replaces any previous one — one clock per routine. */
   const setSchedule = (label: string, schedule: RoutineSchedule) => {
-    const scheduleLabels = SCHEDULE_OPTIONS.map((option) => option.label);
+    // Any earlier schedule's label goes too, not just the presets': switching
+    // "Every day at 15:30" → "Every hour" must swap labels, not stack them.
+    const stale = new Set([
+      ...SCHEDULE_OPTIONS.map((option) => option.label),
+      ...(routine.schedule === undefined ? [] : [describeSchedule(routine.schedule)]),
+    ]);
     onUpdate({
       schedule,
-      triggers: [...routine.triggers.filter((t) => !scheduleLabels.includes(t)), label],
+      triggers: [...routine.triggers.filter((t) => !stale.has(t)), label],
     });
     requestClose();
+  };
+
+  /** Open the custom editor, prefilled from whatever schedule exists. */
+  const openCustom = () => {
+    const current = routine.schedule;
+    if (current?.kind === "interval" || current?.kind === "once") {
+      setCustomKind(current.kind);
+      setCustomMinutes(String(current.minutes));
+    } else if (current?.kind === "daily") {
+      setCustomKind("daily");
+      setCustomHour(String(current.hour));
+      setCustomMinute(String(current.minute));
+    } else if (current?.kind === "weekly") {
+      setCustomKind("weekly");
+      setCustomWeekday(String(current.weekday));
+      setCustomHour(String(current.hour));
+      setCustomMinute(String(current.minute));
+    }
+    setCustomError("");
+    setCustomOpen(true);
+  };
+
+  /** Build the schedule from the editor fields; null shows why it failed. */
+  const applyCustom = () => {
+    const schedule = coerceSchedule(
+      customKind === "interval" || customKind === "once"
+        ? { kind: customKind, minutes: Number(customMinutes) }
+        : customKind === "daily"
+          ? { kind: customKind, hour: Number(customHour), minute: Number(customMinute) }
+          : {
+              kind: customKind,
+              weekday: Number(customWeekday),
+              hour: Number(customHour),
+              minute: Number(customMinute),
+            },
+    );
+    if (schedule === null) {
+      setCustomError(customKind === "once" ? "Minutes must be 1–1440." : "Minutes must be 5–1440.");
+      return;
+    }
+    setSchedule(describeSchedule(schedule), schedule);
+    setCustomOpen(false);
   };
 
   return (
@@ -212,6 +276,9 @@ export function RoutinePanel({
                   } else {
                     setMenuOpen(true);
                     setScheduleOpen(false);
+                    // Reopening starts at the top level, not wherever the last
+                    // visit ended — stale editor fields read as someone else's.
+                    setCustomOpen(false);
                   }
                 }}
               >
@@ -245,30 +312,142 @@ export function RoutinePanel({
                       className="trigger-submenu-chevron"
                     />
                   </button>
-                  {scheduleOpen
-                    ? SCHEDULE_OPTIONS.map((option) => (
+                  {scheduleOpen ? (
+                    customOpen ? (
+                      <div className="trigger-custom">
+                        <select
+                          aria-label="Repeat"
+                          className="trigger-custom-select"
+                          value={customKind}
+                          onChange={(event) =>
+                            setCustomKind(
+                              event.currentTarget.value as "interval" | "once" | "daily" | "weekly",
+                            )
+                          }
+                        >
+                          <option value="interval">Every N minutes</option>
+                          <option value="once">Once, in N minutes</option>
+                          <option value="daily">Every day</option>
+                          <option value="weekly">Every week</option>
+                        </select>
+                        {customKind === "interval" || customKind === "once" ? (
+                          <label className="trigger-custom-field">
+                            Minutes
+                            <input
+                              type="number"
+                              aria-label="Minutes"
+                              className="trigger-custom-input"
+                              min={customKind === "once" ? 1 : 5}
+                              max={1440}
+                              value={customMinutes}
+                              onChange={(event) => setCustomMinutes(event.currentTarget.value)}
+                            />
+                          </label>
+                        ) : (
+                          <>
+                            {customKind === "weekly" ? (
+                              <select
+                                aria-label="Weekday"
+                                className="trigger-custom-select"
+                                value={customWeekday}
+                                onChange={(event) => setCustomWeekday(event.currentTarget.value)}
+                              >
+                                {WEEKDAY_NAMES.map((name, index) => (
+                                  <option key={name} value={String(index)}>
+                                    {name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : null}
+                            <select
+                              aria-label="Hour"
+                              className="trigger-custom-select"
+                              value={customHour}
+                              onChange={(event) => setCustomHour(event.currentTarget.value)}
+                            >
+                              {HOURS.map((hour) => (
+                                <option key={`hour-${hour}`} value={String(hour)}>
+                                  {String(hour).padStart(2, "0")}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              aria-label="Minute"
+                              className="trigger-custom-select"
+                              value={customMinute}
+                              onChange={(event) => setCustomMinute(event.currentTarget.value)}
+                            >
+                              {/* Five-minute steps keep the list short; anything
+                                  finer is what the Blob's own tool is for. */}
+                              {Array.from({ length: 12 }, (_, slot) => slot * 5).map((minute) => (
+                                <option key={minute} value={String(minute)}>
+                                  {String(minute).padStart(2, "0")}
+                                </option>
+                              ))}
+                            </select>
+                          </>
+                        )}
+                        {customError === "" ? null : (
+                          <span className="trigger-custom-error" aria-live="polite">
+                            {customError}
+                          </span>
+                        )}
+                        <div className="trigger-custom-actions">
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="account-menu-item"
+                            onClick={() => setCustomOpen(false)}
+                          >
+                            Back
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="account-menu-item"
+                            onClick={applyCustom}
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {SCHEDULE_OPTIONS.map((option) => (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            key={option.label}
+                            className="account-menu-item trigger-schedule-item"
+                            onClick={() => setSchedule(option.label, option.schedule)}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
                         <button
                           type="button"
                           role="menuitem"
-                          key={option.label}
                           className="account-menu-item trigger-schedule-item"
-                          onClick={() => setSchedule(option.label, option.schedule)}
+                          onClick={openCustom}
                         >
-                          {option.label}
+                          Custom…
                         </button>
-                      ))
-                    : EVENT_TRIGGERS.map(({ label, icon: Icon }) => (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          key={label}
-                          className="account-menu-item"
-                          onClick={() => addTrigger(label)}
-                        >
-                          <Icon size={15} strokeWidth={1.8} aria-hidden="true" />
-                          {label}
-                        </button>
-                      ))}
+                      </>
+                    )
+                  ) : (
+                    EVENT_TRIGGERS.map(({ label, icon: Icon }) => (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        key={label}
+                        className="account-menu-item"
+                        onClick={() => addTrigger(label)}
+                      >
+                        <Icon size={15} strokeWidth={1.8} aria-hidden="true" />
+                        {label}
+                      </button>
+                    ))
+                  )}
                 </div>
               ) : null}
             </div>

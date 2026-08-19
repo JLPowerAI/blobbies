@@ -15,9 +15,11 @@ import {
   makeComposioTools,
   makeFsTools,
   makeRosterTools,
+  makeRoutineTools,
   makeShellTool,
   type PendingAsk,
   type RosterAccess,
+  type RoutineAccess,
 } from "@/lib/blob-tools";
 import type { HomeBackend } from "@/lib/home";
 import { type Intent, routeIntent } from "@/lib/intent";
@@ -130,6 +132,19 @@ const configArgs = z.object({
  */
 const CONFIGURE_TOOL_NAME = "configure_blob";
 
+/**
+ * Fed to the streamed turn when the configure round abstains. The standing
+ * prompt already tells an unconfigured Blob to ask; this adds what that
+ * section cannot know — that the round already ran and chose not to guess —
+ * and points the questions at what the user can actually pick (the Blob's
+ * name and connected apps often hint at the intended job).
+ */
+const CONFIGURE_UNCLEAR_NOTE =
+  "The setup round could not tell what the user needs from you yet, so no configuration was saved. " +
+  "Ask two or three short, specific questions about what they want you to do and how they like it done \u2014 " +
+  "your name or your connected apps may hint at a purpose worth asking about. " +
+  "Do not invent or confirm a role before they answer.";
+
 export { isAbortError } from "@kenkaiiii/gg-agent";
 export type { PromptExtensions, UserContext } from "@/lib/prompt";
 /**
@@ -193,6 +208,9 @@ function withToolExchange(conversation: Message[], call: ToolCallRecord, id: str
   ];
 }
 
+/** One forced-configure round: a written role, a deliberate abstention, or a failure. */
+type ConfigureOutcome = { patch: BlobConfigPatch } | { unclear: true } | null;
+
 /**
  * Force an unconfigured Blob to write its own configuration.
  *
@@ -201,12 +219,17 @@ function withToolExchange(conversation: Message[], call: ToolCallRecord, id: str
  * streaming (verified against 0.32.9). Ollama's structured outputs
  * (grammar-constrained JSON via `format`) work even on sub-1B models, so this
  * round uses the native /api/chat non-streaming with a JSON schema.
- * Returns null when the model/server can't do it; chat continues without.
+ *
+ * Returns `{ patch }` when a role could be written, `{ unclear: true }` when
+ * the model deliberately abstained (both fields returned empty, as the prompt
+ * instructs when the user has not said what they need), and null when the
+ * model/server can't do the round; chat continues without in every case.
  */
 async function forcedConfigureCall(
   model: string,
   messages: Message[],
-): Promise<BlobConfigPatch | null> {
+  name?: string,
+): Promise<ConfigureOutcome> {
   // No maxLength here: a grammar length cap makes the model truncate
   // mid-word at the boundary. Length is steered by the prompt instead,
   // and oversized output is trimmed at whole-sentence level below.
@@ -221,6 +244,8 @@ async function forcedConfigureCall(
     },
     additionalProperties: false,
   };
+  const who =
+    name === undefined || name === "" ? "their assistant Blob" : `${name}, their assistant Blob`;
   const configureMessages = [
     ...messages
       .filter((entry) => entry.role !== "system" && typeof entry.content === "string")
@@ -228,10 +253,13 @@ async function forcedConfigureCall(
     {
       role: "system",
       content:
-        "The user just explained what they need you (their assistant Blob) to do. " +
-        "Write your own configuration: a short `title` for the role (a few words), " +
+        `The conversation above is everything between you and the user so far (you are ${who}). ` +
+        "Write your own configuration from what they have asked of you: a short `title` (a few words), " +
         "and a `description` of what you will do for them and how you will behave " +
-        "(2-4 complete sentences).",
+        "(2-4 complete sentences). If it does not yet say what they need from you \u2014 " +
+        "a greeting, small talk \u2014 do not invent a role: return both fields as empty strings. " +
+        "Asking you to BE something, or to work as something else instead, is a role: " +
+        "never abstain for those.",
     },
   ];
   try {
@@ -273,7 +301,10 @@ async function forcedConfigureCall(
     if (!parsed.success) {
       return null;
     }
-    return toConfigPatch(parsed.data);
+    // Both fields empty is the requested abstention, not a failure: the turn
+    // asks the user instead (CONFIGURE_UNCLEAR_NOTE in streamBlobTurn).
+    const patch = toConfigPatch(parsed.data);
+    return patch === null ? { unclear: true } : { patch };
   } catch {
     return null;
   }
@@ -477,6 +508,12 @@ export async function streamBlobTurn(options: {
    */
   roster?: { access: RosterAccess; selfName: string };
   /**
+   * This Blob's own routines, as the create/update/delete/list_routine tools
+   * on every turn that has them (chat included — "check in on me daily at 3pm"
+   * is the most common way a routine is born). Writes arm immediately.
+   */
+  routines?: RoutineAccess;
+  /**
    * Local MCP servers. Their tools join the routine catalog only — a
    * third-party server's tool descriptions are text we did not write, and the
    * chat path's restraint is measured with a fixed catalog.
@@ -564,11 +601,17 @@ export async function streamBlobTurn(options: {
     options.forceConfigure === true ||
     (options.intent === undefined && intent.action === "change_job");
 
-  // simplification: forcing configure_blob on the first unconfigured turn
-  // means a greeting like "hi" also triggers a (generic) self-config; the
-  // model can refine it on later turns via the same tool.
+  // An unconfigured Blob settles its config on its first user turn, one way
+  // or the other: the round writes it when the user's message gives a role,
+  // and asks for one when it does not — the round re-fires on the next
+  // message for as long as title and description stay empty.
   if (forceConfigure) {
-    const patch = await forcedConfigureCall(options.model, conversation);
+    const outcome = await forcedConfigureCall(
+      options.model,
+      conversation,
+      options.roster?.selfName,
+    );
+    const patch = outcome !== null && "patch" in outcome ? outcome.patch : null;
     if (patch !== null) {
       options.onConfigure(patch);
       // Report as a tool call: same effect, just forced rather than chosen.
@@ -600,6 +643,11 @@ export async function streamBlobTurn(options: {
           ],
         },
       ];
+    } else if (outcome !== null) {
+      // Unclear: nothing said so far gives this Blob a role. The streamed turn
+      // asks the questions instead; the empty config keeps the round armed for
+      // the user's answer.
+      conversation = [...conversation, { role: "system", content: CONFIGURE_UNCLEAR_NOTE }];
     }
   }
 
@@ -654,7 +702,12 @@ export async function streamBlobTurn(options: {
     // router's web verdict — see the `tools` line below.
     const appTools = options.hasConnectedApps === true ? makeComposioTools() : [];
     // Routine turns run unattended, so they get the full autonomous catalog;
-    // chat turns keep the tuned web-only pair (see the scope option docs).
+    // chat turns keep the tuned small surface plus the routine tools — a chat
+    // request like "check in on me daily at 3pm" is the most common way a
+    // routine is born, and hiding them behind a router round misfired live
+    // (the model, told the tools exist but unable to call them, went fishing
+    // for schedulers in connected apps). Idempotent by name, capped by
+    // MAX_ROUTINES.
     const fs = options.home === undefined ? null : makeFsTools(options.home);
     const tools =
       scope === "routine"
@@ -668,6 +721,7 @@ export async function streamBlobTurn(options: {
             ...(options.roster === undefined
               ? []
               : makeRosterTools(options.roster.access, options.roster.selfName)),
+            ...(options.routines === undefined ? [] : makeRoutineTools(options.routines)),
             ...mcpTools,
             makeAskTool((ask) => {
               pendingAsk = ask;
@@ -680,7 +734,11 @@ export async function streamBlobTurn(options: {
               signal: options.signal,
             }),
           ]
-        : [...webTools, ...appTools];
+        : [
+            ...webTools,
+            ...appTools,
+            ...(options.routines === undefined ? [] : makeRoutineTools(options.routines)),
+          ];
     const loop = agentLoop(conversation, {
       provider: providerFor(options.model),
       model: options.model,
@@ -700,10 +758,28 @@ export async function streamBlobTurn(options: {
           }),
     });
     const pending = new Map<string, { name: string; args: Record<string, unknown> }>();
+    // Set by a retry that preserved partial text (stream stall/drop): the next
+    // generation continues from a seam the model starts a fresh sentence at,
+    // and nothing on the wire separates the two — seen live as
+    // "Explain honestly.I tried" and "Keep it brief.Happy to be here".
+    // A paragraph break is the honest rendering of two generations.
+    // simplification: a genuine mid-word resume would get the break inside a
+    // word; models restart the sentence (both observed seams), and a visible
+    // split beats an invisible glue. Detecting word-level resumes would need
+    // a join heuristic the wire gives no signal for.
+    let continuationSeam = false;
     for await (const event of loop) {
       // No per-delta emission: a bubble appears only once its text is whole.
       if (event.type === "text_delta") {
-        text += event.text;
+        const chunk =
+          continuationSeam && text !== "" && !/\s$/.test(text) && !/^\s/.test(event.text)
+            ? `\n\n${event.text}`
+            : event.text;
+        continuationSeam = false;
+        text += chunk;
+      }
+      if (event.type === "retry" && (event.preservedChars ?? 0) > 0) {
+        continuationSeam = true;
       }
       if (event.type === "tool_call_start") {
         // Anything said before a tool call is preamble, not the answer. A

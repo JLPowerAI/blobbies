@@ -1,18 +1,27 @@
 /**
  * Routine schedules: when a routine fires, in the user's local time.
  *
- * Deliberately not cron: three shapes cover "every N minutes / daily at /
- * weekly on", are editable with two dropdowns, and need no parser dependency.
+ * Deliberately not cron: four shapes cover "every N minutes / daily at /
+ * weekly on / once after N minutes", are editable with two dropdowns, and
+ * need no parser dependency.
  */
 
 export type RoutineSchedule =
   | { kind: "interval"; minutes: number }
   | { kind: "daily"; hour: number; minute: number }
-  | { kind: "weekly"; weekday: number; hour: number; minute: number };
+  | { kind: "weekly"; weekday: number; hour: number; minute: number }
+  | { kind: "once"; minutes: number };
 
 /** Interval bounds: below 5 minutes thrashes the model; above a day, use daily. */
 export const MIN_INTERVAL_MINUTES = 5;
 export const MAX_INTERVAL_MINUTES = 24 * 60;
+
+/**
+ * One-shot bounds: no floor above 1 (it fires a single time, so there is no
+ * loop to thrash) and the same day-scale ceiling — further out is a daily.
+ */
+export const MIN_ONCE_MINUTES = 1;
+export const MAX_ONCE_MINUTES = 24 * 60;
 
 /** Clamp helper so a hand-edited store value cannot produce a hot loop. */
 function clampInterval(minutes: number): number {
@@ -20,6 +29,14 @@ function clampInterval(minutes: number): number {
     return MAX_INTERVAL_MINUTES;
   }
   return Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, Math.round(minutes)));
+}
+
+/** Same idea for a one-shot: a single fire, so the floor is 1 minute. */
+function clampOnce(minutes: number): number {
+  if (!Number.isFinite(minutes)) {
+    return MAX_ONCE_MINUTES;
+  }
+  return Math.min(MAX_ONCE_MINUTES, Math.max(MIN_ONCE_MINUTES, Math.round(minutes)));
 }
 
 /**
@@ -30,6 +47,8 @@ export function nextFireTime(schedule: RoutineSchedule, fromMs: number): number 
   switch (schedule.kind) {
     case "interval":
       return fromMs + clampInterval(schedule.minutes) * 60_000;
+    case "once":
+      return fromMs + clampOnce(schedule.minutes) * 60_000;
     case "daily": {
       const next = new Date(fromMs);
       next.setHours(schedule.hour, schedule.minute, 0, 0);
@@ -71,10 +90,68 @@ export function describeSchedule(schedule: RoutineSchedule): string {
       }
       return `Every ${minutes} minutes`;
     }
+    case "once": {
+      const minutes = clampOnce(schedule.minutes);
+      return minutes === 1 ? "Once, in a minute" : `Once, in ${minutes} minutes`;
+    }
     case "daily":
       return `Every day at ${clock(schedule.hour, schedule.minute)}`;
     case "weekly":
       return `Every ${WEEKDAYS[schedule.weekday] ?? "?"} at ${clock(schedule.hour, schedule.minute)}`;
+  }
+}
+
+/** Day names indexed as `weekly.weekday` is (0 = Sunday). */
+export const WEEKDAY_NAMES = WEEKDAYS;
+
+/**
+ * Lenient coerce for a model-written schedule (tool args or the schedule
+ * round): a small model omits `minute` more often than it misfills it, so the
+ * minute defaults to 0, an interval is clamped rather than rejected, and only
+ * genuinely wrong fields (hour 25, a missing hour, junk kinds) return null —
+ * the caller refuses with a message naming what a schedule needs. Strict
+ * `parseSchedule` stays the gate for values read back from the store.
+ */
+export function coerceSchedule(value: unknown): RoutineSchedule | null {
+  if (value === null || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const int = (key: string): number | null =>
+    typeof raw[key] === "number" && Number.isFinite(raw[key] as number)
+      ? Math.round(raw[key] as number)
+      : null;
+  const timeOfDay = (): { hour: number; minute: number } | null => {
+    const hour = int("hour");
+    if (hour === null || hour < 0 || hour > 23) {
+      return null;
+    }
+    const minute = int("minute") ?? 0;
+    return minute < 0 || minute > 59 ? null : { hour, minute };
+  };
+  switch (raw.kind) {
+    case "interval": {
+      const minutes = int("minutes");
+      return minutes === null ? null : { kind: "interval", minutes: clampInterval(minutes) };
+    }
+    case "once": {
+      const minutes = int("minutes");
+      return minutes === null ? null : { kind: "once", minutes: clampOnce(minutes) };
+    }
+    case "daily": {
+      const time = timeOfDay();
+      return time === null ? null : { kind: "daily", hour: time.hour, minute: time.minute };
+    }
+    case "weekly": {
+      const time = timeOfDay();
+      const weekday = int("weekday");
+      if (time === null || weekday === null || weekday < 0 || weekday > 6) {
+        return null;
+      }
+      return { kind: "weekly", weekday, hour: time.hour, minute: time.minute };
+    }
+    default:
+      return null;
   }
 }
 
@@ -90,6 +167,10 @@ export function parseSchedule(value: unknown): RoutineSchedule | null {
     case "interval": {
       const minutes = int("minutes");
       return minutes === null ? null : { kind: "interval", minutes: clampInterval(minutes) };
+    }
+    case "once": {
+      const minutes = int("minutes");
+      return minutes === null ? null : { kind: "once", minutes: clampOnce(minutes) };
     }
     case "daily": {
       const hour = int("hour");

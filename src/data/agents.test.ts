@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { MAX_BLOB_NAME_LENGTH, uniqueBlobName } from "@/data/agents";
+import {
+  type Agent,
+  GREETING,
+  GREETING_HINT,
+  MAX_BLOB_NAME_LENGTH,
+  transcriptFor,
+  transcripts,
+  uniqueBlobName,
+} from "@/data/agents";
 
 describe("uniqueBlobName", () => {
   it("leaves a free name alone", () => {
@@ -37,5 +45,41 @@ describe("uniqueBlobName", () => {
     // The settings field is empty for a keystroke between two real names;
     // inventing one there would type over the user.
     expect(uniqueBlobName("  ", ["Scout"])).toBe("");
+  });
+});
+
+describe("transcriptFor", () => {
+  const blob = (): Agent => ({
+    id: "test-blob",
+    name: "Scout",
+    time: "Now",
+    snippet: GREETING,
+    tone: "purple",
+    shape: "sphere",
+  });
+
+  it("greets with the question, then the hint that says what to answer with", () => {
+    // Two bubbles, one segment each — the shape a real streamed reply is
+    // stored in. The hint is the greeting's own message, not a longer
+    // greeting: the sidebar snippet and reply-quote still quote the question.
+    const entries = transcriptFor(blob());
+    expect(entries.map((entry) => entry.kind)).toEqual(["text", "text"]);
+    const bubbles = entries.map((entry) =>
+      entry.kind === "text" ? entry.segments.map((segment) => segment.text).join("") : "",
+    );
+    expect(bubbles).toEqual([GREETING, GREETING_HINT]);
+    expect(entries[0]?.id).not.toBe(entries[1]?.id);
+  });
+
+  it("prefers the seeded conversation when one exists", () => {
+    const agent = blob();
+    transcripts[agent.id] = [
+      { id: "seeded", kind: "text", author: "agent", segments: [{ text: "Old chat" }] },
+    ];
+    try {
+      expect(transcriptFor(agent)).toHaveLength(1);
+    } finally {
+      delete transcripts[agent.id];
+    }
   });
 });

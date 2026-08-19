@@ -56,6 +56,14 @@ export async function tick(host: SchedulerHost, now: number = Date.now()): Promi
       }
       // Claim: advance nextRunAt past now before running. Computed from the
       // due time so a long outage still lands on schedule-aligned times.
+      if (routine.schedule.kind === "once") {
+        // A one-shot claims by deactivating: there is no next fire to advance
+        // to, and the routine stays in the panel (paused) as its own record.
+        host.update(blobId, routine.id, { active: false, nextRunAt: undefined });
+        const status = await host.fire(blobId, routine);
+        host.update(blobId, routine.id, { lastRunAt: now, lastRunStatus: status });
+        return true;
+      }
       let next = nextFireTime(routine.schedule, due);
       while (next <= now) {
         next = nextFireTime(routine.schedule, next);
@@ -83,6 +91,11 @@ export function armRoutines(host: SchedulerHost, now: number = Date.now()): numb
         if (routine.nextRunAt !== undefined) {
           host.update(blobId, routine.id, { nextRunAt: undefined });
         }
+        continue;
+      }
+      if (!routine.active && routine.nextRunAt === undefined) {
+        // Inactive with nothing pending (e.g. a fired one-shot): leave it —
+        // arming it would put a "next" line on a routine that never fires.
         continue;
       }
       if (routine.nextRunAt === undefined) {

@@ -85,7 +85,10 @@ const INTENT_SCHEMA = {
   // chosen action are emitted anyway and ignored (0 / '' by convention).
   required: ["action", "memory_number", "fact"],
   properties: {
-    action: { type: "string", enum: ["none", "save_fact", "delete_fact", "change_job"] },
+    action: {
+      type: "string",
+      enum: ["none", "save_fact", "delete_fact", "change_job"],
+    },
     fact: { type: "string" },
     memory_number: { type: "integer" },
   },
@@ -99,7 +102,9 @@ const INTENT_SCHEMA = {
  * stops ordinary questions being filed as facts.
  */
 const ROUTER_PROMPT =
-  "You classify the user's last message for a personal assistant.\n\n" +
+  "You classify the user's last message for a personal assistant. The request " +
+  "may open with a short 'Earlier, for reference' block \u2014 background only; " +
+  "classify ONLY the last message, which follows it.\n\n" +
   "save_fact -> the user states something lasting about themselves (schedule, " +
   "preferences, name, situation), or tells you to remember it. Copy it into " +
   "`fact` as a short sentence about the user. `fact` restates what the user " +
@@ -112,8 +117,11 @@ const ROUTER_PROMPT =
   "change_job -> the user wants you to work as a different KIND of assistant " +
   "from now on (a new role or profession for you). Choose this ONLY when what " +
   "YOU do changes. If the change is about the USER's own life or about a fact " +
-  "you saved, it is save_fact, never change_job.\n" +
-  "none -> questions, greetings, thanks, or a request to do a task.\n\n" +
+  "you saved, it is save_fact, never change_job. Routine requests (check in " +
+  "daily, remind me in 10 minutes) are none: the assistant has a routine tool " +
+  "for those.\n" +
+  "none -> questions, greetings, thanks, or a request to do a task (including " +
+  "scheduling something).\n\n" +
   "Examples:\n" +
   "'Remember I train Mondays' -> save_fact, fact='the user trains on Mondays'\n" +
   "'I moved training to Tuesdays' -> save_fact, fact='the user trains on Tuesdays'\n" +
@@ -125,6 +133,8 @@ const ROUTER_PROMPT =
   "'Delete what you saved about my address' (saved: [2] the user's address...) " +
   "-> delete_fact, memory_number=2\n" +
   "'Be my writing coach instead' -> change_job\n" +
+  "'Check in on me every day at 3pm' -> none\n" +
+  "'check in on me in 1 min' -> none\n" +
   "'What day do I train?' -> none\n" +
   "'What's the weather in Lisbon tomorrow?' -> none\n" +
   "'Who wrote that book?' -> none\n" +
@@ -133,7 +143,8 @@ const ROUTER_PROMPT =
   "fact='the user lives in Lisbon'\n" +
   "'Can you help me plan the week?' -> none\n" +
   "'thanks' -> none\n\n" +
-  "A message ending in '?' is almost always none.";
+  "A message ending in '?' is almost always none — unless it asks you to do " +
+  "something recurring ('can you check in on me daily?').";
 
 /**
  * Words that mean the user is talking about the Blob's *memory*, not its job.
@@ -509,15 +520,43 @@ export async function pickResponders(options: {
   }
 }
 
-/** Text of the most recent user message, or "" when there is none. */
-function lastUserText(messages: Message[]): string {
+/** Index of the most recent string-content user message, or -1. */
+function lastUserIndex(messages: Message[]): number {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message?.role === "user" && typeof message.content === "string") {
-      return message.content;
+      return index;
     }
   }
-  return "";
+  return -1;
+}
+
+/** Per-line cap for the reference block: a referent, not a transcript. */
+const ROUTER_CONTEXT_CHARS = 160;
+const ROUTER_CONTEXT_LINES = 2;
+
+/**
+ * Up to two plain lines before the classified message, so a short referent
+ * can resolve: "try create one now" routes only if the router can see that a
+ * routine was just discussed. Rides on the user turn for the same prefix-
+ * cache reason as the memory hint; each line is capped because the router's
+ * job is to resolve what a message refers to, not to read the conversation.
+ */
+function recentContext(messages: Message[], classifyAt: number): string {
+  const lines: string[] = [];
+  for (let index = classifyAt - 1; index >= 0 && lines.length < ROUTER_CONTEXT_LINES; index--) {
+    const entry = messages[index];
+    if (entry?.role !== "user" && entry?.role !== "assistant") {
+      continue;
+    }
+    if (typeof entry.content !== "string" || entry.content.trim() === "") {
+      continue;
+    }
+    lines.unshift(
+      `${entry.role === "user" ? "user" : "you"}: ${entry.content.trim().slice(0, ROUTER_CONTEXT_CHARS)}`,
+    );
+  }
+  return lines.length === 0 ? "" : `Earlier, for reference:\n${lines.join("\n")}\n\n`;
 }
 
 /**
@@ -530,7 +569,8 @@ export async function routeIntent(options: {
   memories: BlobMemory[];
   signal?: AbortSignal;
 }): Promise<Intent> {
-  const text = lastUserText(options.messages);
+  const classifyAt = lastUserIndex(options.messages);
+  const text = classifyAt === -1 ? "" : (options.messages[classifyAt]?.content as string);
   if (text.trim() === "") {
     return { action: "none" };
   }
@@ -555,6 +595,7 @@ export async function routeIntent(options: {
     ? "\n\n(This message mentions your memory, so it is about a saved fact: " +
       "choose save_fact or delete_fact, never change_job.)"
     : "";
+  const context = recentContext(options.messages, classifyAt);
   const routerMessages = [
     {
       role: "system",
@@ -564,7 +605,7 @@ export async function routeIntent(options: {
         renderMemories(options.memories) || "\n(none)"
       }`,
     },
-    { role: "user", content: `${text}${hint}` },
+    { role: "user", content: `${context}${text}${hint}` },
   ];
   try {
     let content: string;

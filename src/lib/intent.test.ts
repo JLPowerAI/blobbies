@@ -137,6 +137,93 @@ describe("routeIntent", () => {
     }
   });
 
+  it("maps a routine request to none: the model holds the routine tools itself", async () => {
+    let systemContent = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages?: { role: string; content: string }[];
+        };
+        systemContent = body.messages?.[0]?.content ?? "";
+        return reply({ action: "none", fact: "", memory_number: 0 });
+      }),
+    );
+    try {
+      const intent = await routeIntent({
+        ...base,
+        messages: [{ role: "user", content: "check in on me every day at 3pm" }],
+      });
+      expect(intent).toEqual({ action: "none" });
+      // The examples steer the classifier away from routine requests: the
+      // assistant has a routine tool, so those are plain task requests.
+      expect(systemContent).toContain("'Check in on me every day at 3pm' -> none");
+      expect(systemContent).toContain("'check in on me in 1 min' -> none");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sends recent lines as reference, so a bare referent can route", async () => {
+    // Real transcript (2026-08-19): "try create one now" after a routine was
+    // discussed routed to none and the Blob went fishing in connected apps —
+    // the classifier cannot resolve "one" without seeing the discussion.
+    let userContent = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages?: { role: string; content: string }[];
+        };
+        userContent = body.messages?.at(-1)?.content ?? "";
+        return reply({ action: "none", fact: "", memory_number: 0 });
+      }),
+    );
+    try {
+      const intent = await routeIntent({
+        ...base,
+        messages: [
+          { role: "user", content: "Could you check up on me every day?" },
+          { role: "assistant", content: "I can't do that myself." },
+          { role: "user", content: "Did you create a routine?" },
+          { role: "assistant", content: "No \u2014 I don't have that ability." },
+          { role: "user", content: "try create one now" },
+        ],
+      });
+      expect(intent).toEqual({ action: "none" });
+      // The reference block carries the two lines before the message, capped
+      // and labelled, and the classified message stays last and intact.
+      expect(userContent).toContain("Earlier, for reference:");
+      expect(userContent).toContain("user: Did you create a routine?");
+      expect(userContent).toContain("you: No \u2014 I don't have that ability.");
+      // Only two lines: the older exchange is not shipped.
+      expect(userContent).not.toContain("check up on me every day");
+      expect(userContent.endsWith("try create one now")).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sends no reference block when nothing precedes the message", async () => {
+    let userContent = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages?: { role: string; content: string }[];
+        };
+        userContent = body.messages?.at(-1)?.content ?? "";
+        return reply({ action: "none", fact: "", memory_number: 0 });
+      }),
+    );
+    try {
+      await routeIntent({ ...base, messages: [{ role: "user", content: "hello" }] });
+      expect(userContent).toBe("hello");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("routes a tinfoil model through the verified structured call, never Ollama", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
@@ -259,6 +346,18 @@ describe("applyGroupIntent", () => {
     expect(
       await applyGroupIntent({ action: "change_job" }, { model: base.model, memories }),
     ).toBeNull();
+  });
+
+  it("never schedules a routine from a group either", async () => {
+    // With the routine tools in the model's own hands there is no verdict to
+    // drop — a group member calling create_routine makes its own routine, in
+    // its own conversation, which is exactly right. Kept as a guard on the
+    // reducer's shape: unknown actions must fall through to null, never be
+    // invented into a write.
+    const unknown = { action: "schedule_routine" } as unknown as Parameters<
+      typeof applyGroupIntent
+    >[0];
+    expect(await applyGroupIntent(unknown, { model: base.model, memories })).toBeNull();
   });
 
   it("lands a fact exactly where the per-Blob `remember` tool would", async () => {

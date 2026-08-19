@@ -164,6 +164,10 @@ describe("App", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Ken", level: 1 })).toBeInTheDocument();
+    // The greeting question plus the setup hint that says what to answer with.
+    const log = screen.getByRole("log");
+    expect(within(log).getByText("What do you need me to do?")).toBeInTheDocument();
+    expect(within(log).getByText(/To set me up/)).toBeInTheDocument();
     const conversations = screen.getByRole("navigation", { name: "Conversations" });
     // "Ken" the Blob row, not the "Ken Kai" account row in the footer.
     expect(
@@ -591,6 +595,36 @@ describe("App", () => {
     const list = screen.getByRole("complementary", { name: "Ken details" });
     expect(within(list).getByRole("button", { name: /Test routine/ })).toBeInTheDocument();
     expect(within(list).getByText("Every hour")).toBeInTheDocument();
+  });
+
+  it("schedules a routine at a specific time through the custom picker", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+
+    await user.click(screen.getByRole("button", { name: "Show details panel" }));
+    const details = screen.getByRole("complementary", { name: "Ken details" });
+    await user.click(within(details).getByRole("button", { name: "Create Routine" }));
+
+    const editor = screen.getByRole("complementary", { name: "Routine" });
+    await user.type(within(editor).getByLabelText("Name"), "Afternoon check-in");
+    await user.type(within(editor).getByLabelText("Instruction"), "Ask how the day went.");
+    await user.click(within(editor).getByRole("button", { name: "Add trigger" }));
+    await user.click(within(editor).getByRole("menuitem", { name: "On a schedule" }));
+    // Not a preset: a real time of day.
+    await user.click(within(editor).getByRole("menuitem", { name: "Custom…" }));
+    await user.selectOptions(within(editor).getByLabelText("Repeat"), "daily");
+    await user.selectOptions(within(editor).getByLabelText("Hour"), "15");
+    await user.selectOptions(within(editor).getByLabelText("Minute"), "30");
+    await user.click(within(editor).getByRole("menuitem", { name: "Apply" }));
+
+    // The trigger chip and the schedule line both show the chosen time — the
+    // preset era hardcoded 9:00 and never said which 9:00. The "next" half
+    // only renders when the scheduler armed a real fire time.
+    expect(
+      within(editor).getByText("Every day at 15:30", { selector: ".trigger-row" }),
+    ).toBeInTheDocument();
+    expect(within(editor).getByText(/Every day at 15:30 · next/)).toBeInTheDocument();
   });
 
   it("browses plugins and reports why a connect failed, on the row that failed", async () => {

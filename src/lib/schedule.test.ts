@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  coerceSchedule,
   describeSchedule,
   MAX_INTERVAL_MINUTES,
   MIN_INTERVAL_MINUTES,
+  MIN_ONCE_MINUTES,
   nextFireTime,
   parseSchedule,
+  WEEKDAY_NAMES,
 } from "@/lib/schedule";
 
 /** Local-time timestamp helper: 2026-03-02 is a Monday. */
@@ -22,6 +25,13 @@ describe("nextFireTime", () => {
     expect(nextFireTime({ kind: "interval", minutes: Number.NaN }, 0)).toBe(
       MAX_INTERVAL_MINUTES * 60_000,
     );
+  });
+
+  it("once fires N minutes from arming, with a 1-minute floor", () => {
+    expect(nextFireTime({ kind: "once", minutes: 10 }, at(2, 9))).toBe(at(2, 9, 10));
+    // No interval-style 5-minute floor: a one-shot fires once, so "in 1
+    // minute" (the request that motivated the kind) must stay 1 minute.
+    expect(nextFireTime({ kind: "once", minutes: 0 }, at(2, 9))).toBe(at(2, 9, MIN_ONCE_MINUTES));
   });
 
   it("daily fires later today when the time is still ahead", () => {
@@ -49,6 +59,7 @@ describe("nextFireTime", () => {
     const from = at(2, 9);
     const schedules = [
       { kind: "interval", minutes: 5 },
+      { kind: "once", minutes: 1 },
       { kind: "daily", hour: 9, minute: 0 },
       { kind: "weekly", weekday: 1, hour: 9, minute: 0 },
     ] as const;
@@ -67,6 +78,8 @@ describe("describeSchedule", () => {
     expect(describeSchedule({ kind: "weekly", weekday: 1, hour: 17, minute: 0 })).toBe(
       "Every Monday at 17:00",
     );
+    expect(describeSchedule({ kind: "once", minutes: 1 })).toBe("Once, in a minute");
+    expect(describeSchedule({ kind: "once", minutes: 10 })).toBe("Once, in 10 minutes");
   });
 });
 
@@ -74,6 +87,7 @@ describe("parseSchedule", () => {
   it("round-trips valid shapes", () => {
     for (const schedule of [
       { kind: "interval", minutes: 30 },
+      { kind: "once", minutes: 1 },
       { kind: "daily", hour: 0, minute: 0 },
       { kind: "weekly", weekday: 6, hour: 23, minute: 59 },
     ]) {
@@ -99,5 +113,70 @@ describe("parseSchedule", () => {
       kind: "interval",
       minutes: MIN_INTERVAL_MINUTES,
     });
+  });
+});
+
+describe("coerceSchedule", () => {
+  it("defaults a missing minute to 0, the omission a small model makes", () => {
+    expect(coerceSchedule({ kind: "daily", hour: 15 })).toEqual({
+      kind: "daily",
+      hour: 15,
+      minute: 0,
+    });
+  });
+
+  it("rounds and clamps an interval instead of rejecting it", () => {
+    expect(coerceSchedule({ kind: "interval", minutes: 1 })).toEqual({
+      kind: "interval",
+      minutes: MIN_INTERVAL_MINUTES,
+    });
+    expect(coerceSchedule({ kind: "interval", minutes: 99.4 })).toEqual({
+      kind: "interval",
+      minutes: 99,
+    });
+  });
+
+  it("accepts a weekly schedule with a real weekday and time", () => {
+    expect(coerceSchedule({ kind: "weekly", weekday: 5, hour: 16 })).toEqual({
+      kind: "weekly",
+      weekday: 5,
+      hour: 16,
+      minute: 0,
+    });
+  });
+
+  it("accepts a one-shot delay, clamped to its own 1-minute floor", () => {
+    expect(coerceSchedule({ kind: "once", minutes: 1 })).toEqual({
+      kind: "once",
+      minutes: 1,
+    });
+    expect(coerceSchedule({ kind: "once", minutes: 0 })).toEqual({
+      kind: "once",
+      minutes: MIN_ONCE_MINUTES,
+    });
+    // No minutes at all is a refusal: a one-shot without a delay is nothing.
+    expect(coerceSchedule({ kind: "once" })).toBeNull();
+  });
+
+  it("refuses a schedule with no time of day — never guess one", () => {
+    // The tool-refusal path: hour 25, a missing hour, or a junk kind must not
+    // become a silently-armed 9am, which is the bug the old UI had.
+    for (const value of [
+      { kind: "daily", hour: 25 },
+      { kind: "daily" },
+      { kind: "daily", hour: 9, minute: 60 },
+      { kind: "weekly", weekday: 7, hour: 9 },
+      { kind: "monthly", day: 1 },
+      null,
+      "daily",
+    ]) {
+      expect(coerceSchedule(value)).toBeNull();
+    }
+  });
+
+  it("exposes weekday names indexed as weekly.weekday is", () => {
+    expect(WEEKDAY_NAMES).toHaveLength(7);
+    expect(WEEKDAY_NAMES[0]).toBe("Sunday");
+    expect(WEEKDAY_NAMES[5]).toBe("Friday");
   });
 });

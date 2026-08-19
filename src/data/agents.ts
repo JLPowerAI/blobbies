@@ -157,6 +157,16 @@ export const MAX_BLOB_NAME_LENGTH = 24;
 export const MAX_BLOBS = 25;
 
 /**
+ * Ceiling on one Blob's routines, enforced on the tool path (create_routine).
+ *
+ * Same blast-radius reasoning as MAX_BLOBS, with a sharper edge: a routine
+ * turn can itself call create_routine, so an uncapped Blob can amplify its
+ * own future workload — every routine is a scheduler participant whose fires
+ * are model turns against one local model.
+ */
+export const MAX_ROUTINES = 20;
+
+/**
  * Names a Blob may not take, because `@`-addressing already means something
  * else with them. `@everyone` addresses the room, so a Blob called that could
  * never be reached on its own.
@@ -256,6 +266,16 @@ export const transcripts: Record<string, Message[]> = {};
 /** Greeting shown in a fresh conversation (and as the initial snippet). */
 export const GREETING = "What do you need me to do?";
 
+/**
+ * Setup hint under the greeting, as its own bubble. The question alone leaves
+ * the user guessing what they may say first, so the hint names the two things
+ * that configure the Blob (what to handle, how they like it) with one
+ * concrete example — and says a plain greeting also works, because the
+ * configure round then asks instead of guessing a role for them.
+ */
+export const GREETING_HINT =
+  "To set me up, tell me what to handle and how you like it done \u2014 e.g. \u201csummarise my inbox every morning, keep it short\u201d. Or just say hi and I\u2019ll ask a few questions.";
+
 /** Fallback transcript for agents without a seeded conversation. */
 export function transcriptFor(agent: Agent): Message[] {
   const seeded = transcripts[agent.id];
@@ -263,13 +283,20 @@ export function transcriptFor(agent: Agent): Message[] {
     return seeded;
   }
   // Fixed text, not agent.snippet: the snippet follows the latest activity,
-  // and the greeting must not echo it.
+  // and the greeting must not echo it. Two entries, matching how a real
+  // two-paragraph reply is stored (one bubble per segment).
   return [
     {
       id: `${agent.id}-status`,
       kind: "text",
       author: "agent",
       segments: [{ text: GREETING }],
+    },
+    {
+      id: `${agent.id}-hint`,
+      kind: "text",
+      author: "agent",
+      segments: [{ text: GREETING_HINT }],
     },
   ];
 }

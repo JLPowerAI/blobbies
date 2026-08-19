@@ -78,6 +78,25 @@ describe("tick", () => {
     expect(after?.lastRunStatus).toBe("done");
   });
 
+  it("fires a once routine one time and deactivates it — no re-arm, no second fire", async () => {
+    const now = 10 * HOUR;
+    const h = makeHost({
+      b1: [
+        routine({
+          schedule: { kind: "once", minutes: 1 },
+          nextRunAt: now - 1,
+        }),
+      ],
+    });
+    expect(await tick(h.host, now)).toBe(true);
+    const after = h.get("b1", "r1");
+    expect(after?.active).toBe(false);
+    expect(after?.nextRunAt).toBeUndefined();
+    // A later tick sees an inactive routine: nothing fires again.
+    expect(await tick(h.host, now + HOUR)).toBe(false);
+    expect(h.fired).toEqual(["r1"]);
+  });
+
   it("claims before running, so a re-entrant tick cannot double-fire", async () => {
     // The fire callback itself runs a tick — the worst-case re-entrancy.
     const now = 10 * HOUR;
@@ -152,6 +171,18 @@ describe("armRoutines", () => {
     const h = makeHost({ b1: [routine({ nextRunAt: undefined })] });
     expect(armRoutines(h.host, now)).toBe(1);
     expect(h.get("b1", "r1")?.nextRunAt).toBe(now + HOUR);
+  });
+
+  it("does not re-arm a fired one-shot at startup", () => {
+    // The claim on a once routine deactivates it with no fire time; arming it
+    // again would put a "next" line on a routine that can never fire again.
+    const h = makeHost({
+      b1: [
+        routine({ active: false, schedule: { kind: "once", minutes: 5 }, nextRunAt: undefined }),
+      ],
+    });
+    expect(armRoutines(h.host, 10 * HOUR)).toBe(0);
+    expect(h.get("b1", "r1")?.nextRunAt).toBeUndefined();
   });
 
   it("clears a stale fire time when the schedule was removed", () => {

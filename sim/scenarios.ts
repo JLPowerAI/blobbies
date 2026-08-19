@@ -1,4 +1,6 @@
+import type { Routine } from "@/data/agents";
 import type { BlobMemory } from "@/lib/blob-tools";
+import type { RoutineSchedule } from "@/lib/schedule";
 
 /** Mutable Blob state a scenario acts on, mirroring what App.tsx persists. */
 export interface SimBlob {
@@ -6,6 +8,8 @@ export interface SimBlob {
   title?: string;
   description?: string;
   memories: BlobMemory[];
+  /** This Blob's routines, mirroring App's per-Blob routine store. */
+  routines?: Routine[];
 }
 
 /** What one turn produced: the reply plus every tool the model actually ran. */
@@ -126,6 +130,56 @@ export const replyUnder =
     outcome.reply.length <= chars
       ? null
       : `reply ${outcome.reply.length} chars > ${chars}: ${JSON.stringify(outcome.reply.slice(0, 100))}`;
+
+/** The named tool did NOT run: for turns that must stay plain conversation. */
+export const notCalledTool =
+  (name: string): Check =>
+  (outcome) =>
+    outcome.tools.some((call) => call.name === name)
+      ? `expected no ${name} call, got [${outcome.tools.map((c) => c.name).join(", ")}]`
+      : null;
+
+/** The reply avoids these phrases — scores away the failure-lore wording
+ * ("No routine was created", "I can't schedule…") that live transcripts
+ * showed once the catalog and the prompt disagreed. */
+export const replyOmits =
+  (...phrases: string[]): Check =>
+  (outcome) => {
+    const text = outcome.reply.toLowerCase();
+    const hit = phrases.find((phrase) => text.includes(phrase.toLowerCase()));
+    return hit === undefined
+      ? null
+      : `reply says "${hit}": ${JSON.stringify(outcome.reply.slice(0, 120))}`;
+  };
+
+/** A routine was created this scenario with the expected shape. `hour` for
+ * daily, `minutes` as an inclusive range for once (the model may round). */
+export const createdRoutine =
+  (expected: { kind: RoutineSchedule["kind"]; hour?: number; minutes?: [number, number] }): Check =>
+  (outcome) => {
+    const created = (outcome.blob.routines ?? []).at(-1);
+    if (created === undefined) {
+      return `expected a routine to be created, got none (reply: ${JSON.stringify(outcome.reply.slice(0, 120))})`;
+    }
+    const schedule = created.schedule;
+    if (schedule === undefined || schedule.kind !== expected.kind) {
+      return `expected kind ${expected.kind}, got ${JSON.stringify(schedule)}`;
+    }
+    if (
+      expected.hour !== undefined &&
+      schedule.kind === "daily" &&
+      schedule.hour !== expected.hour
+    ) {
+      return `expected hour ${expected.hour}, got ${schedule.hour}`;
+    }
+    if (expected.minutes !== undefined && schedule.kind === "once") {
+      const [lo, hi] = expected.minutes;
+      if (schedule.minutes < lo || schedule.minutes > hi) {
+        return `once minutes ${schedule.minutes} outside [${lo}, ${hi}]`;
+      }
+    }
+    return null;
+  };
 
 // --- scenarios ------------------------------------------------------------
 
@@ -321,6 +375,88 @@ export const scenarios: Scenario[] = [
       {
         say: "Search the web for the latest Ollama release and tell me what's new.",
         expect: [replied, calledTool("web_search")],
+      },
+    ],
+  },
+  {
+    // Live transcripts (2026-08-19) drove these three: a chat request for a
+    // routine must become a real create_routine call with the stated time,
+    // not a refusal with failure-lore wording, and not a trip through
+    // connected apps hunting for a scheduler.
+    name: "routines: creates a daily check-in at the stated time",
+    start: {
+      ...newBlob("Timmy"),
+      title: "Companion",
+      description: "Checks in with Ken.",
+      routines: [],
+    },
+    turns: [
+      {
+        say: "Check in on me every day at 3pm.",
+        expect: [
+          replied,
+          calledTool("create_routine"),
+          createdRoutine({ kind: "daily", hour: 15 }),
+          replyOmits(
+            "no routine was created",
+            "can't schedule",
+            "cannot schedule",
+            "can't create a routine",
+            "connected app",
+          ),
+        ],
+      },
+      {
+        // Follow-up recall: confirm the schedule the tool result reported,
+        // not one invented on the spot.
+        say: "What did you just set up, and for when?",
+        expect: [replied, replyMentions("15:00", "3pm", "3 pm", "15.00")],
+      },
+    ],
+  },
+  {
+    name: "routines: a one-shot delay is a 'once' routine, not a refusal",
+    start: {
+      ...newBlob("Timmy"),
+      title: "Companion",
+      description: "Checks in with Ken.",
+      routines: [],
+    },
+    turns: [
+      {
+        say: "Check in on me in 2 minutes.",
+        expect: [
+          replied,
+          calledTool("create_routine"),
+          // 1–5, not exactly 2: the model may round; a refusal reads as none.
+          createdRoutine({ kind: "once", minutes: [1, 5] }),
+          replyOmits(
+            "no routine was created",
+            "can't schedule",
+            "cannot schedule",
+            "one-time reminder",
+          ),
+        ],
+      },
+    ],
+  },
+  {
+    name: "routines: no time of day given asks for it, creates nothing",
+    start: {
+      ...newBlob("Timmy"),
+      title: "Companion",
+      description: "Checks in with Ken.",
+      routines: [],
+    },
+    turns: [
+      {
+        say: "Check in on me every day.",
+        expect: [
+          replied,
+          // "Never invent a time" — the turn asks, the tool is not called.
+          notCalledTool("create_routine"),
+          replyMentions("?"),
+        ],
       },
     ],
   },

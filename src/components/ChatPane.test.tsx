@@ -403,4 +403,51 @@ describe("ChatPane", () => {
     expect(screen.getByRole("button", { name: "Send message" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Stop replying" })).not.toBeInTheDocument();
   });
+
+  it("clamps a stale scroll extent when a panel resize settles", () => {
+    // WebKit (the Tauri webview) can leave scrollTop past the content end
+    // after the sidebar's width transition: the per-frame pin reads
+    // scrollHeight mid-reflow, and on close the re-wrapped transcript ends
+    // up shorter — a blank pane until the user scrolls and the engine
+    // re-clamps (seen live, 2026-08-19). jsdom has no layout, so the burst
+    // is driven through a stubbed ResizeObserver and faked metrics.
+    vi.useFakeTimers();
+    const callbacks: (() => void)[] = [];
+    class FakeObserver {
+      constructor(callback: () => void) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeObserver);
+    try {
+      render(pane(false, vi.fn()));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (el === null) return;
+      const scrollTo = vi.fn();
+      // Instance-level: the pane calls el.scrollTo, which jsdom does not
+      // implement on elements at all.
+      el.scrollTo = scrollTo as unknown as typeof el.scrollTo;
+      // The burst pinned to a mid-reflow extent (scrollTop 900); after the
+      // transition the content settled shorter (scrollHeight 1000, viewport
+      // 200 → real max 800).
+      Object.defineProperty(el, "scrollHeight", { get: () => 1000, configurable: true });
+      Object.defineProperty(el, "clientHeight", { get: () => 200, configurable: true });
+      Object.defineProperty(el, "scrollTop", { get: () => 900, configurable: true });
+
+      act(() => {
+        for (const callback of callbacks) callback();
+      });
+      act(() => {
+        vi.advanceTimersByTime(320);
+      });
+      // The settle clamp ends the burst on a position that exists.
+      expect(scrollTo).toHaveBeenCalledWith({ top: 800, behavior: "instant" });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
 });

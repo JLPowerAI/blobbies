@@ -38,6 +38,7 @@ async function runScenario(turns: { say: string }[], start: SimBlob): Promise<Tu
   const blob: SimBlob = {
     ...start,
     memories: start.memories.map((memory) => ({ ...memory })),
+    routines: (start.routines ?? []).map((routine) => ({ ...routine })),
   };
   const history: Message[] = [];
   const outcomes: TurnOutcome[] = [];
@@ -61,6 +62,44 @@ async function runScenario(turns: { say: string }[], start: SimBlob): Promise<Tu
         // wiring than the app actually runs.
         reconcile: (fact, existing) => reconcileMemories({ model: MODEL, fact, existing }),
       },
+      // Mirrors App.tsx's routineAccess: the in-conversation write path the
+      // routine tools land on. Scoped to this scenario's copy of the Blob.
+      routines: {
+        list: () => blob.routines ?? [],
+        create: (input) => {
+          blob.routines = [
+            ...(blob.routines ?? []),
+            {
+              id: `routine-${Date.now()}`,
+              name: input.name,
+              instruction: input.instruction,
+              triggers: [],
+              active: true,
+              ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
+            },
+          ];
+        },
+        update: (name, patch) => {
+          const wanted = name.trim().toLowerCase();
+          const at = (blob.routines ?? []).findIndex(
+            (routine) => routine.name.trim().toLowerCase() === wanted,
+          );
+          if (at === -1) return false;
+          blob.routines = (blob.routines ?? []).map((routine, index) =>
+            index === at ? { ...routine, ...patch } : routine,
+          );
+          return true;
+        },
+        delete: (name) => {
+          const wanted = name.trim().toLowerCase();
+          const at = (blob.routines ?? []).findIndex(
+            (routine) => routine.name.trim().toLowerCase() === wanted,
+          );
+          if (at === -1) return false;
+          blob.routines = (blob.routines ?? []).filter((_, index) => index !== at);
+          return true;
+        },
+      },
       onSegment: () => {},
       onConfigure: (patch) => {
         Object.assign(blob, patch);
@@ -71,7 +110,11 @@ async function runScenario(turns: { say: string }[], start: SimBlob): Promise<Tu
     outcomes.push({
       reply,
       tools: tools.map((call) => ({ name: call.name, args: call.args })),
-      blob: { ...blob, memories: blob.memories.map((memory) => ({ ...memory })) },
+      blob: {
+        ...blob,
+        memories: blob.memories.map((memory) => ({ ...memory })),
+        routines: (blob.routines ?? []).map((routine) => ({ ...routine })),
+      },
       ms: Date.now() - started,
     });
   }

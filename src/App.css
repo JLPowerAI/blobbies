@@ -4436,6 +4436,49 @@ a.modal-button {
   padding-inline-start: 34px;
 }
 
+/* Custom-schedule editor inside the trigger menu: selects and one number
+   field, laid out as a compact grid — the menu is 220px wide, so the fields
+   share rows rather than stacking full-height. */
+.trigger-custom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 6px 4px;
+  align-items: center;
+}
+
+.trigger-custom-select,
+.trigger-custom-input {
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--border-hairline);
+  background: var(--surface-chat);
+  color: inherit;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.trigger-custom-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.trigger-custom-error {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--file-accent);
+}
+
+.trigger-custom-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+}
+
 .routine-empty-note {
   margin: 0;
   font-size: 13px;

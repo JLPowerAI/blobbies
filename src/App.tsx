@@ -40,7 +40,7 @@ import {
   rejectionNote,
   saveAttachments,
 } from "@/lib/attachments";
-import type { BlobMemory, RosterAccess } from "@/lib/blob-tools";
+import type { BlobMemory, RosterAccess, RoutineAccess } from "@/lib/blob-tools";
 import { connectedAppNames } from "@/lib/composio";
 import { contextWindow } from "@/lib/context-window";
 import {
@@ -62,7 +62,7 @@ import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
 import { blobSystemPrompt, timeNote, trimHistory } from "@/lib/prompt";
 import { type ActiveRun, assertTransition, isTerminal, type RunTrigger } from "@/lib/run-state";
-import { nextFireTime } from "@/lib/schedule";
+import { describeSchedule, nextFireTime } from "@/lib/schedule";
 import { startScheduler } from "@/lib/scheduler";
 import type { SearchResult } from "@/lib/search";
 import { listSkills, type Skill, skillLine } from "@/lib/skills";
@@ -1079,6 +1079,12 @@ export function App() {
             next.nextRunAt = nextFireTime(next.schedule, Date.now());
           }
         }
+        // Re-enabling a fired one-shot (or any disarmed routine) must re-arm
+        // it, or it sits armed-less until the next app launch — armRoutines
+        // only runs at startup.
+        if (patch.active === true && next.schedule !== undefined && next.nextRunAt === undefined) {
+          next.nextRunAt = nextFireTime(next.schedule, Date.now());
+        }
         return next;
       }),
     );
@@ -1090,6 +1096,86 @@ export function App() {
     );
     setDetailView({ kind: "info" });
   };
+
+  /**
+   * Tool access to one Blob's routines: the write path when a Blob sets up
+   * (or stops) its own scheduled work, from any turn's routine tools.
+   *
+   * Reads go through `routinesRef`, not state: a tool fires inside a turn,
+   * outside the render cycle, and a render-scoped value would be stale the
+   * moment two writes land in one turn. Writes go through `setAgentRoutines`,
+   * which also flushes to disk and re-syncs the scheduler's mirror.
+   */
+  const routineAccess = (agentId: string): RoutineAccess => ({
+    list: () => routinesRef.current[agentId] ?? [],
+    create: (input) => {
+      setAgentRoutines(agentId, (current) => [
+        ...current,
+        {
+          id: `routine-${Date.now()}`,
+          name: input.name,
+          instruction: input.instruction,
+          triggers: input.schedule === undefined ? [] : [describeSchedule(input.schedule)],
+          active: true,
+          ...(input.schedule === undefined
+            ? {}
+            : { schedule: input.schedule, nextRunAt: nextFireTime(input.schedule, Date.now()) }),
+        },
+      ]);
+    },
+    update: (name, patch) => {
+      const wanted = name.trim().toLowerCase();
+      const match = (routinesRef.current[agentId] ?? []).find(
+        (candidate) => candidate.name.trim().toLowerCase() === wanted,
+      );
+      if (match === undefined) {
+        return false;
+      }
+      setAgentRoutines(agentId, (current) =>
+        current.map((candidate) => {
+          if (candidate.id !== match.id) {
+            return candidate;
+          }
+          const next: Routine = { ...candidate };
+          if (patch.instruction !== undefined) {
+            next.instruction = patch.instruction;
+          }
+          if (patch.schedule !== undefined) {
+            next.schedule = patch.schedule;
+            next.nextRunAt = nextFireTime(patch.schedule, Date.now());
+            // A new schedule on a routine that fired its one-shot (or was
+            // otherwise disarmed) is a request for it to run again: leaving it
+            // inactive would have update_routine report a schedule that never
+            // fires — the tool path's mirror of the panel's re-enable.
+            if (!candidate.active && candidate.nextRunAt === undefined) {
+              next.active = true;
+            }
+            // The trigger label is the schedule's display line; swap it so the
+            // Routines list shows the new time, not the one it replaced.
+            const oldLabel =
+              candidate.schedule === undefined ? null : describeSchedule(candidate.schedule);
+            next.triggers = [
+              ...candidate.triggers.filter((label) => label !== oldLabel),
+              describeSchedule(patch.schedule),
+            ];
+          }
+          return next;
+        }),
+      );
+      return true;
+    },
+    delete: (name) => {
+      const wanted = name.trim().toLowerCase();
+      const match = (routinesRef.current[agentId] ?? []).find(
+        (candidate) => candidate.name.trim().toLowerCase() === wanted,
+      );
+      if (match === undefined) {
+        return false;
+      }
+      setAgentRoutines(agentId, (current) => current.filter((c) => c.id !== match.id));
+      return true;
+    },
+  });
 
   /**
    * Patch a Blob.
@@ -1379,7 +1465,6 @@ export function App() {
             // the cached prompt prefix stays byte-identical between turns.
             skills: skills.map(skillLine),
             connectedApps,
-            runtime: isTinfoilModel(model) ? "enclave" : "local",
             ...(group === undefined
               ? {}
               : {
@@ -1608,6 +1693,7 @@ export function App() {
           },
           selfName: target.name,
         },
+        routines: routineAccess(target.id),
         mcpServers,
         // Three meta-tools, gated on having something to reach.
         hasConnectedApps: connectedApps.length > 0,
@@ -2336,7 +2422,6 @@ export function App() {
                 <SettingsPanel
                   agent={agent}
                   user={{ userName, timezone }}
-                  runtime={isTinfoilModel(model) ? "enclave" : "local"}
                   onUpdate={(patch) => updateBlob(agent.id, patch)}
                   userMemories={userMemories}
                   onChangeMemories={changeMemories}
