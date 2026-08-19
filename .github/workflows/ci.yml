@@ -97,3 +97,31 @@ jobs:
       - run: cargo install --locked cargo-audit
       - run: cargo audit
         working-directory: src-tauri
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: this repo ships publicly, so every commit is public the
+      # moment it lands on main — the scan must see all of them, not just the
+      # tip. The pre-commit hooks and GitHub push protection guard the write;
+      # this re-audits the whole history on every push and PR.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # Pinned release, checksum-verified, rather than gitleaks-action: the
+      # wrapper needs a license for orgs and is another action in the supply
+      # chain. Bump the version here and in all four URLs together.
+      - name: Install gitleaks 8.30.1
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v8.30.1"
+          curl -fsSL -o gitleaks_8.30.1_linux_x64.tar.gz "$base/gitleaks_8.30.1_linux_x64.tar.gz"
+          curl -fsSL "$base/gitleaks_8.30.1_checksums.txt" | grep 'gitleaks_8.30.1_linux_x64.tar.gz' | sha256sum -c -
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz gitleaks
+          sudo install -m 755 gitleaks /usr/local/bin/gitleaks
+
+      # --redact so a real finding never prints the secret into the Actions log.
+      - run: gitleaks git --redact .

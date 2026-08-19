@@ -47,6 +47,22 @@ const ALLOWED: [&str; 8] = [
 /// that a wedged process cannot hold a turn open.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// Any argument naming the Composio CLI's credential directory is refused.
+///
+/// `~/.composio/config.json` holds the connected-apps credential, written by
+/// `composio login`. Commands reach connected apps through the `composio`
+/// program itself, so `cat`, `grep` and friends have no legitimate business
+/// naming this directory — and one direct hit would put the credential in
+/// the model's context, one `web_fetch` from leaving the machine.
+///
+/// Because there is no shell, `~` and `$HOME` never expand: an argument can
+/// only reach this directory by containing its literal name. Matching is
+/// case-insensitive for macOS, whose default filesystem is too.
+/// simplification: a recursive search pointed at the home directory root
+/// (`rg pattern /Users/<name>`) still walks into the directory — closing that
+/// needs a real containment boundary, not an argument check.
+const PROTECTED_DIR_NAME: &str = ".composio";
+
 /// Cap on captured output: this text lands in the model's context.
 const OUTPUT_LIMIT: usize = 40_000;
 
@@ -63,6 +79,16 @@ fn check_call(program: &str, args: &[String]) -> Result<()> {
     // megabyte, and no legitimate call needs this many.
     if args.len() > 64 || args.iter().any(|arg| arg.len() > 4_096) {
         return Err(Error::Io("Too many or too-long arguments.".into()));
+    }
+    if args
+        .iter()
+        .any(|arg| arg.to_ascii_lowercase().contains(PROTECTED_DIR_NAME))
+    {
+        return Err(Error::Io(
+            "That path holds the connected-apps credential and is off-limits to \
+             commands. Reach connected apps through the app_* tools instead."
+                .into(),
+        ));
     }
     Ok(())
 }
@@ -211,5 +237,29 @@ mod tests {
         // Size is bounded, though: argv is not a smuggling channel.
         assert!(check_call("ls", &["x".repeat(5_000)]).is_err());
         assert!(check_call("ls", &vec!["x".to_owned(); 100]).is_err());
+    }
+
+    #[test]
+    fn the_composio_credential_directory_is_out_of_bounds() {
+        // Every spelling that can actually resolve into ~/.composio carries
+        // the directory name literally (no shell means no ~ or $HOME
+        // expansion), so each of these must be refused before anything runs.
+        for arg in [
+            "/Users/ken/.composio/config.json",
+            "~/.composio/config.json",
+            ".Composio/config.json", // macOS filesystems are case-insensitive
+            "/Users/ken/.composio",
+            "--config=/Users/ken/.composio/config.json",
+        ] {
+            assert!(
+                check_call("cat", &[arg.to_owned()]).is_err(),
+                "must refuse {arg:?}"
+            );
+        }
+        // Neighbouring names and ordinary text stay available: the check is
+        // narrow enough that a false refusal on a real command would be a bug.
+        assert!(check_call("cat", &["/Users/ken/.blobbies/notes.md".to_owned()]).is_ok());
+        assert!(check_call("ls", &[".compositorc-example".to_owned()]).is_ok());
+        assert!(check_call("composio", &["connections".to_owned()]).is_ok());
     }
 }
