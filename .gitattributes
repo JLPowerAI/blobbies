@@ -1,0 +1,18 @@
+# Source keeps LF on every platform. Without this, a Windows checkout with
+# core.autocrlf=true rewrites text files to CRLF, and `cargo fmt --check`
+# fails ("Incorrect newline style") on the very first CI run — measured on
+# windows-latest. eol=lf forces LF at checkout; text=auto lets Git decide
+# what counts as text.
+
+* text=auto eol=lf
+
+# Binary assets: never normalize, never diff as text.
+*.png binary
+*.icns binary
+*.ico binary
+*.gif binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.woff binary
+*.woff2 binary
