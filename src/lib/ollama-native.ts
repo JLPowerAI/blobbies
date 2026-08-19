@@ -9,22 +9,13 @@ import {
   type ToolCall,
 } from "@kenkaiiii/gg-ai";
 import { z } from "zod";
+import { OLLAMA_NUM_CTX } from "@/lib/context-window";
 import { OLLAMA_URL } from "@/lib/ollama";
 
-/**
- * Context window requested for every Blob turn, in tokens.
- *
- * Ollama's stock server default is 4096, which a normal conversation fills in
- * a few exchanges — the model then silently truncates the transcript and the
- * reply dies mid-sentence. The native /api/chat endpoint accepts a per-request
- * `num_ctx`, so the app asks for a real window instead of requiring every
- * user to reconfigure their Ollama install.
- *
- * simplification: fixed budget, not adaptive to model or free RAM. 16k of KV
- * cache is tens of MB for the small models this app targets; an adaptive pick
- * would need /api/ps probing and an eviction story.
- */
-export const OLLAMA_NUM_CTX = 16384;
+// Re-exported so existing importers (intent.ts, tests) keep working. Lives in
+// context-window.ts, a leaf: this module pulls the whole gg-ai provider stack,
+// and a constant must not drag that into the startup bundle.
+export { OLLAMA_NUM_CTX };
 
 /**
  * How long Ollama keeps the model loaded after each request.

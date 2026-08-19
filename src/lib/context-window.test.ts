@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contextWindow, rememberTinfoilWindows } from "@/lib/context-window";
-import { OLLAMA_NUM_CTX } from "@/lib/ollama-native";
+import { contextWindow, OLLAMA_NUM_CTX, rememberTinfoilWindows } from "@/lib/context-window";
 
 /**
  * Which window each model choice reports.
