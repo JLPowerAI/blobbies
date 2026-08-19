@@ -961,10 +961,13 @@ mod tests {
         let path = dir.join("out.json");
         std::fs::write(&path, r#"{"messages":[{"subject":"Security alert"}]}"#).expect("write");
 
-        let pointer = format!(
-            r#"{{"successful":true,"storedInFile":true,"outputFilePath":"{}"}}"#,
-            path.display()
-        );
+        // Backslashes must be escaped inside JSON — a Windows temp path
+        // (`C:\Users\...` via display()) would otherwise be an invalid
+        // escape sequence and the pointer would not parse. The CLI's own
+        // output is escaped the same way.
+        let json_path = path.display().to_string().replace('\\', "\\\\");
+        let pointer =
+            format!(r#"{{"successful":true,"storedInFile":true,"outputFilePath":"{json_path}"}}"#);
         assert!(resolve_spill(pointer).contains("Security alert"));
 
         // An ordinary inline result passes through untouched.
