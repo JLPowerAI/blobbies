@@ -30,6 +30,7 @@ import {
   OLLAMA_NUM_CTX,
   registerNativeOllamaProvider,
 } from "@/lib/ollama-native";
+import { configFieldEmpty } from "@/lib/prompt";
 import { isTinfoilModel, registerTinfoilProvider, tinfoilStructuredCall } from "@/lib/tinfoil";
 
 // From here on, "local" streams over native /api/chat so every turn carries
@@ -256,10 +257,12 @@ async function forcedConfigureCall(
         `The conversation above is everything between you and the user so far (you are ${who}). ` +
         "Write your own configuration from what they have asked of you: a short `title` (a few words), " +
         "and a `description` of what you will do for them and how you will behave " +
-        "(2-4 complete sentences). If it does not yet say what they need from you \u2014 " +
-        "a greeting, small talk \u2014 do not invent a role: return both fields as empty strings. " +
-        "Asking you to BE something, or to work as something else instead, is a role: " +
-        "never abstain for those.",
+        "(2-4 complete sentences). Any request to set you up, configure you, or give you " +
+        "ongoing work says what they need \u2014 write the configuration from it, filling " +
+        "reasonable gaps yourself. Only when they have asked for nothing at all \u2014 a bare " +
+        "greeting, thanks, small talk \u2014 do you abstain: return both fields as empty " +
+        "strings, never the words 'none' or 'n/a'. Asking you to BE something, or to " +
+        "work as something else instead, is a role: never abstain for those.",
     },
   ];
   try {
@@ -339,13 +342,14 @@ function toConfigPatch(args: {
   description?: string | undefined;
 }): BlobConfigPatch | null {
   const patch: BlobConfigPatch = {};
-  const title = args.title?.trim();
-  const description = args.description?.trim();
-  if (title !== undefined && title !== "") {
-    patch.title = clip(title, TITLE_MAX);
+  // Placeholder check first: models abstain with the word "none" (seen live
+  // on deepseek-v4-flash) and saving that as config permanently disarms the
+  // setup round's emptiness checks — the Blob could never configure again.
+  if (!configFieldEmpty(args.title)) {
+    patch.title = clip((args.title ?? "").trim(), TITLE_MAX);
   }
-  if (description !== undefined && description !== "") {
-    patch.description = clip(description, DESCRIPTION_MAX);
+  if (!configFieldEmpty(args.description)) {
+    patch.description = clip((args.description ?? "").trim(), DESCRIPTION_MAX);
   }
   return patch.title === undefined && patch.description === undefined ? null : patch;
 }

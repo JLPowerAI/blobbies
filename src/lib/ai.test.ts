@@ -224,6 +224,20 @@ describe("blobSystemPrompt", () => {
     expect(prompt).toContain("[Name]");
   });
 
+  it("treats placeholder 'none' config as unconfigured, so the setup round re-arms", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    // Live 2026-08-19: a configure round once saved title/description "none"
+    // verbatim; the blob then looked configured to every emptiness check and
+    // could never settle a real role.
+    const prompt = blobSystemPrompt(
+      { name: "Social Blob", title: "none", description: "none", memories: [] },
+      { userName: "Ken Kai", timezone: "Asia/Kuala_Lumpur" },
+    );
+    expect(prompt).toContain("Set yourself up");
+    // The configured section renders the placeholder verbatim otherwise.
+    expect(prompt).not.toContain("Your role");
+  });
+
   it("uses hand-written instructions verbatim instead of the generated role", async () => {
     const { blobSystemPrompt } = await import("@/lib/ai");
     const blob = {
@@ -443,6 +457,35 @@ describe("streamBlobTurn", () => {
     const last = streamedMessages[streamedMessages.length - 1];
     expect(last?.role).toBe("system");
     expect(last?.content).toContain("no configuration was saved");
+  });
+
+  it("treats a 'none'/'none' round as an abstention, never as saved config", async () => {
+    // Live 2026-08-19: deepseek-v4-flash abstains with the word "none" instead
+    // of the requested empty strings. Saved literally, that config permanently
+    // disarms the setup round's emptiness checks — the Blob could never
+    // configure itself again, however explicitly it was told to.
+    fetchHandler = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (request.format !== undefined) {
+        return new Response(
+          JSON.stringify({
+            message: { content: JSON.stringify({ title: "None.", description: "none" }) },
+          }),
+        );
+      }
+      return ndjson(textChunks("What should I handle for you?"));
+    };
+    const configured: unknown[] = [];
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "hey" }],
+      forceConfigure: true,
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: (patch) => configured.push(patch),
+    });
+    expect(configured).toEqual([]);
+    expect(text).toBe("What should I handle for you?");
   });
 
   it("hands a chat turn the routine tools directly — the model can create one itself", async () => {

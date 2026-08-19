@@ -183,6 +183,40 @@ describe("tinfoilStructuredCall", () => {
     expect(await tinfoilStructuredCall(callOptions)).toBeNull();
   });
 
+  it("slices the JSON object out of reasoning-prefixed content (live deepseek behavior)", async () => {
+    configureTinfoil({ apiKey: "test-key" });
+    // Seen live 2026-08-19: the model leaks deliberation before the object
+    // even under a json_schema response_format, and the whole-content
+    // hand-back made every caller's JSON.parse throw — the configure round
+    // silently saved nothing and the Blob asked questions instead.
+    secureFetchHandler = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content:
+                  ' If it\'s ambiguous, guess from any setup language. {"title":"Coach","description":"Listens."}',
+              },
+            },
+          ],
+        }),
+      );
+    expect(await tinfoilStructuredCall(callOptions)).toBe(
+      '{"title":"Coach","description":"Listens."}',
+    );
+  });
+
+  it("returns null when the content carries no JSON object at all", async () => {
+    configureTinfoil({ apiKey: "test-key" });
+    secureFetchHandler = async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: "none of that" } }] }));
+    expect(await tinfoilStructuredCall(callOptions)).toBeNull();
+    secureFetchHandler = async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }));
+    expect(await tinfoilStructuredCall(callOptions)).toBeNull();
+  });
+
   it("returns null (never throws) when no key is configured", async () => {
     expect(await tinfoilStructuredCall(callOptions)).toBeNull();
   });

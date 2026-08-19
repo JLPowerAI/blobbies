@@ -60,7 +60,7 @@ import { type McpServerConfig, parseLoopbackUrl } from "@/lib/mcp";
 import { notify, shouldNotify } from "@/lib/notify";
 import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
-import { blobSystemPrompt, timeNote, trimHistory } from "@/lib/prompt";
+import { blobSystemPrompt, configFieldEmpty, timeNote, trimHistory } from "@/lib/prompt";
 import { type ActiveRun, assertTransition, isTerminal, type RunTrigger } from "@/lib/run-state";
 import { describeSchedule, nextFireTime } from "@/lib/schedule";
 import { startScheduler } from "@/lib/scheduler";
@@ -1682,7 +1682,9 @@ export function App() {
         messages: aiMessages,
         thinking: reasoning,
         forceConfigure:
-          trigger === "user" && (target.title ?? "") === "" && (target.description ?? "") === "",
+          trigger === "user" &&
+          configFieldEmpty(target.title) &&
+          configFieldEmpty(target.description),
         scope: trigger === "user" ? "chat" : "routine",
         ...(turn?.intent === undefined ? {} : { intent: turn.intent }),
         home,

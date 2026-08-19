@@ -273,7 +273,20 @@ export async function tinfoilStructuredCall(options: {
     const payload = (await response.json()) as {
       choices?: { message?: { content?: string } }[];
     };
-    return payload.choices?.[0]?.message?.content ?? null;
+    const content = payload.choices?.[0]?.message?.content;
+    if (content === undefined || content === null) {
+      return null;
+    }
+    // vLLM-backed models sometimes leak reasoning prose before the JSON even
+    // under a json_schema response_format (seen live on deepseek-v4-flash,
+    // 2026-08-19: ' If it's ambiguous, guess from … {…}') — a whole-content
+    // hand-back made every caller's JSON.parse throw, which quietly killed
+    // the configure round (the Blob asked scheduling questions instead of
+    // configuring itself). Return the outermost object only; content with no
+    // object at all stays null, so every caller keeps its fail-closed default.
+    const start = content.indexOf("{");
+    const end = content.lastIndexOf("}");
+    return start === -1 || end <= start ? null : content.slice(start, end + 1);
   } catch {
     return null;
   }

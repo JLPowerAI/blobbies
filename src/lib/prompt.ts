@@ -85,6 +85,23 @@ function section(title: string, body: string): string {
 }
 
 /**
+ * Values a model writes for a title/description when it means "nothing".
+ * deepseek-v4-flash abstains from the configure round with the word "none"
+ * instead of the requested empty string (seen live 2026-08-19), and the
+ * result is worse than no config: every emptiness check that arms the setup
+ * round sees a non-empty field, the round never re-fires, and the Blob is
+ * stuck with "Your role: none" forever. Placeholder == empty everywhere a
+ * config field is tested.
+ */
+const PLACEHOLDER_CONFIG_VALUES = new Set(["none", "n/a", "null", "nil", "unknown", "unset"]);
+
+/** True when a title/description value is absent, blank, or a placeholder. */
+export function configFieldEmpty(value: string | undefined): boolean {
+  const text = (value ?? "").trim().toLowerCase().replace(/\.+$/, "");
+  return text === "" || PLACEHOLDER_CONFIG_VALUES.has(text);
+}
+
+/**
  * System prompt for a Blob.
  *
  * Ordered stable → volatile on purpose. Ollama caches the longest unchanged
@@ -113,7 +130,8 @@ export function blobSystemPrompt(
   extensions: PromptExtensions = {},
 ): string {
   const written = (blob.instructions ?? "").trim();
-  const configured = written !== "" || (blob.title ?? "") !== "" || (blob.description ?? "") !== "";
+  const configured =
+    written !== "" || !configFieldEmpty(blob.title) || !configFieldEmpty(blob.description);
 
   // 1. Identity: the name, and nothing else. Any persona wording here
   // ("personal assistant", "keep replies warm") is a second source of truth
