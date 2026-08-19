@@ -325,23 +325,24 @@ mod tests {
         }
     }
 
+    // Unix-only: the escape is exercised through a symlink, and creating
+    // one on Windows needs elevated privileges — the test would fail for the
+    // wrong reason. The non-symlink escapes are covered above, on every OS.
+    #[cfg(unix)]
     #[test]
     fn rejects_symlink_escape() {
         let home = temp_home("symlink");
-        #[cfg(unix)]
-        {
-            let outside = home
-                .parent()
-                .and_then(Path::parent)
-                .unwrap_or_else(|| panic!("parent"))
-                .to_path_buf();
-            std::os::unix::fs::symlink(&outside, home.join("link"))
-                .unwrap_or_else(|_| panic!("symlink"));
-            assert!(matches!(
-                resolve_in_home(&home, "link/escaped.txt"),
-                Err(Error::PathOutsideHome)
-            ));
-        }
+        let outside = home
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or_else(|| panic!("parent"))
+            .to_path_buf();
+        std::os::unix::fs::symlink(&outside, home.join("link"))
+            .unwrap_or_else(|_| panic!("symlink"));
+        assert!(matches!(
+            resolve_in_home(&home, "link/escaped.txt"),
+            Err(Error::PathOutsideHome)
+        ));
     }
 
     #[test]
