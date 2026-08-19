@@ -326,7 +326,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | gtk | 0.18.2 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk3-rs |
 | gtk-sys | 0.18.2 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk3-rs |
 | gtk3-macros | 0.18.2 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk3-rs |
-| h2 | 0.4.15 | MIT — Carl Lerche <me@carllerche.com>, Sean McArthur <sean@seanmonstar.com> | https://github.com/hyperium/h2 |
+| h2 | 0.4.17 | MIT — Carl Lerche <me@carllerche.com>, Sean McArthur <sean@seanmonstar.com> | https://github.com/hyperium/h2 |
 | hashbrown | 0.12.3 | MIT OR Apache-2.0 — Amanieu d'Antras <amanieu@gmail.com> | https://github.com/rust-lang/hashbrown |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/hashbrown |
 | heck | 0.4.1 | MIT OR Apache-2.0 — Without Boats <woboats@gmail.com> | https://github.com/withoutboats/heck |
