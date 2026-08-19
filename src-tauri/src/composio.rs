@@ -85,7 +85,7 @@ fn find_composio_binary() -> Option<PathBuf> {
         return Some(dir.join(binary));
     }
 
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let home = home_env()?;
     // `COMPOSIO_BIN_DIR` default, then the legacy single-directory layout the
     // installer still supports.
     [
@@ -94,6 +94,18 @@ fn find_composio_binary() -> Option<PathBuf> {
     ]
     .into_iter()
     .find(|candidate| candidate.is_file())
+}
+
+/// The user's home directory from the environment.
+///
+/// `HOME` is a Unix convention and is unset on Windows; Python CLIs —
+/// Composio included — resolve `Path.home()` to `USERPROFILE` there, so the
+/// fallback is what makes `~/.composio/user_data.json` findable at all.
+/// Without it `composio_signed_in` answered `false` on every Windows machine.
+fn home_env() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 /// Whether a downloaded file is a shell script rather than something a web
@@ -209,7 +221,7 @@ pub(crate) async fn composio_cli_version() -> Option<String> {
 /// if this ever moves again.
 #[tauri::command]
 pub(crate) fn composio_signed_in() -> bool {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+    let Some(home) = home_env() else {
         return false;
     };
     let Ok(text) = std::fs::read_to_string(home.join(".composio/user_data.json")) else {
@@ -814,12 +826,22 @@ mod tests {
     #[test]
     fn a_hung_child_is_killed_at_the_deadline() {
         // The install runs a downloaded script; if it never exits, the UI must
-        // not wait on it forever. `sleep` stands in for a stalled installer.
-        let child = Command::new("sleep")
-            .arg("30")
+        // not wait on it forever. `sleep 30` stands in for a stalled installer;
+        // Windows has no sleep.exe, so `ping` (thirty probes, one a second) is
+        // the stand-in there — and loopback always answers, so it cannot exit
+        // early and undercut the deadline.
+        let mut stalled;
+        if cfg!(windows) {
+            stalled = Command::new("ping");
+            stalled.args(["-n", "30", "127.0.0.1"]);
+        } else {
+            stalled = Command::new("sleep");
+            stalled.arg("30");
+        }
+        let child = stalled
             .stdin(std::process::Stdio::null())
             .spawn()
-            .expect("sleep should spawn");
+            .expect("the stand-in should spawn");
         let started = std::time::Instant::now();
         let outcome = wait_with_timeout(child, std::time::Duration::from_millis(300));
         assert!(
@@ -832,9 +854,10 @@ mod tests {
         );
     }
 
-    // Detection itself is not unit-tested: it reads `PATH` and `HOME`, and
-    // overriding those needs `unsafe` env mutation, which this crate forbids.
-    // It is exercised for real by the Plugins tab on every open.
+    // Detection itself is not unit-tested: it reads `PATH` and the home
+    // directory (`HOME`, `USERPROFILE` on Windows), and overriding those needs
+    // `unsafe` env mutation, which this crate forbids. It is exercised for
+    // real by the Plugins tab on every open.
 
     #[test]
     fn a_version_line_is_bounded_and_never_empty() {

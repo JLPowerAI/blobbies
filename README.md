@@ -115,20 +115,26 @@ Installers are on the way. Until then, anyone comfortable with a terminal can bu
 
 Setup steps, that's it:
 
-**Requirements:** Node ≥ 22.12, pnpm 10 (`corepack enable`), Rust 1.90 (auto-installed from `rust-toolchain.toml`), plus the [Tauri platform deps](https://tauri.app/start/prerequisites/).
+**Requirements:** Node ≥ 22.12, pnpm 10 (`corepack enable`), Rust 1.90 (auto-installed from `rust-toolchain.toml`), plus the per-OS [Tauri platform deps](https://tauri.app/start/prerequisites/):
+
+- **macOS** — Xcode command line tools: `xcode-select --install`
+- **Linux** (Debian/Ubuntu) — `sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf`, plus a Secret Service provider (`gnome-keyring` on GNOME, KWallet on KDE). The Tinfoil API key lives in the OS keychain; without a provider running, saving it fails with a D-Bus error.
+- **Windows** — Visual Studio 2022 Build Tools with the **Desktop development with C++** workload (WebView2 ships with Windows 10/11).
 
 ```bash
 git clone https://github.com/KenKaiii/blobbies.git
 cd blobbies
 pnpm install
 cp .env.example .env.local   # optional: add a TINFOIL_API_KEY for dev
-pnpm tauri:dev
+pnpm tauri:dev   # loads .env.local on every OS
 ```
 
 ```bash
-pnpm tauri:build   # production bundle
+pnpm tauri:build   # production bundle (dmg / deb+AppImage / NSIS exe)
 pnpm check         # everything CI runs: lint, types, tests, clippy
 ```
+
+**Platform quirks, so nothing surprises you:** Composio's installer is a POSIX shell script, so on Windows it needs [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) — the in-app install button hides itself there and the Plugins tab explains. A Blob's shell tools (`ls`, `cat`, `grep`, …) are POSIX binaries that mostly don't exist on Windows, so those commands fail with "not found" there. CI compiles and tests the Rust side on macOS, Linux, and Windows on every push, and a [release workflow](.github/workflows/release.yml) builds the installers for all three.
 
 ---
 

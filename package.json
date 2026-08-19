@@ -13,7 +13,7 @@
     "build": "pnpm typecheck && vite build && node scripts/bundle-budget.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "bash -c 'set -a; [ -f .env.local ] && . ./.env.local; set +a; exec tauri dev \"$@\"' --",
+    "tauri:dev": "node scripts/tauri-dev.mjs",
     "tauri:build": "tauri build",
     "typecheck": "tsc --build --force",
     "lint": "biome check .",

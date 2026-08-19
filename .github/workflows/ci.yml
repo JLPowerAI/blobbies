@@ -37,15 +37,30 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test --coverage
 
+      # Never built in CI before: the vite bundle and the size budget gate
+      # that `tauri build` depends on, so a regression here only surfaced at
+      # release time.
+      - run: pnpm build
+
+  # The Rust crate carries `#[cfg(windows)]` and `#[cfg(target_os = "macos")]`
+  # branches (Ollama/Composio detection, keyring). Compiling on Linux alone
+  # never type-checks them, so a Windows breakage shipped until a Windows
+  # user hit it. Clippy --all-targets compiles every cfg path; the tests that
+  # are OS-specific (symlink escape, keychain) are already cfg-gated inside.
   rust:
-    name: Rust (fmt, clippy, tests)
-    runs-on: ubuntu-latest
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Install Linux webkit dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
