@@ -328,13 +328,13 @@ mod tests {
     #[test]
     fn rejects_symlink_escape() {
         let home = temp_home("symlink");
-        let outside = home
-            .parent()
-            .and_then(Path::parent)
-            .unwrap_or_else(|| panic!("parent"))
-            .to_path_buf();
         #[cfg(unix)]
         {
+            let outside = home
+                .parent()
+                .and_then(Path::parent)
+                .unwrap_or_else(|| panic!("parent"))
+                .to_path_buf();
             std::os::unix::fs::symlink(&outside, home.join("link"))
                 .unwrap_or_else(|_| panic!("symlink"));
             assert!(matches!(
