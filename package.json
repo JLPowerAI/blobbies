@@ -32,7 +32,7 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm rs:lint",
     "prepare": "lefthook install",
     "sim:mcp": "vitest run --config vitest.sim.config.ts sim/mcp.sim.ts",
-    "logos": "node --experimental-strip-types scripts/fetch-logos.mjs"
+    "plugins": "node scripts/sync-plugins.mjs"
   },
   "dependencies": {
     "@kenkaiiii/gg-agent": "^5.44.0",

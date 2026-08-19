@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import { PLUGIN_CATEGORIES, plugins } from "@/data/plugins";
+import { beforeAll, describe, expect, it } from "vitest";
+import { loadPlugins, PLUGIN_CATEGORIES, type PluginDef } from "@/data/plugins";
 
 /**
  * The catalog's invariants, held here because breaking them produces a tile
@@ -11,6 +11,12 @@ import { PLUGIN_CATEGORIES, plugins } from "@/data/plugins";
 const logosDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "public", "logos");
 
 describe("plugin catalog", () => {
+  // The full catalog is a lazy chunk in the app; in tests it is just an await.
+  let plugins: PluginDef[];
+  beforeAll(async () => {
+    plugins = await loadPlugins();
+  });
+
   it("uses ids the Composio CLI will accept as toolkit slugs", () => {
     // The same charset `is_safe_slug` enforces in src-tauri/src/composio.rs
     // before the id reaches argv. A hyphenated id (`google-calendar`) is

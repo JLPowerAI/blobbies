@@ -634,10 +634,16 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Plugins" }));
     const dialog = screen.getByRole("dialog", { name: "Plugins" });
 
-    // Search narrows the marketplace. Connecting runs through Composio, so
-    // outside Tauri nothing can be connected — and a tile must never read
-    // "Connected" unless Composio said so.
-    await user.type(within(dialog).getByLabelText("Search plugins"), "gmail");
+    // The catalog chunk loads async (the long tail is too heavy for the
+    // startup bundle), so the list's controls appear a beat after the dialog.
+    await within(dialog).findByLabelText("Search plugins");
+
+    // Search narrows the marketplace. The phrase is Gmail's own hand-written
+    // description rather than "gmail", which in a 900-app catalog also matches
+    // long-tail apps whose blurbs happen to mention Gmail. Connecting runs
+    // through Composio, so outside Tauri nothing can be connected — and a tile
+    // must never read "Connected" unless Composio said so.
+    await user.type(within(dialog).getByLabelText("Search plugins"), "Triage the inbox");
     expect(within(dialog).queryByText("Connected")).not.toBeInTheDocument();
 
     // A failed connect explains itself on the row that was clicked. Without
@@ -650,7 +656,11 @@ describe("App", () => {
     // The detail view lists real accounts. With none connected it says so
     // rather than inventing a "Default" row that was never real.
     await user.clear(within(dialog).getByLabelText("Search plugins"));
-    await user.click(within(dialog).getByRole("button", { name: /Gmail/ }));
+    // By now the failed connect has swapped this row's description for its
+    // error line, so the button's name is "GmailConnecting apps only works…" —
+    // match on the name alone. No other app in the catalog starts with
+    // "Gmail", so the prefix stays unique.
+    await user.click(within(dialog).getByRole("button", { name: /^Gmail/ }));
     expect(within(dialog).getByText(/No account connected yet/)).toBeInTheDocument();
 
     // Naming a second account comes before the browser opens, because the CLI

@@ -18,13 +18,19 @@
  *    key-based ones it collects on its own hosted page (Apollo, Ashby), both
  *    return a real connect link. Only those belong here.
  *
- * Icons are each vendor's own logo, fetched from Composio and committed under
- * `public/logos/<id>.svg` by `scripts/fetch-logos.mjs`.
+ * The catalog is two files. This one holds the hand-curated shortlist every
+ * user sees first, and every entry here wins over its generated twin. The long
+ * tail — every other connectable app Composio publishes — is generated into
+ * `plugins.generated.ts` by `scripts/sync-plugins.mjs` (`pnpm plugins`), which
+ * also checks rule 2 for them from `dev toolkits info` metadata, so a fresh
+ * sync cannot ship a dead Connect button.
  *
- * `plugins.test.ts` holds rule 1 automatically. Rule 2 cannot be checked
- * offline — it was established per app against the CLI, and adding an app
- * means checking that `composio link <slug> --no-wait --no-browser` answers
- * with a connect.composio.dev URL rather than a dashboard.com one.
+ * Icons are each vendor's own logo, fetched from Composio and committed under
+ * `public/logos/<id>.svg` by the same script.
+ *
+ * `plugins.test.ts` holds rule 1 and the generated file's invariants
+ * automatically. Rule 2 was established per app against the CLI (curated) and
+ * is read from auth metadata at sync time (generated).
  */
 
 export interface PluginDef {
@@ -51,9 +57,19 @@ export const PLUGIN_CATEGORIES = [
   "Finance",
   "Marketing",
   "Design & social",
+  "AI & search",
+  "E-commerce",
+  "Data & analytics",
+  "Media & entertainment",
+  "Productivity",
+  "More apps",
 ] as const;
 
-export const plugins: PluginDef[] = [
+// AUTO-GENERATED — every connectable app beyond the curated shortlist above.
+// Kept in a separate file so a sync can rewrite the whole long tail without
+// ever touching a hand-written entry. Regenerate with `pnpm plugins`.
+
+const curatedPlugins: PluginDef[] = [
   {
     id: "gmail",
     name: "Gmail",
@@ -169,6 +185,12 @@ export const plugins: PluginDef[] = [
     id: "discord",
     name: "Discord",
     description: "Read and send messages across servers and channels.",
+    category: "Messaging",
+  },
+  {
+    id: "discordbot",
+    name: "Discord Bot",
+    description: "Act as a bot: join servers, moderate, and answer in channels.",
     category: "Messaging",
   },
   {
@@ -376,3 +398,29 @@ export const plugins: PluginDef[] = [
     category: "Design & social",
   },
 ];
+
+/** Curated entries always win: if an id appears above, its generated twin is dropped. */
+const curatedIds = new Set(curatedPlugins.map((plugin) => plugin.id));
+
+/** The hand-picked shortlist, light enough for the startup chunk. */
+export const plugins: PluginDef[] = curatedPlugins;
+
+/**
+ * The full catalog: curated plus the generated long tail.
+ *
+ * The generated file is ~90 KB of source, and importing it statically ships
+ * the whole catalog in the startup chunk (measured: 271 kB gzip against the
+ * 185 kB budget in `pnpm build`) — so it sits behind a dynamic import() that
+ * Rolldown splits into its own chunk. It resolves locally, so the plugins
+ * modal and the prompt's connected-app names wait milliseconds, not a round
+ * trip. The promise is cached: the catalog is immutable for a page lifetime.
+ */
+let catalogPromise: Promise<PluginDef[]> | null = null;
+
+export function loadPlugins(): Promise<PluginDef[]> {
+  catalogPromise ??= import("./plugins.generated").then(({ generatedPlugins }) => [
+    ...curatedPlugins,
+    ...generatedPlugins.filter((plugin) => !curatedIds.has(plugin.id)),
+  ]);
+  return catalogPromise;
+}

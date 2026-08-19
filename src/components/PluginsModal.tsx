@@ -1,6 +1,6 @@
 import { Check, ChevronLeft, ListFilter, Plus, Search, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { PLUGIN_CATEGORIES, type PluginDef, plugins } from "@/data/plugins";
+import { loadPlugins, PLUGIN_CATEGORIES, type PluginDef } from "@/data/plugins";
 import {
   COMPOSIO_DASHBOARD_URL,
   type ComposioAccount,
@@ -26,8 +26,8 @@ interface PluginsModalProps {
  * Brand tile: exported because onboarding's plugin step draws the same one.
  *
  * Each app's real logo, committed under `public/logos` by
- * `scripts/fetch-logos.mjs` — a monogram in a coloured square is not a brand,
- * and the vendors' own marks are what a user recognises in a list of fifty.
+ * `scripts/sync-plugins.mjs` — a monogram in a coloured square is not a brand,
+ * and the vendors' own marks are what a user recognises in a long list.
  *
  * Drawn with `<img>` rather than inlined markup on purpose: an SVG inlined
  * into the DOM runs whatever it contains, while one behind `<img>` is inert.
@@ -55,6 +55,19 @@ export function PluginTile({ plugin, size = 40 }: { plugin: PluginDef; size?: nu
 
 /** Marketplace + per-plugin detail, presented in the settings-sized modal. */
 export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModalProps) {
+  /**
+   * The full catalog, curated plus the generated long tail.
+   *
+   * Loaded once here rather than imported statically: the long tail is a
+   * ~90 KB chunk behind a dynamic import (a static one blew the startup
+   * bundle budget), and this modal is the only place that browses it.
+   */
+  const [catalog, setCatalog] = useState<PluginDef[] | null>(null);
+
+  useEffect(() => {
+    void loadPlugins().then(setCatalog);
+  }, []);
+
   /**
    * Every account Composio knows about, working or not.
    *
@@ -242,11 +255,18 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [detailId, filterOpen, requestClose]);
 
-  const detail = detailId === null ? null : (plugins.find((p) => p.id === detailId) ?? null);
+  const detail =
+    detailId === null || catalog === null ? null : (catalog.find((p) => p.id === detailId) ?? null);
   const trimmed = query.trim().toLowerCase();
 
-  const visiblePlugins = plugins.filter((plugin) => {
-    if (tab === "yours" && !installed.includes(plugin.id)) {
+  const visiblePlugins = (catalog ?? []).filter((plugin) => {
+    // "Yours" answers "what do I have", not "what did I bookmark": an app
+    // connected before the shortlist auto-add existed (or outside the app
+    // entirely) is still the user's, so the union of the shortlist and the
+    // live account list is the honest membership. A connection only counts
+    // once its account is known usable — expired ones are not "yours" in any
+    // sense the Connect button can act on.
+    if (tab === "yours" && !installed.includes(plugin.id) && !isConnected(plugin.id)) {
       return false;
     }
     if (trimmed.length === 0) {
@@ -632,7 +652,9 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
         aria-label="Plugins"
         tabIndex={-1}
       >
-        {detail === null ? renderList() : renderDetail(detail)}
+        {/* Nothing until the catalog chunk resolves: a list that grows
+            mid-glance reads as a bug, not a refresh. */}
+        {catalog === null ? null : detail === null ? renderList() : renderDetail(detail)}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { plugins } from "@/data/plugins";
+import { loadPlugins } from "@/data/plugins";
 import { isTauri } from "@/lib/tauri";
 
 /**
@@ -273,8 +273,8 @@ export async function composioConnections(): Promise<string[]> {
  * connected outside our catalog, which is better than dropping it silently.
  */
 export async function connectedAppNames(): Promise<string[]> {
-  const slugs = await composioConnections();
-  return slugs.map((slug) => plugins.find((plugin) => plugin.id === slug)?.name ?? slug);
+  const [slugs, catalog] = await Promise.all([composioConnections(), loadPlugins()]);
+  return slugs.map((slug) => catalog.find((plugin) => plugin.id === slug)?.name ?? slug);
 }
 
 /**
