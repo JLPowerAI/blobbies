@@ -19,7 +19,23 @@
 
 Blobbies gives you little AI teammates called Blobs. You make them, name them, and give them jobs. One for email. One for research. One that just hypes you up before big meetings.
 
-They remember everything you tell them. They do actual work in your apps. And all of it runs on your machine, not on somebody's server.
+They remember everything you tell them. They do actual work in your apps. And none of it, not one word, gets handed to an AI company.
+
+---
+
+## 🔒 The whole point
+
+Here's the uncomfortable truth about most AI apps: to be useful, they need everything. Your inbox. Your documents. Your calendar. Your notes. All of it shipped to a server you don't control, run by a company you can't audit, read for "quality", stored who knows how long, and one breach or one policy change away from not being yours anymore.
+
+Your AI assistant ends up knowing more about you than your bank does. It should be guarded like it.
+
+Blobbies is built around one rule: **your data never gets handed to an AI provider.** Exactly two ways to run the AI, and nothing else is allowed in:
+
+**1. On your own computer.** A local model (through Ollama) runs right on your machine. Your emails and documents never leave it. Works offline, no key needed.
+
+**2. In a box nobody can open.** Want more brain than your laptop has? Tinfoil runs big models inside end-to-end encrypted, hardware-verified enclaves. Your messages are locked on your device and only unlocked inside the enclave itself. Not even Tinfoil can read them. That's the only kind of cloud good enough, and it's optional.
+
+Whichever you pick, everything else is always local: memories, chats, files, settings. One folder on your machine you can back up or delete whenever. Zero telemetry, zero analytics, zero crash reports. Secrets live in your system keychain, never a plain file.
 
 No account. No cloud. No "we updated our privacy policy" emails.
 
@@ -57,20 +73,6 @@ Hit the mic and dictate. Way faster than typing, and the Blob never judges your 
 
 ---
 
-## 🔒 Your stuff stays yours
-
-This is the whole point of Blobbies.
-
-- **Everything lives on your computer**, in one folder you can find, back up, or delete whenever.
-- **Zero telemetry.** No analytics, no crash reports, no phoning home. Ever. It's not in the app.
-- **Two ways to run the AI, both private:**
-  - **Local** (Ollama): the AI runs on your machine. Your words never leave it. Works fully offline.
-  - **Tinfoil** (optional): cloud models locked inside end-to-end encrypted, hardware-verified enclaves. Even the company running them can't read your stuff.
-- **Secrets go in your system keychain**, never in a plain file.
-- **Deleting a Blob is a real delete.** It sits in a trash folder for 30 days in case you change your mind, then it's gone, memories and all.
-
----
-
 ## ⚔️ Blobbies vs Grok Bot
 
 Grok Bot is xAI's take on AI teammates: named Bots with jobs that work on a cloud computer. It shipped in August 2026 and it's genuinely cool. Here's the honest difference:
@@ -79,7 +81,8 @@ Grok Bot is xAI's take on AI teammates: named Bots with jobs that work on a clou
 | --- | --- | --- |
 | **Price** | Free, open source | Top tiers only: SuperGrok Heavy ($300/mo) or Cursor Ultra ($200/mo) |
 | **Runs on** | Your computer | xAI's cloud |
-| **Your data** | Stays on your machine | Lives on a shared cloud computer |
+| **Your data** | Never leaves your machine | Stored on xAI's cloud, required by the app |
+| **Private by default** | Yes. It's the architecture, not a setting | No Legacy Privacy Mode. Cloud storage is required |
 | **Works offline** | Yes, with a local model | No, it needs the cloud |
 | **The AI** | Your pick: free local models or Tinfoil's encrypted cloud | Grok models only |
 | **Memory** | Per-Blob plus team-wide, all viewable and editable | Bots keep memory, files, and logins across turns |
@@ -91,7 +94,7 @@ Grok Bot is xAI's take on AI teammates: named Bots with jobs that work on a clou
 
 Grok Bot facts are from xAI's own docs and pricing, August 2026. It's a beta, so expect change.
 
-Fair is fair: Grok Bot's Bots each get a screen on a shared cloud computer and can use any website like a person would. If you're already deep in that world and want always-on cloud muscle, it rocks. Blobbies is for everyone who'd rather keep it local, private, and free.
+Fair is fair: Grok Bot's Bots each get a screen on a shared cloud computer and can use any website like a person would. If you want always-on cloud muscle and you're okay with your tools living on someone else's servers, it rocks. If you'd rather your emails, documents, and memories stayed yours, that's the whole reason Blobbies exists.
 
 ---
 
@@ -138,5 +141,5 @@ App logos in `public/logos` are trademarks of their respective owners, shown onl
 ---
 
 <p align="center">
-  <strong>One AI is a chatbot. A team of them is a superpower.</strong>
+  <strong>Your stuff stays yours. Your team does the rest.</strong>
 </p>
