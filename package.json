@@ -32,7 +32,8 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm rs:lint",
     "prepare": "lefthook install",
     "sim:mcp": "vitest run --config vitest.sim.config.ts sim/mcp.sim.ts",
-    "plugins": "node scripts/sync-plugins.mjs"
+    "plugins": "node scripts/sync-plugins.mjs",
+    "notices": "node scripts/generate-notices.mjs"
   },
   "dependencies": {
     "@kenkaiiii/gg-agent": "^5.44.0",

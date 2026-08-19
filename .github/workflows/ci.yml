@@ -91,6 +91,12 @@ jobs:
           cache-all-crates: true
           cache-targets: false
 
+      # Licence attribution must never drift from the installed tree: the
+      # generator fails on UNKNOWN licences, and a stale committed notices
+      # file fails the diff.
+      - run: node scripts/generate-notices.mjs
+      - run: git diff --exit-code THIRD-PARTY-NOTICES.md
+
       # --locked on purpose: rustsec/audit-check installs cargo-audit unlocked, which
       # resolves newest transitive deps and broke on the rustc version pinned in
       # rust-toolchain.toml. --locked uses cargo-audit's own lockfile.

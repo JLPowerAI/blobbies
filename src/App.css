@@ -19,7 +19,7 @@
   --accent-blue: #0a84ff;
   --accent-green: #1d9b53;
 
-  --status-warn: #c98a00;
+  --status-warn: #a87400;
   --status-err: #d13c3c;
 
   --border-hairline: rgba(0, 0, 0, 0.09);
@@ -2521,7 +2521,11 @@ a.modal-button {
   align-items: center;
   gap: 6px;
   border: none;
-  background: var(--accent-blue);
+  /* Solid blue rather than --accent-blue: white 13.5px text on the light
+     (#0a84ff) and dark (#409cff) accents is 3.6:1 / 2.8:1, under WCAG AA's
+     4.5:1. #0a72d8 passes in both themes (4.8:1) and keeps its 3:1 boundary
+     against the dark chat surface. */
+  background: #0a72d8;
   color: #ffffff;
   cursor: pointer;
   font-family: inherit;
