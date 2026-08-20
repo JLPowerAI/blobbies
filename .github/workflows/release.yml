@@ -157,14 +157,27 @@ jobs:
           fi
           pnpm tauri build --target ${{ matrix.rust-target }} "${args[@]}"
 
+      # Flatten before upload: with the nested glob paths upload-artifact
+      # preserves the dmg/deb/nsis subdirectories, and the release job's
+      # shasum would hit directories. One flat dir per artifact keeps the
+      # release assets flat, and Tauri already puts the arch in each filename
+      # (…_aarch64.dmg, …_x64-setup.exe) so nothing collides on merge.
+      - name: Collect installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          shopt -s nullglob
+          cp ${{ matrix.bundle-dir }}/dmg/*.dmg out/
+          cp ${{ matrix.bundle-dir }}/deb/*.deb out/
+          cp ${{ matrix.bundle-dir }}/appimage/*.AppImage out/
+          cp ${{ matrix.bundle-dir }}/nsis/*.exe out/
+          ls -l out
+
       - uses: actions/upload-artifact@v7
         with:
           name: blobbies-${{ matrix.name }}
-          path: |
-            ${{ matrix.bundle-dir }}/dmg/*.dmg
-            ${{ matrix.bundle-dir }}/deb/*.deb
-            ${{ matrix.bundle-dir }}/appimage/*.AppImage
-            ${{ matrix.bundle-dir }}/nsis/*.exe
+          path: out/*
           if-no-files-found: error
 
   # Everything above uploads artifacts; this job turns them into the thing
@@ -180,7 +193,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      # download pinned to the same major as upload-artifact: v8's new
+      # digest verification (digest-mismatch: error by default) fails on
+      # artifacts uploaded moments earlier by v7 — measured. Same-major pair
+      # avoids the cross-major metadata mismatch; SHA256SUMS below still gives
+      # users an integrity check at download time.
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
