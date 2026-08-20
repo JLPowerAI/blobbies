@@ -39,6 +39,7 @@ jobs:
           - name: macOS arm64
             os: macos-latest
             rust-target: aarch64-apple-darwin
+            arch: aarch64
             # "app" is required for the updater artifact: with dmg alone Tauri
             # skips the .app.tar.gz + .sig the in-app updater downloads.
             bundles: app,dmg
@@ -46,6 +47,7 @@ jobs:
           - name: macOS x64
             os: macos-latest
             rust-target: x86_64-apple-darwin
+            arch: x64
             bundles: app,dmg
             bundle-dir: src-tauri/target/x86_64-apple-darwin/release/bundle
           - name: Linux x64
@@ -194,6 +196,16 @@ jobs:
             ${{ matrix.bundle-dir }}/macos/*.app.tar.gz.sig; do
             cp "$file" out/
           done
+          # The macOS updater artifact comes out as plain Blobbies.app.tar.gz
+          # (no version, no arch), which would collide between the two macOS
+          # jobs and does not match the manifest's expected names. Version is
+          # read off the dmg already in out/ so workflow_dispatch from a
+          # branch ref cannot misname it.
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            ver=$(ls out/*.dmg | sed -E 's/.*_([0-9]+\.[0-9]+\.[0-9]+)_.*/\1/' | head -1)
+            mv "out/Blobbies.app.tar.gz" "out/Blobbies_${ver}_${{ matrix.arch }}.app.tar.gz"
+            mv "out/Blobbies.app.tar.gz.sig" "out/Blobbies_${ver}_${{ matrix.arch }}.app.tar.gz.sig"
+          fi
           ls -l out
 
       - uses: actions/upload-artifact@v7
