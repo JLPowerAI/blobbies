@@ -1,0 +1,258 @@
+<!doctype html>
+<!--
+  Source of truth for the installer artwork (DMG background, NSIS header,
+  NSIS sidebar). Not part of the shipped app; the rendered PNG/BMP outputs
+  are committed under src-tauri/dmg/ and src-tauri/windows/.
+
+  Regenerate: open with a headless browser at the exact viewport per variant
+  and screenshot, then convert with sips (macOS). The DMG background MUST
+  be rasterized at exactly the window's point size (960x600) — Finder does
+  NOT scale DMG background pictures, so a 2x image gets cropped, not
+  sharpened. The art itself is authored in a 1920x1200 viewBox and scaled
+  by the svg, so retina softness is the only trade-off.
+
+    ?art=dmg     viewport  960x600 -> src-tauri/dmg/dmg-background.png  (as-is)
+    ?art=header  viewport  300x114 -> src-tauri/windows/nsis-header.bmp (downscale 150x57, BMP)
+    ?art=sidebar viewport  328x628 -> src-tauri/windows/nsis-sidebar.bmp (downscale 164x314, BMP)
+
+    sips -z 57 150 header.png --out nsis-header.bmp -s format bmp
+    sips -z 314 164 sidebar.png --out nsis-sidebar.bmp -s format bmp
+
+  Geometry and colours are transcribed from src/components/BlobAvatar.tsx
+  and src/App.css — if the Blob system changes, update the transcription
+  here to keep the installer on-brand.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #fff;
+        overflow: hidden;
+      }
+      .art {
+        position: relative;
+        overflow: hidden;
+      }
+      .art text {
+        font-family: -apple-system, "SF Pro Display", "SF Pro Text",
+          "Helvetica Neue", Helvetica, Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      // -- Transcribed from BlobAvatar.tsx (keep in sync) ------------------
+      const GRADIENTS = {
+        purple: ["#b18cfe", "#7130e6"],
+        blue: ["#6cb8fd", "#1f6ff0"],
+        green: ["#5fe08a", "#12a348"],
+        teal: ["#4fe0c4", "#0e93b0"],
+        orange: ["#ffab5e", "#f06a0a"],
+        pink: ["#ff8fc8", "#ea3d8e"],
+      };
+      const SHAPES = {
+        sphere:
+          "M54.3,-64.9C68.6,-54.4,77.4,-36.2,79.3,-17.7C81.2,0.8,76.1,19.5,66.3,34.6C56.5,49.7,42,61.2,25.5,67.4C9,73.6,-9.5,74.5,-26.4,68.9C-43.3,63.3,-58.6,51.2,-67.6,35.3C-76.6,19.4,-79.3,-0.3,-73.9,-16.9C-68.5,-33.5,-55,-47,-40.1,-57.4C-25.2,-67.8,-8.9,-75.1,7.4,-74.9C23.7,-74.7,39.9,-75.4,54.3,-64.9Z",
+        droplet:
+          "M0,-82C22,-52,58,-26,58,14C58,52,32,76,0,76C-32,76,-58,52,-58,14C-58,-26,-22,-52,0,-82Z",
+        cloud:
+          "M-38,-30C-34,-56,-6,-66,12,-54C34,-70,66,-52,62,-28C80,-18,80,10,64,22C70,48,44,66,22,58C8,74,-24,74,-36,56C-64,60,-80,32,-66,10C-80,-10,-62,-34,-38,-30Z",
+        egg: "M0,-78C36,-78,60,-42,60,4C60,46,34,76,0,76C-34,76,-60,46,-60,4C-60,-42,-36,-78,0,-78Z",
+        pebble:
+          "M52,-58C70,-42,80,-16,74,8C68,32,48,50,24,62C0,74,-28,78,-48,64C-68,50,-78,20,-72,-8C-66,-36,-46,-58,-22,-68C2,-78,34,-74,52,-58Z",
+        squircle:
+          "M0,-74C48,-74,74,-48,74,0C74,48,48,74,0,74C-48,74,-74,48,-74,0C-74,-48,-48,-74,0,-74Z",
+      };
+      const FACES = {
+        sphere: {
+          eyes: [
+            [-18, -12, 7, 16, -8],
+            [18, -12, 7, 16, 8],
+          ],
+        },
+        droplet: {
+          eyes: [
+            [-20, -6, 8, 10, 0],
+            [20, -6, 8, 10, 0],
+          ],
+        },
+        cloud: {
+          eyes: [
+            [-14, -10, 6, 11, -4],
+            [14, -10, 6, 11, 4],
+          ],
+          mouth: [0, 16, 7, 5],
+        },
+        egg: {
+          eyes: [
+            [-17, -6, 10, 4.5, -6],
+            [17, -6, 10, 4.5, 6],
+          ],
+        },
+        pebble: {
+          eyes: [
+            [-16, -10, 7, 14, -10],
+            [18, -12, 7, 8, 10],
+          ],
+        },
+        squircle: {
+          eyes: [
+            [-20, -8, 6, 9, 0],
+            [20, -8, 6, 9, 0],
+          ],
+          mouth: [0, 14, 5, 6],
+        },
+      };
+      const FACE_COLOR = "rgba(20, 12, 8, 0.78)";
+      let uid = 0;
+      // Renders one blob at cx,cy (px) with the given diameter.
+      function blob(shape, tone, cx, cy, d, extra = "") {
+        const [light, dark] = GRADIENTS[tone];
+        const id = `g${uid++}`;
+        const face = FACES[shape];
+        const s = d / 176; // SHAPES are authored in a -88..88 box
+        const eyes = face.eyes
+          .map(([x, y, rx, ry, t]) =>
+            `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" fill="${FACE_COLOR}" transform="rotate(${t} ${x} ${y})"/>`,
+          )
+          .join("");
+        const mouth = face.mouth
+          ? `<ellipse cx="${face.mouth[0]}" cy="${face.mouth[1]}" rx="${face.mouth[2]}" ry="${face.mouth[3]}" fill="${FACE_COLOR}"/>`
+          : "";
+        return `<g transform="translate(${cx} ${cy}) scale(${s.toFixed(4)}) ${extra}">
+  <defs>
+    <linearGradient id="${id}" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="${light}"/><stop offset="1" stop-color="${dark}"/>
+    </linearGradient>
+    <clipPath id="c${id}"><path d="${SHAPES[shape]}"/></clipPath>
+  </defs>
+  <path d="${SHAPES[shape]}" fill="url(#${id})"/>
+  <g clip-path="url(#c${id})">
+    <ellipse cx="-22" cy="-38" rx="26" ry="16" fill="#ffffff" opacity="0.45" transform="rotate(-18 -22 -38)"/>
+    <g>${eyes}${mouth}</g>
+  </g>
+</g>`;
+      }
+      // width/height = raster size; viewBox = the coordinates the art is
+      // authored in (dmg scene is authored at 2x and rasterized 1x, because
+      // Finder will not scale the background for us).
+      const SVG = (w, h, vbW, vbH, inner) =>
+        `<svg class="art" width="${w}" height="${h}" viewBox="0 0 ${vbW} ${vbH}" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
+
+      // -- DMG background: rasterized 960x600 for a 960x600 window -------
+      // Icon slots are drawn for the default 128px Finder icons centred at
+      // points (280,355) and (680,355) — Finder's stored `position` IS the
+      // icon centre (measured via AX), so those values go straight into
+      // tauri.conf.json. Top ~32px of the art hide behind the titlebar.
+      function dmgArt() {
+        const wash = (cx, cy, r, color, op) =>
+          `<radialGradient id="w${cx}_${cy}" cx="0.5" cy="0.5" r="0.5">
+             <stop offset="0" stop-color="${color}" stop-opacity="${op}"/>
+             <stop offset="1" stop-color="${color}" stop-opacity="0"/>
+           </radialGradient>
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#w${cx}_${cy})"/>`;
+        const pad = (cx, cy) =>
+          `<rect x="${cx - 170}" y="${cy - 170}" width="340" height="340" rx="64"
+                 fill="rgba(0,0,0,0.045)" stroke="rgba(0,0,0,0.06)" stroke-width="2"/>`;
+        return SVG(
+          960,
+          600,
+          1920,
+          1200,
+          `
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f4f4f6"/>
+    </linearGradient>
+    ${wash(200, 170, 620, "#b18cfe", 0.1)}
+    ${wash(1740, 260, 680, "#6cb8fd", 0.1)}
+    ${wash(960, 1140, 780, "#4fe0c4", 0.07)}
+  </defs>
+  <rect width="1920" height="1200" fill="url(#bg)"/>
+  ${pad(560, 710)}
+  ${pad(1360, 710)}
+  <!-- dashed arc arrow from the app slot to Applications -->
+  <path d="M 775 712 Q 960 604 1143 700" fill="none" stroke="#0a84ff" stroke-opacity="0.55"
+        stroke-width="9" stroke-linecap="round" stroke-dasharray="1 26"/>
+  <path d="M 1130 684 L 1160 702 L 1128 717 Z" fill="#0a84ff" opacity="0.6"/>
+  <!-- wordmark -->
+  <text x="940" y="218" text-anchor="middle" font-size="112" font-weight="700" fill="#1d1d1f" letter-spacing="-1.5">Blobbies</text>
+  <text x="960" y="300" text-anchor="middle" font-size="40" fill="#59595e">Your own team of AI helpers</text>
+  <!-- a small purple blob perched on the end of the wordmark -->
+  ${blob("sphere", "purple", 1245, 178, 110, "rotate(10)")}
+  <!-- peeking friends along the bottom edge -->
+  ${blob("pebble", "orange", 140, 1270, 190)}
+  ${blob("cloud", "pink", 830, 1256, 270)}
+  ${blob("sphere", "purple", 975, 1246, 300)}
+  ${blob("droplet", "green", 1115, 1258, 265)}
+  ${blob("squircle", "blue", 1790, 1266, 195)}
+  <!-- floating bubbles, a nod to the 🫧 mark -->
+  <circle cx="740" cy="140" r="13" fill="none" stroke="#0a84ff" stroke-opacity="0.22" stroke-width="3"/>
+  <circle cx="1190" cy="104" r="9" fill="none" stroke="#0a84ff" stroke-opacity="0.18" stroke-width="3"/>
+  <circle cx="1360" cy="178" r="15" fill="none" stroke="#0a84ff" stroke-opacity="0.14" stroke-width="3"/>`,
+        );
+      }
+
+      // -- NSIS sidebar: 328x628 rendered, downscaled to 164x314 ----------
+      function sidebarArt() {
+        return SVG(
+          328,
+          628,
+          328,
+          628,
+          `
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f4f4f6"/>
+    </linearGradient>
+    <radialGradient id="wash" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#b18cfe" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#b18cfe" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="328" height="628" fill="url(#bg)"/>
+  <circle cx="164" cy="300" r="240" fill="url(#wash)"/>
+  <text x="164" y="74" text-anchor="middle" font-size="38" font-weight="700" fill="#1d1d1f" letter-spacing="-0.5">Blobbies</text>
+  <text x="164" y="588" text-anchor="middle" font-size="17" fill="#59595e">Your own team</text>
+  <text x="164" y="610" text-anchor="middle" font-size="17" fill="#59595e">of AI helpers</text>
+  ${blob("sphere", "purple", 164, 216, 168, "rotate(-6)")}
+  ${blob("cloud", "blue", 96, 356, 128, "rotate(6)")}
+  ${blob("droplet", "green", 232, 352, 122, "rotate(-8)")}
+  ${blob("squircle", "pink", 164, 470, 118, "rotate(4)")}`,
+        );
+      }
+
+      // -- NSIS header: 300x114 rendered, downscaled to 150x57 ------------
+      // MUI2 docks the bitmap at the top-right of the wizard; the left edge
+      // fades to the classic dialog grey (#f0f0f0) so the strip blends in.
+      function headerArt() {
+        return SVG(
+          300,
+          114,
+          300,
+          114,
+          `
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f0f0f0"/>
+      <stop offset="0.35" stop-color="#fbfbfd"/>
+      <stop offset="1" stop-color="#eef3ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="300" height="114" fill="url(#bg)"/>
+  <text x="188" y="66" text-anchor="middle" font-size="27" font-weight="700" fill="#1d1d1f" letter-spacing="-0.4">Blobbies</text>
+  ${blob("sphere", "purple", 284, 74, 76, "rotate(8)")}`,
+        );
+      }
+
+      const which = new URLSearchParams(location.search).get("art") || "dmg";
+      document.body.innerHTML =
+        which === "header" ? headerArt() : which === "sidebar" ? sidebarArt() : dmgArt();
+    </script>
+  </body>
+</html>

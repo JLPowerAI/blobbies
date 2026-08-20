@@ -42,6 +42,33 @@ Testing the flow end-to-end: install release N (published), then publish
 N+1 — the running app should find, download, install, and relaunch. The
 endpoint only sees **published** releases, so drafts never trigger it.
 
+## Installer branding
+
+macOS DMG and Windows NSIS installers carry custom art, generated from the
+app's own Blob geometry:
+
+- `src-tauri/dmg/dmg-background.png` — 960×600, exactly the window's point
+  size. Finder does NOT scale DMG backgrounds: a larger image is cropped,
+  so the file must match `windowSize` pixel-for-pixel.
+- `src-tauri/windows/nsis-header.bmp` (150×57) and
+  `src-tauri/windows/nsis-sidebar.bmp` (164×314) — 24-bit BMP, exact sizes:
+  Tauri's NSIS template sets `NOSTRETCH`, so other sizes crop, not stretch.
+
+Source of truth is `scripts/installer-art.html` (transcribes the Blob
+shapes/colours from `src/components/BlobAvatar.tsx`) — edit it, re-render
+the three `?art=` variants with a browser at the sizes in its header, and
+re-convert the BMPs with `sips`. The DMG layout lives in `tauri.conf.json`
+(`bundle.macOS.dmg`); the icon positions there are the **centres** of the
+128px Finder icons (verified via accessibility measurements — Finder
+treats `position` as the icon-image centre) and must match the drop-zone
+art. The Finder content view also starts ~32pt below the window top
+(titlebar), so the top ~32px of the background sit behind the titlebar —
+keep the top edge expendable.
+
+`TAURI_BUNDLER_DMG_IGNORE_CI: "true"` in release.yml is load-bearing: CI
+sets `CI=true`, which otherwise makes the bundler skip the Finder
+AppleScript and ship a plain, unstyled DMG.
+
 ## Signing
 
 macOS: **signed + notarized** — the six APPLE_*/KEYCHAIN secrets are set,

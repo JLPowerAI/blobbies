@@ -158,6 +158,10 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # GitHub sets CI=true, which makes the DMG bundler pass --skip-jenkins
+          # and silently drop the background/icon layout. GH-hosted macOS runners
+          # do have a GUI session, so force the Finder AppleScript to run.
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
         run: |
           set -euo pipefail
           args=(--bundles "${{ matrix.bundles }}")

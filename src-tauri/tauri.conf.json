@@ -54,7 +54,24 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "dmg": {
+        "background": "./dmg/dmg-background.png",
+        "windowSize": { "width": 960, "height": 600 },
+        "appPosition": { "x": 280, "y": 355 },
+        "applicationFolderPosition": { "x": 680, "y": 355 }
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "./icons/icon.ico",
+        "headerImage": "./windows/nsis-header.bmp",
+        "sidebarImage": "./windows/nsis-sidebar.bmp",
+        "installMode": "currentUser",
+        "languages": ["English"]
+      }
+    }
   },
   "plugins": {
     "updater": {
