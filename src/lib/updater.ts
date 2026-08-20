@@ -150,7 +150,9 @@ export async function downloadUpdate(): Promise<void> {
     });
     setState({ phase: "ready", version: handle.version });
   } catch (error) {
-    pending = null;
+    // The handle is kept on purpose: "Update failed — retry" re-runs this
+    // function against the same plugin object. Nulling it here made the
+    // retry a silent no-op.
     setState({
       phase: "failed",
       message: error instanceof Error ? error.message : "The download did not finish.",
@@ -187,8 +189,16 @@ export async function installAndRestart(): Promise<void> {
  */
 export function updateClickAction(): void {
   const s = state;
-  if (s.phase === "available" || s.phase === "failed") {
+  if (s.phase === "available") {
     void downloadUpdate();
+  } else if (s.phase === "failed") {
+    // Two failure origins, two retries: a broken download keeps its handle
+    // (re-download), a failed check has none (re-check).
+    if (pending !== null) {
+      void downloadUpdate();
+    } else {
+      void checkForUpdates();
+    }
   } else if (s.phase === "ready") {
     void installAndRestart();
   }

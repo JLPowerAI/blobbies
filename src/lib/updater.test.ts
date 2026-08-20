@@ -126,6 +126,24 @@ describe("downloadUpdate", () => {
     await downloadUpdate();
     expect(getUpdateState()).toEqual({ phase: "failed", message: "network dropped" });
   });
+
+  it("retries after a failed download: the handle is kept and the second attempt lands on ready", async () => {
+    const { handle, emit, finish } = fakeHandle();
+    handle.downloadAndInstall.mockRejectedValueOnce(new Error("network dropped"));
+    vi.spyOn(updaterTransport, "check").mockResolvedValue(handle);
+    const { getUpdateState } = await import("@/lib/updater");
+    await checkForUpdates();
+
+    await downloadUpdate();
+    expect(getUpdateState()).toMatchObject({ phase: "failed" });
+
+    const retrying = downloadUpdate();
+    emit({ event: "Started", data: { contentLength: 100 } });
+    emit({ event: "Progress", data: { chunkLength: 100 } });
+    finish();
+    await retrying;
+    expect(getUpdateState()).toEqual({ phase: "ready", version: "0.2.0" });
+  });
 });
 
 describe("installAndRestart", () => {
