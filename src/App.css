@@ -2324,6 +2324,12 @@ a.modal-button {
   flex-direction: column;
   gap: 3px;
   z-index: 40;
+  /* The category list is long (16 options) and the host modal clips at its
+     own edges (overflow: hidden on .settings-modal), so the menu must scroll
+     internally rather than grow past the dialog — measured with the menu
+     running off the bottom of the Plugins modal. */
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
 }
 
 .filter-section {
