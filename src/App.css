@@ -2687,6 +2687,9 @@ a.modal-button {
   box-sizing: border-box;
   height: 48px;
   padding: 0 16px;
+  /* Same hairline as the sidebar's edge, so the toolbar reads as one plane
+     with the app's other panes instead of floating over the messages. */
+  border-bottom: 1px solid var(--border-hairline);
   -webkit-user-select: none;
   user-select: none;
 }
