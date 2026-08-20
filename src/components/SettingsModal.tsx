@@ -31,7 +31,7 @@ export const MAX_USER_NAME_LENGTH = 32;
 
 export type ThemePreference = "system" | "light" | "dark";
 
-const APP_VERSION = "0.1.1";
+const APP_VERSION = "0.1.2";
 
 /** The Updates tab status line under the version. One sentence per phase; the
  *  sidebar card carries the interactive part, this is the quiet summary. */

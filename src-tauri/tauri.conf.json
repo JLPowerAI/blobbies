@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Blobbies",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.blobbies.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -40,14 +40,18 @@
         "frame-ancestors": "'none'"
       },
       "freezePrototype": true,
-      "capabilities": ["default"]
+      "capabilities": [
+        "default"
+      ]
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "resources": ["resources/skills/**/*"],
+    "resources": [
+      "resources/skills/**/*"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -59,7 +63,9 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhBMzdCNjhGQkFDQ0UwMDEKUldRQjRNeTZqN1kzaXQwam4wWGxzMHNvS1p1cXNSb3BLTGJaelIxbGZZRmtVUTVqY25xU2VwZDAK",
-      "endpoints": ["https://github.com/KenKaiii/blobbies/releases/latest/download/latest.json"]
+      "endpoints": [
+        "https://github.com/KenKaiii/blobbies/releases/latest/download/latest.json"
+      ]
     }
   }
 }
