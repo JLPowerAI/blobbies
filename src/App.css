@@ -2352,11 +2352,6 @@ a.modal-button {
   color: var(--accent-green);
 }
 
-/* Inset divider with space above and below, like the reference. */
-.filter-menu .modal-divider {
-  margin: 5px 10px;
-}
-
 .filter-check {
   color: var(--text-secondary);
 }
