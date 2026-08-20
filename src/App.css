@@ -4869,6 +4869,10 @@ a.modal-button {
      the child centre it while there is room and collapse when there is not. */
   justify-content: flex-start;
   overflow-y: auto;
+  /* Room for the 2px outside focus rings of the last control: without this,
+     the scroll boundary slices the ring's bottom edge when the step is
+     centred flush against it. */
+  padding-block: 4px;
 }
 
 .onboarding-body > .onboarding-step {
@@ -5200,6 +5204,15 @@ a.modal-button {
   flex-direction: column;
   gap: 8px;
   text-align: start;
+}
+
+/* The timezone pill fills the column like the name/key inputs beside it:
+   at its own content width (capped 260px, ellipsised) it read as a stray
+   left-aligned stub next to full-width fields. */
+.onboarding-key .pill-select,
+.onboarding-key .pill-select select {
+  width: 100%;
+  max-width: none;
 }
 
 .onboarding-key-label {

@@ -450,4 +450,47 @@ describe("ChatPane", () => {
       vi.useRealTimers();
     }
   });
+
+  it("re-pins the instant scroll two frames later, so a stale extent self-heals", async () => {
+    // Same WebKit family as the resize clamp: on a conversation switch the
+    // instant pin can read scrollHeight mid-swap and land past the settled
+    // content — the pushed-up/blank pane until the first user scroll. The
+    // fix re-pins on the next-next frame. jsdom has no layout, so frames are
+    // driven through stubbed rAF and faked metrics: first pin reads the
+    // stale 1200, the settled re-pin reads the true 900.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      const user = userEvent.setup();
+      render(pane(false, vi.fn()));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (el === null) return;
+      const scrollTo = vi.fn();
+      el.scrollTo = scrollTo as unknown as typeof el.scrollTo;
+      let height = 1200;
+      Object.defineProperty(el, "scrollHeight", { get: () => height, configurable: true });
+
+      await user.type(screen.getByRole("textbox", { name: "Message Ken" }), "hi{enter}");
+
+      // The user's own message glides (smooth), streaming growth pins
+      // (instant): at least one instant pin already happened, reading the
+      // stale extent. Now let both frames of the re-pin run past the swap.
+      height = 900;
+      act(() => {
+        // Drain every queued frame, including the one the inner callback
+        // schedules once it runs (double-rAF).
+        for (let guard = 0; frames.length > 0 && guard < 10; guard += 1) {
+          const queued = frames.splice(0);
+          for (const cb of queued) cb(0);
+        }
+      });
+      expect(scrollTo).toHaveBeenCalledWith({ top: 900, behavior: "instant" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

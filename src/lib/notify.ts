@@ -1,8 +1,4 @@
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
+import { sendNotification } from "@tauri-apps/plugin-notification";
 import type { RunStatus, RunTrigger } from "@/lib/run-state";
 import { isTauri } from "@/lib/tauri";
 
@@ -47,6 +43,11 @@ export function shouldNotify(event: {
  * The only caller is onboarding's Allow button: a prompt nobody asked for is
  * the mistake `notify` avoids by requesting lazily, and a click on Allow is
  * exactly that ask. Never call this on mount.
+ *
+ * Goes through our own Rust command rather than the plugin's request: the
+ * plugin's desktop permission calls are hardcoded to "granted" and never
+ * reach UNUserNotificationCenter, so macOS never shows the prompt, never
+ * lists the app in System Settings, and drops every notification it sends.
  */
 export async function requestNotificationPermission(): Promise<
   "granted" | "denied" | "unavailable"
@@ -55,29 +56,39 @@ export async function requestNotificationPermission(): Promise<
     return "unavailable";
   }
   try {
-    if (await isPermissionGranted()) {
-      return "granted";
-    }
-    return (await requestPermission()) === "granted" ? "granted" : "denied";
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<"granted" | "denied">("request_notification_permission");
   } catch {
-    // No notification centre on this machine.
+    // The command is missing or the OS refused to answer.
     return "unavailable";
   }
 }
 
 /**
- * Show one notification, asking for OS permission the first time.
+ * Show one notification. Failures are swallowed — a missing notification
+ * must never break a run.
  *
- * Permission is requested lazily, never at boot: an OS prompt the user did
- * not earn by acting is the same mistake as the keychain probe. Failures are
- * swallowed — a missing notification must never break a run.
+ * macOS sends through our own Rust command: the plugin's desktop send path
+ * rides notify-rust's default backend, the deprecated `NSUserNotification`
+ * API, which modern macOS silently drops even for authorized apps. The OS
+ * permission ask itself belongs to onboarding's Allow
+ * (see requestNotificationPermission), never to a background send.
+ *
+ * The chime is macOS-only (installed to ~/Library/Sounds by our permission
+ * command); other platforms get the OS default through the plugin.
  */
 export async function notify(title: string, body: string): Promise<void> {
   if (!isTauri()) {
     return;
   }
   try {
-    if (!(await isPermissionGranted()) && (await requestPermission()) !== "granted") {
+    const onMac = navigator.userAgent.includes("Macintosh");
+    if (onMac) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("send_notification", {
+        title,
+        body: body.trim().slice(0, BODY_LIMIT),
+      });
       return;
     }
     sendNotification({ title, body: body.trim().slice(0, BODY_LIMIT) });

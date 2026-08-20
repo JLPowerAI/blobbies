@@ -819,6 +819,25 @@ export function ChatPane({
       autoScrollRef.current = behavior === "smooth";
       nearBottomRef.current = true;
       el.scrollTo({ top: el.scrollHeight, behavior });
+      if (behavior === "instant") {
+        // WebKit can report a stale scroll extent at pin time: a conversation
+        // switch measures scrollHeight mid-swap (old messages tearing down,
+        // new ones with async layout still settling), so the pin lands past
+        // the real content — overscroll, the thread pushed up with blank
+        // below, and the engine does not re-clamp until the first user scroll
+        // (seen live in the Tauri webview, same family as the resize-burst
+        // clamp below). One re-pin two frames later, when layout has settled,
+        // lands on the extent that actually exists. Guarded by nearBottomRef
+        // so a user who scrolled up inside those two frames is not yanked.
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            const settled = scrollRef.current;
+            if (settled !== null && nearBottomRef.current) {
+              settled.scrollTo({ top: settled.scrollHeight, behavior: "instant" });
+            }
+          }),
+        );
+      }
     }
     setUnseenCount(0);
     setShowJump(false);

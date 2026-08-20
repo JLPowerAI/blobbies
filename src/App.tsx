@@ -67,6 +67,7 @@ import { describeSchedule, nextFireTime, scheduleBudget } from "@/lib/schedule";
 import { startScheduler } from "@/lib/scheduler";
 import type { SearchResult } from "@/lib/search";
 import { listSkills, type Skill, skillLine } from "@/lib/skills";
+import { playChime } from "@/lib/sound";
 import * as store from "@/lib/store";
 import { openExternal } from "@/lib/tauri";
 import { isTinfoilModel } from "@/lib/tinfoil-model";
@@ -359,6 +360,11 @@ export function App() {
     return isTheme(stored) ? stored : "system";
   });
   const [timezone, setTimezone] = useState(() => readPreference("pref:timezone", "auto"));
+  // In-app sound effects (turn-end chime), on by default: the chime is part
+  // of the app's feel; opt-out lives one row away in Settings. The OS
+  // notification banner's own sound stays under macOS's control in System
+  // Settings.
+  const [sounds, setSounds] = useState(() => readPreference("pref:sounds", "on") === "on");
   // Ollama model tag (e.g. "llama3.2:latest"); empty until one is chosen.
   const [model, setModel] = useState(() => readPreference("pref:model", ""));
   // Chain-of-thought toggle; off by default because it multiplies reply time.
@@ -632,6 +638,11 @@ export function App() {
   const changeTimezone = (next: string) => {
     setTimezone(next);
     writePreference("pref:timezone", next);
+  };
+
+  const changeSounds = (on: boolean) => {
+    setSounds(on);
+    writePreference("pref:sounds", on ? "on" : "off");
   };
 
   const changeReasoning = (on: boolean) => {
@@ -1900,6 +1911,16 @@ export function App() {
     ) {
       void notify(target.name, run.status === "waiting_input" ? (run.question ?? text) : text);
     }
+    // The in-app chime for a turn that just ended. Only while the app has
+    // focus: backgrounded, the OS notification above carries the sound, and
+    // both together would double-chime. Cancelled turns are the user's own
+    // doing and stay silent.
+    if (
+      document.hasFocus() &&
+      (run.status === "done" || run.status === "failed" || run.status === "waiting_input")
+    ) {
+      playChime();
+    }
     // A group reply is not news about the Blob's own conversation, so it must
     // not overwrite that row's snippet in the sidebar.
     if (group === undefined) {
@@ -2590,6 +2611,8 @@ export function App() {
           onUserNameChange={changeUserName}
           theme={theme}
           onThemeChange={changeTheme}
+          sounds={sounds}
+          onSoundsChange={changeSounds}
           timezone={timezone}
           onTimezoneChange={changeTimezone}
           model={model}
@@ -2598,7 +2621,15 @@ export function App() {
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}
-      {onboarding ? <Onboarding onDone={finishOnboarding} /> : null}
+      {onboarding ? (
+        <Onboarding
+          onDone={finishOnboarding}
+          userName={userName}
+          onUserNameChange={changeUserName}
+          timezone={timezone}
+          onTimezoneChange={changeTimezone}
+        />
+      ) : null}
     </div>
   );
 }

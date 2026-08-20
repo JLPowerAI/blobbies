@@ -953,24 +953,31 @@ export function Sidebar({
         {/* Hidden Blobs. Not a drop zone: see agentRow. */}
         {hidden.length > 0 && !collapsed ? (
           <li className="agent-group">
-            <button
-              type="button"
-              className="section-add"
-              aria-expanded={showHidden}
-              onClick={() => setShowHidden(!showHidden)}
+            <div className={showHidden ? "section-header section-header-open" : "section-header"}>
+              <button
+                type="button"
+                className="section-toggle"
+                aria-expanded={showHidden}
+                onClick={() => setShowHidden(!showHidden)}
+              >
+                {showHidden ? (
+                  <EyeOff size={13} strokeWidth={2} aria-hidden="true" />
+                ) : (
+                  <Eye size={13} strokeWidth={2} aria-hidden="true" />
+                )}
+                <span className="section-name">
+                  {showHidden
+                    ? `Hidden blobs (${hidden.length})`
+                    : `Show hidden blobs (${hidden.length})`}
+                </span>
+              </button>
+            </div>
+            <div
+              className={showHidden ? "section-slot" : "section-slot section-slot-shut"}
+              inert={!showHidden}
             >
-              {showHidden ? (
-                <EyeOff size={13} strokeWidth={2} aria-hidden="true" />
-              ) : (
-                <Eye size={13} strokeWidth={2} aria-hidden="true" />
-              )}
-              {showHidden
-                ? `Hidden chats (${hidden.length})`
-                : `Show hidden chats (${hidden.length})`}
-            </button>
-            {showHidden ? (
               <ul className="agent-group-rows">{hidden.map((agent) => agentRow(agent, false))}</ul>
-            ) : null}
+            </div>
           </li>
         ) : null}
       </ul>

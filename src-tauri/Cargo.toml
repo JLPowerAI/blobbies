@@ -64,7 +64,11 @@ image = { version = "0.25.10", default-features = false, features = [
 ] }
 
 [lints.rust]
-unsafe_code = "forbid"
+# Deny, not forbid: notifications.rs needs one audited `unsafe` (deref of the
+# settings pointer the OS hands its completion block) and `deny` still lets
+# a module-level #[expect] mark exactly where and why. Every other file
+# stays policed; stray unsafe elsewhere is still an error.
+unsafe_code = "deny"
 missing_debug_implementations = "warn"
 rust_2018_idioms = { level = "warn", priority = -1 }
 unreachable_pub = "warn"
@@ -79,6 +83,24 @@ panic = "warn"
 indexing_slicing = "warn"
 todo = "deny"
 dbg_macro = "deny"
+
+# Real UNUserNotificationCenter authorization and sending for notifications
+# (src/notifications.rs): the plugin never asks macOS for permission, and its
+# send path uses the deprecated NSUserNotification API, which modern macOS
+# silently drops. Versions match what Tauri already pins in the lock
+# (objc2 0.6 / objc2-* 0.3 family).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-foundation = "0.3.2"
+objc2-user-notifications = { version = "0.3.2", features = [
+  "UNUserNotificationCenter",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationSettings",
+  "UNNotificationSound",
+  "block2",
+] }
+block2 = "0.6.2"
 
 [profile.dev]
 incremental = true

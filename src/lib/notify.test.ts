@@ -1,13 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
-import { requestNotificationPermission, shouldNotify } from "@/lib/notify";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { notify, requestNotificationPermission, shouldNotify } from "@/lib/notify";
 
 const isPermissionGranted = vi.fn(async () => false);
 const requestPermission = vi.fn(async () => "granted");
+const sendNotification = vi.fn();
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: () => isPermissionGranted(),
   requestPermission: () => requestPermission(),
-  sendNotification: vi.fn(),
+  sendNotification: (...args: unknown[]) => sendNotification(...args),
 }));
+
+const invoke = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (...args: unknown[]) => invoke(...args),
+}));
+
+// Module-level mocks: call history must not leak between tests.
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 const base = { trigger: "routine" as const, status: "done" as const, windowFocused: false };
 
@@ -46,5 +57,60 @@ describe("requestNotificationPermission", () => {
     expect(await requestNotificationPermission()).toBe("unavailable");
     expect(requestPermission).not.toHaveBeenCalled();
     expect(isPermissionGranted).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("asks through our Rust command, which is the one path that reaches macOS", async () => {
+    // The plugin's own request is a desktop stub that always says granted;
+    // the real UNUserNotificationCenter call lives behind our command, so
+    // that is what Allow must hit.
+    const w = window as unknown as { __TAURI_INTERNALS__?: object };
+    w.__TAURI_INTERNALS__ = {};
+    try {
+      invoke.mockResolvedValue("granted");
+      expect(await requestNotificationPermission()).toBe("granted");
+      expect(invoke).toHaveBeenCalledWith("request_notification_permission");
+      expect(requestPermission).not.toHaveBeenCalled();
+
+      invoke.mockResolvedValue("denied");
+      expect(await requestNotificationPermission()).toBe("denied");
+
+      invoke.mockRejectedValue(new Error("command missing"));
+      expect(await requestNotificationPermission()).toBe("unavailable");
+    } finally {
+      delete w.__TAURI_INTERNALS__;
+    }
+  });
+});
+
+describe("notify", () => {
+  it("stays a no-op outside Tauri", async () => {
+    await notify("Blobbies", "hello");
+    expect(sendNotification).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("sends through the Rust command on macOS, never the plugin's deprecated path", async () => {
+    const w = window as unknown as { __TAURI_INTERNALS__?: object };
+    w.__TAURI_INTERNALS__ = {};
+    const agent = Object.getOwnPropertyDescriptor(globalThis.navigator, "userAgent");
+    Object.defineProperty(globalThis.navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 (Macintosh) Test",
+    });
+    try {
+      invoke.mockResolvedValue(undefined);
+      await notify("Blobbies", "  hello  ");
+      expect(invoke).toHaveBeenCalledWith("send_notification", {
+        title: "Blobbies",
+        body: "hello",
+      });
+      expect(sendNotification).not.toHaveBeenCalled();
+    } finally {
+      delete w.__TAURI_INTERNALS__;
+      if (agent) {
+        Object.defineProperty(globalThis.navigator, "userAgent", agent);
+      }
+    }
   });
 });

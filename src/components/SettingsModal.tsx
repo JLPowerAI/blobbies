@@ -19,7 +19,7 @@ import {
 } from "@/lib/ollama";
 import { deleteSecret, setSecret } from "@/lib/secrets";
 import { listSkills, type Skill } from "@/lib/skills";
-import { openExternal } from "@/lib/tauri";
+import { isTauri, openExternal } from "@/lib/tauri";
 // Tinfoil's real module (attestation stack) is a lazy chunk: only the pure
 // id helpers are imported statically; handlers `import()` the rest on use.
 import type { TinfoilModel } from "@/lib/tinfoil";
@@ -30,8 +30,6 @@ import { useExitAnimation } from "@/lib/useExitAnimation";
 export const MAX_USER_NAME_LENGTH = 32;
 
 export type ThemePreference = "system" | "light" | "dark";
-
-const APP_VERSION = "0.1.2";
 
 /** The Updates tab status line under the version. One sentence per phase; the
  *  sidebar card carries the interactive part, this is the quiet summary. */
@@ -66,6 +64,9 @@ interface SettingsModalProps {
   onUserNameChange: (name: string) => void;
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
+  /** In-app sound effects (turn-end chime); default on. */
+  sounds: boolean;
+  onSoundsChange: (on: boolean) => void;
   timezone: string;
   onTimezoneChange: (timezone: string) => void;
   model: string;
@@ -287,6 +288,8 @@ export function SettingsModal({
   onUserNameChange,
   theme,
   onThemeChange,
+  sounds,
+  onSoundsChange,
   timezone,
   onTimezoneChange,
   model,
@@ -295,6 +298,20 @@ export function SettingsModal({
   onClose,
 }: SettingsModalProps) {
   const [tab, setTab] = useState<SettingsTab>(initialTab);
+  // The version row reads the running app, not a constant: a hardcoded string
+  // here silently went stale across releases (showed 0.1.2 in 0.1.4). Null in
+  // a plain browser or tests, where there is no bundle to ask.
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isTauri()) return;
+    void import("@tauri-apps/api/app")
+      .then(({ getVersion }) => getVersion())
+      .then(setAppVersion)
+      .catch(() => {
+        // Leaving null shows "Blobbies" alone — the Updates status line
+        // below still says whether this build is current.
+      });
+  }, []);
   const update = useUpdateState();
   const [ollama, setOllama] = useState<OllamaStatus>({ kind: "idle" });
   const [tinfoil, setTinfoil] = useState<TinfoilStatus>({ kind: "idle" });
@@ -582,6 +599,27 @@ export function SettingsModal({
                     ))}
                   </PillSelect>
                 </div>
+                <div className="modal-row modal-row-multiline">
+                  <span className="modal-row-text">
+                    <label className="modal-row-title" htmlFor="sounds-toggle">
+                      Sounds
+                    </label>
+                    <span className="modal-row-blurb">
+                      Play a chime when a Blob finishes its work. The notification banner's own
+                      sound is controlled by macOS in System Settings.
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={sounds}
+                    id="sounds-toggle"
+                    className={sounds ? "toggle toggle-on" : "toggle"}
+                    onClick={() => onSoundsChange(!sounds)}
+                  >
+                    <span className="toggle-knob" aria-hidden="true" />
+                  </button>
+                </div>
               </div>
 
               <p className="modal-section-label">Developer</p>
@@ -861,7 +899,9 @@ export function SettingsModal({
               <div className="modal-card">
                 <div className="modal-row modal-row-multiline">
                   <span className="modal-row-text">
-                    <span className="modal-row-title">Blobbies {APP_VERSION}</span>
+                    <span className="modal-row-title">
+                      {appVersion === null ? "Blobbies" : `Blobbies ${appVersion}`}
+                    </span>
                     <span className="modal-row-blurb">{updateBlurb(update)}</span>
                   </span>
                   {import.meta.env.DEV ? (

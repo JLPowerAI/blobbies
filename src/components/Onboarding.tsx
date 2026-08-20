@@ -1,6 +1,8 @@
 import { ArrowRight, Check } from "lucide-react";
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
+import { PillSelect } from "@/components/PillSelect";
+import { MAX_USER_NAME_LENGTH } from "@/components/SettingsModal";
 import type { AgentShape, AvatarTone } from "@/data/agents";
 import {
   composioCliVersion,
@@ -29,7 +31,15 @@ import { openExternal } from "@/lib/tauri";
  * Plugins modal owns that list anyway. Composio stays — it is one sign-in that
  * later covers every app, so it is setup rather than a shopping list.
  */
-const ALL_STEPS = ["welcome", "blobs", "permissions", "tinfoil", "composio"] as const;
+const ALL_STEPS = [
+  "welcome",
+  "blobs",
+  "name",
+  "timezone",
+  "permissions",
+  "tinfoil",
+  "composio",
+] as const;
 
 type Step = (typeof ALL_STEPS)[number];
 
@@ -137,21 +147,59 @@ const KEY_PATTERN = /^[A-Za-z0-9_-]{16,200}$/;
 interface OnboardingProps {
   /** Flow is over: mark it done and open the app's Blob creator. */
   onDone: () => void;
+  /** Current display name, offered as the starting point of the name step. */
+  userName: string;
+  onUserNameChange: (name: string) => void;
+  /** Current timezone preference ("auto" until chosen). */
+  timezone: string;
+  onTimezoneChange: (timezone: string) => void;
 }
 
 /**
- * First-run flow: welcome, what a Blob is, permissions, Tinfoil and Composio,
- * ending on the app's Blob creator. Rendered over the app shell, so nothing
- * behind it is reachable until it finishes; `onDone` is the only way out
- * (plus the dev toggle in Settings, which re-opens it on demand).
+ * First-run flow: welcome, what a Blob is, name and timezone, permissions,
+ * Tinfoil and Composio, ending on the app's Blob creator. Rendered over the
+ * app shell, so nothing behind it is reachable until it finishes; `onDone` is
+ * the only way out (plus the dev Replay button in Settings, which re-opens it
+ * on demand).
  */
-export function Onboarding({ onDone }: OnboardingProps) {
+export function Onboarding({
+  onDone,
+  userName,
+  onUserNameChange,
+  timezone,
+  onTimezoneChange,
+}: OnboardingProps) {
   const [index, setIndex] = useState(0);
   const [notifications, setNotifications] = useState<PermissionState>("idle");
   const [key, setKey] = useState("");
   const [keyState, setKeyState] = useState<KeyState>("idle");
   const [composio, setComposio] = useState<ComposioState>({ kind: "idle" });
+  // Local to the flow; committed through the parent only when the step is
+  // left via Next, so Back and Skip leave the stored values untouched.
+  const [nameInput, setNameInput] = useState(userName);
+  const [timezoneChoice, setTimezoneChoice] = useState(timezone);
   const dialogRef = useRef<HTMLDivElement>(null);
+
+  const detectedZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Built once per flow; ~400 entries with their current local time.
+  const zones = useMemo(() => {
+    const names =
+      typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+    const now = new Date();
+    return names.map((zone) => {
+      let time = "";
+      try {
+        time = new Intl.DateTimeFormat("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          timeZone: zone,
+        }).format(now);
+      } catch {
+        // Skip the time preview for zones the runtime can't format.
+      }
+      return { zone, time };
+    });
+  }, []);
 
   const step: Step = ALL_STEPS[index] ?? "welcome";
   const last = index === ALL_STEPS.length - 1;
@@ -163,7 +211,17 @@ export function Onboarding({ onDone }: OnboardingProps) {
     dialogRef.current?.focus();
   }, [step]);
 
-  const next = () => setIndex((current) => Math.min(current + 1, ALL_STEPS.length - 1));
+  const next = () => {
+    // Leaving a profile step through Next is the commit point; Back and
+    // Skip leave the stored preference alone.
+    if (step === "name" && nameInput.trim() !== "") {
+      onUserNameChange(nameInput.trim());
+    }
+    if (step === "timezone") {
+      onTimezoneChange(timezoneChoice);
+    }
+    setIndex((current) => Math.min(current + 1, ALL_STEPS.length - 1));
+  };
   const back = () => setIndex((current) => Math.max(current - 1, 0));
 
   const grantNotifications = async () => {
@@ -291,6 +349,66 @@ export function Onboarding({ onDone }: OnboardingProps) {
         return (
           <div className="onboarding-step onboarding-step-blobs">
             <h1 className="onboarding-heading">Every Blob gets one job</h1>
+          </div>
+        );
+
+      case "name":
+        return (
+          <div className="onboarding-step">
+            <h1 className="onboarding-heading">Who are your Blobs working for?</h1>
+            <p className="onboarding-blurb">
+              They use your name to know who they are talking to. You can change it any time in
+              Settings.
+            </p>
+            <div className="onboarding-key">
+              <label className="onboarding-key-label" htmlFor="onboarding-name">
+                Your name
+              </label>
+              <input
+                id="onboarding-name"
+                type="text"
+                className="creator-name"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="Type your name"
+                maxLength={MAX_USER_NAME_LENGTH}
+                value={nameInput}
+                onChange={(event) => setNameInput(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    next();
+                  }
+                }}
+              />
+            </div>
+          </div>
+        );
+
+      case "timezone":
+        return (
+          <div className="onboarding-step">
+            <h1 className="onboarding-heading">What time is it for you?</h1>
+            <p className="onboarding-blurb">
+              Blobs schedule routines and time-stamp their work in your timezone.
+            </p>
+            <div className="onboarding-key">
+              <label className="onboarding-key-label" htmlFor="onboarding-timezone">
+                Timezone
+              </label>
+              <PillSelect
+                id="onboarding-timezone"
+                label="Timezone"
+                value={timezoneChoice}
+                onChange={setTimezoneChoice}
+              >
+                <option value="auto">{`Auto-detect (${detectedZone})`}</option>
+                {zones.map(({ zone, time }) => (
+                  <option key={zone} value={zone}>
+                    {time.length > 0 ? `${zone}  ${time}` : zone}
+                  </option>
+                ))}
+              </PillSelect>
+            </div>
           </div>
         );
 

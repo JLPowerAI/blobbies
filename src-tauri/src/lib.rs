@@ -2,6 +2,7 @@ mod commands;
 mod composio;
 mod error;
 mod home;
+mod notifications;
 mod ocr;
 mod secrets;
 mod shell;
@@ -57,6 +58,8 @@ pub fn run() {
             home::blob_home_write,
             home::blob_home_delete,
             ocr::ocr_image,
+            notifications::request_notification_permission,
+            notifications::send_notification,
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,

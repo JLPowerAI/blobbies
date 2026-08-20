@@ -449,10 +449,20 @@ describe("App", () => {
     // Timezone select defaults to auto-detect.
     expect(within(dialog).getByLabelText("Timezone")).toHaveValue("auto");
 
+    // Sounds defaults on, and one toggle-off persists.
+    const soundsToggle = within(dialog).getByRole("switch", { name: "Sounds" });
+    expect(soundsToggle).toHaveAttribute("aria-checked", "true");
+    await user.click(soundsToggle);
+    expect(window.localStorage.getItem("pref:sounds")).toBe("off");
+    await user.click(soundsToggle);
+    expect(window.localStorage.getItem("pref:sounds")).toBe("on");
+
     // Updates tab is Blobbies-branded; outside the Tauri webview the updater
-    // stays idle and the blurb says where updates come from.
+    // stays idle, the blurb says where updates come from, and the version row
+    // has no bundle to ask — so it shows the bare name (the number is read
+    // from the running app at runtime, never a constant that could go stale).
     await user.click(within(dialog).getByRole("button", { name: "Updates" }));
-    expect(within(dialog).getByText(/Blobbies 0\.1\.\d/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Blobbies$/)).toBeInTheDocument();
     expect(within(dialog).getByText(/GitHub Releases/)).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
@@ -811,16 +821,20 @@ describe("App", () => {
 
     await openRowMenu(user, /Bob/);
     await user.click(screen.getByRole("menuitem", { name: "Hide from sidebar" }));
-    expect(within(conversations).queryByRole("button", { name: /Bob/ })).not.toBeInTheDocument();
-
     // A hidden Blob must stay reachable, or it is gone from the UI forever.
-    await user.click(within(conversations).getByRole("button", { name: /Show hidden chats/ }));
+    // The collapsed rows stay mounted (the slot animates by CSS grid, which
+    // jsdom cannot see) — the toggle's count is the observable contract.
+    expect(
+      within(conversations).getByRole("button", { name: "Show hidden blobs (1)" }),
+    ).toBeInTheDocument();
+
+    await user.click(within(conversations).getByRole("button", { name: /Show hidden blobs/ }));
     await openRowMenu(user, /Bob/);
     await user.click(screen.getByRole("menuitem", { name: "Unhide" }));
 
     expect(within(conversations).getByRole("button", { name: /Bob/ })).toBeInTheDocument();
     expect(
-      within(conversations).queryByRole("button", { name: /Show hidden chats/ }),
+      within(conversations).queryByRole("button", { name: /Show hidden blobs/ }),
     ).not.toBeInTheDocument();
   });
 
@@ -1161,9 +1175,16 @@ describe("onboarding", () => {
     const flow = () => within(screen.getByRole("dialog", { name: "Welcome to Blobbies" }));
     await user.click(flow().getByRole("button", { name: /Get started/ }));
 
-    // What a Blob is, then permissions: notifications are never requested on
-    // render, only from Allow.
+    // What a Blob is, then the profile steps (name, timezone), then
+    // permissions: notifications are never requested on render, only from
+    // Allow.
     expect(flow().getByRole("heading", { name: "Every Blob gets one job" })).toBeInTheDocument();
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    expect(
+      flow().getByRole("heading", { name: "Who are your Blobs working for?" }),
+    ).toBeInTheDocument();
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    expect(flow().getByRole("heading", { name: "What time is it for you?" })).toBeInTheDocument();
     await user.click(flow().getByRole("button", { name: "Next" }));
     expect(flow().getByRole("heading", { name: "A few things to settle" })).toBeInTheDocument();
     await user.click(flow().getByRole("button", { name: "Next" }));
@@ -1211,6 +1232,8 @@ describe("onboarding", () => {
     await user.click(flow().getByRole("button", { name: /Get started/ }));
     await user.click(flow().getByRole("button", { name: "Next" }));
     await user.click(flow().getByRole("button", { name: "Next" }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
 
     // What a fumbled paste looks like: the env-var name dragged along with
     // the value. Nothing may reach the keychain.
@@ -1234,10 +1257,12 @@ describe("onboarding", () => {
     const flow = () => within(screen.getByRole("dialog", { name: "Welcome to Blobbies" }));
     await user.click(flow().getByRole("button", { name: /Get started/ }));
     await user.click(flow().getByRole("button", { name: "Next" }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
     expect(flow().getByRole("heading", { name: "A few things to settle" })).toBeInTheDocument();
 
     await user.click(flow().getByRole("button", { name: "Back" }));
-    expect(flow().getByRole("heading", { name: "Every Blob gets one job" })).toBeInTheDocument();
+    expect(flow().getByRole("heading", { name: "What time is it for you?" })).toBeInTheDocument();
   });
 
   it("opens the creator on a replay, where a roster already exists", async () => {
@@ -1252,12 +1277,44 @@ describe("onboarding", () => {
     await user.click(flow().getByRole("button", { name: /Get started/ }));
     await user.click(flow().getByRole("button", { name: "Next" }));
     await user.click(flow().getByRole("button", { name: "Next" }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
     await user.click(flow().getByRole("button", { name: /Skip, I'll use the local model/ }));
     // Composio is the last step, so declining it ends the flow.
     await user.click(flow().getByRole("button", { name: /Skip, I'll connect my apps later/ }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "New Blob" })).toBeInTheDocument();
+  });
+
+  it("saves the name and timezone chosen during the flow", async () => {
+    const user = userEvent.setup();
+    clearOnboarded();
+    window.localStorage.removeItem("pref:userName");
+    window.localStorage.removeItem("pref:timezone");
+    render(<App />);
+
+    const flow = () => within(screen.getByRole("dialog", { name: "Welcome to Blobbies" }));
+    await user.click(flow().getByRole("button", { name: /Get started/ }));
+    await user.click(flow().getByRole("button", { name: "Next" }));
+
+    // Name is committed on Next, trimmed, so agents never meet the padding.
+    // Cleared first: the field offers the stored name as a starting point.
+    await user.clear(flow().getByLabelText("Your name"));
+    await user.type(flow().getByLabelText("Your name"), "  Nova  ");
+    await user.click(flow().getByRole("button", { name: "Next" }));
+
+    // Timezone starts at auto-detect and stays there until a zone is picked.
+    expect(flow().getByLabelText("Timezone")).toHaveValue("auto");
+    await user.selectOptions(flow().getByLabelText("Timezone"), "Europe/Berlin");
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    // The rest of the flow is declined, which must not un-write the profile.
+    await user.click(flow().getByRole("button", { name: "Next" }));
+    await user.click(flow().getByRole("button", { name: /Skip, I'll use the local model/ }));
+    await user.click(flow().getByRole("button", { name: /Skip, I'll connect my apps later/ }));
+
+    expect(window.localStorage.getItem("pref:userName")).toBe("Nova");
+    expect(window.localStorage.getItem("pref:timezone")).toBe("Europe/Berlin");
   });
 
   it("replays for VITE_ONBOARDING without writing a preference", () => {
