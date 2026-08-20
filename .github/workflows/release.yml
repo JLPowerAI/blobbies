@@ -257,9 +257,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          VER="${TAG#v}"
+          # The heredoc inherits YAML indentation; strip it or GitHub renders
+          # the table as a code block.
+          cat > preamble.md <<EOF
+          **Which file do I download?**
+
+          | Your system | File |
+          | --- | --- |
+          | macOS — Apple Silicon (M1–M4) | \`Blobbies_${VER}_aarch64.dmg\` |
+          | macOS — Intel | \`Blobbies_${VER}_x64.dmg\` |
+          | Windows | \`Blobbies_${VER}_x64-setup.exe\` |
+          | Linux — Debian/Ubuntu | \`Blobbies_${VER}_amd64.deb\` |
+          | Linux — any distro | \`Blobbies_${VER}_amd64.AppImage\` |
+
+          Everything else is machine food, not for humans: the **\`.app.tar.gz\` /
+          \`.sig\`** files are what the app's built-in updater downloads and
+          cryptographically verifies (you never touch them), **\`latest.json\`**
+          is the updater's index, and **\`SHA256SUMS.txt\`** lets you verify a
+          download (\`shasum -a 256 --check\`).
+
+          First run: macOS builds are signed and notarized. The Windows build is
+          unsigned for now, so SmartScreen asks — "More info → Run anyway".
+
+          After installing, the app updates itself.
+          EOF
+          sed 's/^[[:space:]]*//' preamble.md > release-notes.md
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --draft --generate-notes --title "Blobbies $TAG" dist/*
+              --draft --generate-notes --title "Blobbies $TAG" \
+              --notes-file release-notes.md dist/*
           fi
