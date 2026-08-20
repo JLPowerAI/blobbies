@@ -1,18 +1,14 @@
 name: Release build
 
-# Produces the per-OS installers the README promises ("Installers are on the
-# way"). Runs on a `v*` tag or by hand; artifacts land on the workflow run
-# under Actions → Release build → artifacts, from where they can be attached
-# to a GitHub Release.
+# Produces the per-OS installers and attaches them, with SHA-256 checksums,
+# to a draft GitHub Release. Triggered by pushing a `v*` tag — see
+# .github/RELEASING.md for the process and the optional signing secrets.
 #
-# Deliberately unsigned for now: no macOS notarization, no Windows
-# certificate. macOS users get Gatekeeper's right-click → Open flow and
-# Windows shows SmartScreen — expected at this stage, and the reason these are
-# workflow artifacts rather than a published release.
-#
-# simplification: macOS builds arm64 only. Intel Macs need
-# `rustup target add x86_64-apple-darwin` and `--target universal-apple-darwin`
-# (2.5x build time); revisit when there is evidence an Intel user exists.
+# Unsigned until the signing secrets exist: macOS builds get Gatekeeper's
+# right-click → Open flow, Windows shows SmartScreen. Adding the secrets
+# listed in RELEASING.md flips signing and notarization on automatically —
+# every signing step is conditional on its secret being present, so the
+# workflow never breaks for lack of a certificate.
 
 on:
   push:
@@ -31,18 +27,47 @@ env:
 
 jobs:
   bundle:
-    name: Bundle (${{ matrix.os }})
+    name: Bundle (${{ matrix.name }})
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest # arm64: Blobbies.dmg
+          - name: macOS arm64
+            os: macos-latest
+            rust-target: aarch64-apple-darwin
             bundles: dmg
-          - os: ubuntu-latest # x64: .deb + .AppImage
+            # Native target: bundles land in target/release/bundle/.
+            bundle-dir: src-tauri/target/release/bundle
+          - name: macOS x64
+            os: macos-latest
+            rust-target: x86_64-apple-darwin
+            bundles: dmg
+            # Cross-compiled: bundles land under target/<triple>/release/bundle/.
+            bundle-dir: src-tauri/target/x86_64-apple-darwin/release/bundle
+          - name: Linux x64
+            os: ubuntu-latest
+            rust-target: x86_64-unknown-linux-gnu
             bundles: deb,appimage
-          - os: windows-latest # x64: NSIS setup .exe
+            bundle-dir: src-tauri/target/release/bundle
+          - name: Windows x64
+            os: windows-latest
+            rust-target: x86_64-pc-windows-msvc
             bundles: nsis
+            bundle-dir: src-tauri/target/release/bundle
     runs-on: ${{ matrix.os }}
+    # Probed by the conditional signing steps below. Secrets are job-env so
+    # `if: env.X != ''` works; empty means "not configured, build unsigned".
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -65,24 +90,95 @@ jobs:
           # ubuntu-24.04 dropped; renamed from libfuse2 there.
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2t64
 
-      # Installs the exact toolchain + components pinned in rust-toolchain.toml.
+      # Installs the exact toolchain pinned in rust-toolchain.toml (proven
+      # order: `show` auto-installs from the toml on newer rustup, and falls
+      # back to an explicit install on older).
       - run: rustup show active-toolchain || rustup toolchain install
+        shell: bash
+      - run: rustup target add ${{ matrix.rust-target }}
         shell: bash
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
-      # bash on every OS so the comma list and forward slashes behave the same.
-      - run: pnpm tauri build --bundles ${{ matrix.bundles }}
+      - name: Import Apple signing certificate
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security find-identity -v -p codesigning build.keychain
+          rm certificate.p12
+
+      - name: Import Windows signing certificate
+        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        shell: pwsh
+        run: |
+          New-Item -ItemType directory -Path certificate
+          Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
+          certutil -decode certificate/tempCert.txt certificate/certificate.pfx
+          Remove-Item certificate/tempCert.txt
+          Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
+          Remove-Item -Recurse certificate
+
+      # bash on every OS so the comma bundle list and the conditional signing
+      # config compose the same way. The thumbprint override reaches Tauri via
+      # --config rather than tauri.conf.json, so no secret-shaped value is
+      # ever committed.
+      - name: Build bundles
         shell: bash
+        run: |
+          set -euo pipefail
+          args=(--bundles "${{ matrix.bundles }}")
+          if [[ "${{ runner.os }}" == "Windows" && -n "${WINDOWS_CERTIFICATE_THUMBPRINT:-}" ]]; then
+            args+=(--config "{\"bundle\":{\"windows\":{\"certificateThumbprint\":\"$WINDOWS_CERTIFICATE_THUMBPRINT\",\"digestAlgorithm\":\"sha256\",\"timestampUrl\":\"http://timestamp.comodoca.com\"}}}")
+          fi
+          pnpm tauri build --target ${{ matrix.rust-target }} "${args[@]}"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: blobbies-${{ matrix.os }}
+          name: blobbies-${{ matrix.name }}
           path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/nsis/*.exe
+            ${{ matrix.bundle-dir }}/dmg/*.dmg
+            ${{ matrix.bundle-dir }}/deb/*.deb
+            ${{ matrix.bundle-dir }}/appimage/*.AppImage
+            ${{ matrix.bundle-dir }}/nsis/*.exe
           if-no-files-found: error
+
+  # Everything above uploads artifacts; this job turns them into the thing
+  # users download: a draft Release carrying every installer plus a checksum
+  # file. Runs only for real tag pushes (workflow_dispatch still gets the
+  # artifacts on the run page for testing).
+  release:
+    name: Draft GitHub Release
+    needs: bundle
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksum installers
+        run: cd dist && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --draft --generate-notes --title "Blobbies $TAG" dist/*
+          fi

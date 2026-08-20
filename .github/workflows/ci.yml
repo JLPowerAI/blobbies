@@ -19,6 +19,7 @@ jobs:
   frontend:
     name: Frontend (lint, types, tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -54,6 +55,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Windows compiles the whole tree cold in ~20 min; 45 leaves headroom
+    # without letting a wedged runner burn the whole hour.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
@@ -79,6 +83,7 @@ jobs:
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
