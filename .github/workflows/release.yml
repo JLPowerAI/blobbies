@@ -33,28 +33,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Every entry passes --target explicitly, so cargo always writes to
+          # target/<triple>/release/bundle — native builds included (a native
+          # --target run does NOT use plain target/release; measured).
           - name: macOS arm64
             os: macos-latest
             rust-target: aarch64-apple-darwin
             bundles: dmg
-            # Native target: bundles land in target/release/bundle/.
-            bundle-dir: src-tauri/target/release/bundle
+            bundle-dir: src-tauri/target/aarch64-apple-darwin/release/bundle
           - name: macOS x64
             os: macos-latest
             rust-target: x86_64-apple-darwin
             bundles: dmg
-            # Cross-compiled: bundles land under target/<triple>/release/bundle/.
             bundle-dir: src-tauri/target/x86_64-apple-darwin/release/bundle
           - name: Linux x64
             os: ubuntu-latest
             rust-target: x86_64-unknown-linux-gnu
             bundles: deb,appimage
-            bundle-dir: src-tauri/target/release/bundle
+            bundle-dir: src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
           - name: Windows x64
             os: windows-latest
             rust-target: x86_64-pc-windows-msvc
             bundles: nsis
-            bundle-dir: src-tauri/target/release/bundle
+            bundle-dir: src-tauri/target/x86_64-pc-windows-msvc/release/bundle
     runs-on: ${{ matrix.os }}
     # Booleans only: an unset secret interpolates to an empty string, and a
     # job-level `APPLE_CERTIFICATE: ""` is enough for Tauri's bundler to try
