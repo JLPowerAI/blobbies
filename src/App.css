@@ -2339,6 +2339,19 @@ a.modal-button {
   border-radius: 8px;
 }
 
+/* How many apps a category holds, shown until the row becomes the pick —
+   then the check replaces it. */
+.filter-count {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+/* The funnel stays visually on while a category is chosen, so the filtered
+   list below has a visible cause. */
+.plugins-filter .icon-button[data-active="true"] {
+  color: var(--accent-green);
+}
+
 /* Inset divider with space above and below, like the reference. */
 .filter-menu .modal-divider {
   margin: 5px 10px;

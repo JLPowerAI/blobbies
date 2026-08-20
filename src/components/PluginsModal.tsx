@@ -90,8 +90,9 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
   const [detailId, setDetailId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [filterOpen, setFilterOpen] = useState(false);
-  const [typeFilter, setTypeFilter] = useState<"all" | "connectors" | "skills">("all");
-  const [ownershipFilter, setOwnershipFilter] = useState<"all" | "team" | "public">("all");
+  /** The marketplace's own grouping, used as the filter's values: the same
+   *  names render as section headings, so the menu is the table of contents. */
+  const [categoryFilter, setCategoryFilter] = useState<"all" | PluginDef["category"]>("all");
   const filterRef = useRef<HTMLDivElement>(null);
 
   /**
@@ -269,6 +270,9 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
     if (tab === "yours" && !installed.includes(plugin.id) && !isConnected(plugin.id)) {
       return false;
     }
+    if (categoryFilter !== "all" && plugin.category !== categoryFilter) {
+      return false;
+    }
     if (trimmed.length === 0) {
       return true;
     }
@@ -353,69 +357,52 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
             <button
               type="button"
               className="icon-button"
-              aria-label="Filter plugins"
+              aria-label={
+                categoryFilter === "all" ? "Filter plugins" : `Filter plugins: ${categoryFilter}`
+              }
               aria-expanded={filterOpen}
+              data-active={categoryFilter !== "all"}
               onClick={() => setFilterOpen((open) => !open)}
             >
               <ListFilter size={16} strokeWidth={1.8} aria-hidden="true" />
             </button>
             {filterOpen ? (
               <div className="filter-menu" role="menu" aria-label="Plugin filters">
-                <p className="filter-section">Type</p>
-                {(
-                  [
-                    ["all", "All types"],
-                    ["connectors", "Connectors"],
-                    ["skills", "Skills"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={typeFilter === value}
-                    key={`type-${value}`}
-                    className="account-menu-item filter-item"
-                    onClick={() => setTypeFilter(value)}
-                  >
-                    {label}
-                    {typeFilter === value ? (
-                      <Check
-                        size={14}
-                        strokeWidth={2}
-                        aria-hidden="true"
-                        className="filter-check"
-                      />
-                    ) : null}
-                  </button>
-                ))}
-                <div className="modal-divider" />
-                <p className="filter-section">Ownership</p>
-                {(
-                  [
-                    ["all", "All"],
-                    ["team", "Team"],
-                    ["public", "Public"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={ownershipFilter === value}
-                    key={`own-${value}`}
-                    className="account-menu-item filter-item"
-                    onClick={() => setOwnershipFilter(value)}
-                  >
-                    {label}
-                    {ownershipFilter === value ? (
-                      <Check
-                        size={14}
-                        strokeWidth={2}
-                        aria-hidden="true"
-                        className="filter-check"
-                      />
-                    ) : null}
-                  </button>
-                ))}
+                <p className="filter-section">Category</p>
+                {["all", ...PLUGIN_CATEGORIES].map((value) => {
+                  const selected = categoryFilter === value;
+                  return (
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={selected}
+                      key={value}
+                      className="account-menu-item filter-item"
+                      onClick={() => {
+                        setCategoryFilter(value as "all" | PluginDef["category"]);
+                        // Choosing is also finishing: the menu's job is done,
+                        // and the list behind it is the answer.
+                        setFilterOpen(false);
+                      }}
+                    >
+                      {value === "all" ? "All categories" : value}
+                      {selected ? (
+                        <Check
+                          size={14}
+                          strokeWidth={2}
+                          aria-hidden="true"
+                          className="filter-check"
+                        />
+                      ) : (
+                        <span className="filter-count">
+                          {value === "all"
+                            ? catalog?.length
+                            : catalog?.filter((plugin) => plugin.category === value).length}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             ) : null}
           </div>
@@ -436,12 +423,12 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
       <div className="plugins-body">
         {visiblePlugins.length === 0 ? (
           <p className="plugins-empty">
-            {tab === "yours" && trimmed.length === 0
+            {tab === "yours" && trimmed.length === 0 && categoryFilter === "all"
               ? "No plugins added yet. Browse the Marketplace to add one."
-              : "No plugins match your search."}
+              : "No plugins match your filters."}
           </p>
         ) : null}
-        {trimmed.length > 0 || tab === "yours" ? (
+        {trimmed.length > 0 || tab === "yours" || categoryFilter !== "all" ? (
           <div className="plugin-grid">{visiblePlugins.map(renderRow)}</div>
         ) : (
           PLUGIN_CATEGORIES.map((category) => {
