@@ -54,7 +54,7 @@ Every Blob keeps its own memories, plus facts you share with the whole team. Tel
 
 ### They actually do stuff
 
-Blobs plug into your apps. Gmail, Google Calendar, Slack, Notion, Spotify — 889 apps in the catalog — through a connector service on your own account. "Clear my inbox and flag anything urgent" is a real request, not a demo.
+Blobs plug into your apps. Gmail, Google Calendar, Slack, Notion, Spotify — 800+ apps in the catalog — through a connector service on your own account. "Clear my inbox and flag anything urgent" is a real request, not a demo.
 
 ### They work while you're away
 
@@ -92,7 +92,7 @@ Grok Bot is xAI's take on AI teammates: named Bots with jobs that work on a clou
 | **The AI** | Your pick: free local models or Tinfoil's encrypted cloud | Grok models only |
 | **Memory** | Per-Blob plus team-wide, all viewable and editable | Bots keep memory, files, and logins across turns |
 | **Team chats** | Up to 6 Blobs per group, @mention who you want | Bots message each other and hand off tasks |
-| **Your apps** | 889 in the built-in catalog. Connect from the Plugins tab — one browser sign-in per app — and every Blob can use it right away | Plugins for supported services, plus Bots signing into any website themselves on their cloud computer |
+| **Your apps** | 800+ in the built-in catalog. Connect from the Plugins tab — one browser sign-in per app — and every Blob can use it right away | Plugins for supported services, plus Bots signing into any website themselves on their cloud computer |
 | **Works while you're away** | Yes, on your machine | Yes, in the cloud |
 | **Platforms** | macOS, Windows, Linux | macOS, Windows, iOS (no Linux) |
 | **Source code** | Open, AGPL-3.0 | Closed |
@@ -139,7 +139,7 @@ pnpm tauri:build   # production bundle (dmg / deb+AppImage / NSIS exe)
 pnpm check         # everything CI runs: lint, types, tests, clippy
 ```
 
-**Platform quirks, so nothing surprises you:** Composio's installer is a POSIX shell script, so on Windows it needs [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) — the in-app install button hides itself there and the Plugins tab explains. A Blob's shell tools (`ls`, `cat`, `grep`, …) are POSIX binaries that mostly don't exist on Windows, so those commands fail with "not found" there. CI compiles and tests the Rust side on macOS, Linux, and Windows on every push, and a [release workflow](.github/workflows/release.yml) builds the installers for all three.
+**Platform quirks, so nothing surprises you:** The connector CLI's installer is a POSIX shell script, so on Windows it needs [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) — the in-app install button hides itself there and the Plugins tab explains. A Blob's shell tools (`ls`, `cat`, `grep`, …) are POSIX binaries that mostly don't exist on Windows, so those commands fail with "not found" there. CI compiles and tests the Rust side on macOS, Linux, and Windows on every push, and a [release workflow](.github/workflows/release.yml) builds the installers for all three.
 
 ---
 
