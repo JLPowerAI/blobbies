@@ -23,6 +23,25 @@ Retagging re-runs safely: the release step uploads with `--clobber` if a
 draft for the tag already exists. `workflow_dispatch` runs the bundles
 without creating a release (artifact-only smoke test).
 
+## In-app updates
+
+Every release ships `latest.json` (written by `scripts/update-manifest.mjs`)
+so the in-app updater can find it. The app checks on launch and every 4h,
+plus manually from Settings → Updates; a new version shows a green card in
+the sidebar that downloads, then installs and restarts. The endpoint is
+pinned in `tauri.conf.json` to this repo's `releases/latest/download/latest.json`.
+
+Update packages are minisign-signed; the **private key lives in
+`~/.blobbies-keys/updater.key` (back this up — losing it means no more
+updates for existing installs) and as the `TAURI_SIGNING_PRIVATE_KEY` /
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets; the matching public key is
+committed in `tauri.conf.json`** (`plugins.updater.pubkey`). A client that
+cannot verify a signature refuses the update.
+
+Testing the flow end-to-end: install release N (published), then publish
+N+1 — the running app should find, download, install, and relaunch. The
+endpoint only sees **published** releases, so drafts never trigger it.
+
 ## Signing
 
 macOS: **signed + notarized** — the six APPLE_*/KEYCHAIN secrets are set,

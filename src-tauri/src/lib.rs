@@ -24,6 +24,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
+        // Updater: checks this repo's GitHub Releases for a newer version and
+        // installs it in place. Process: relaunches the app after an update.
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::greet,
             commands::ollama_installed,

@@ -36,6 +36,8 @@ tauri-plugin-http = "2.5.9"
 # OS notifications for runs that finish or need the user while the app is
 # in the background.
 tauri-plugin-notification = "2.3.3"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-updater = "2.10.1"
 # OS-native secret storage (macOS Keychain / Windows Credential Store /
 # Linux Secret Service) for the Tinfoil API key — never plaintext JSON.
 keyring = { version = "3.6", features = [

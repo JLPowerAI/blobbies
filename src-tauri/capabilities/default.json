@@ -1,11 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Least-privilege capability for the main window. http:default allows https everywhere (minus the private-range denies) plus http on loopback, which exists only for local MCP servers and is re-checked in TS on every request (src/lib/mcp.ts). opener:allow-open-url is scoped by *scheme*, not host: an agent cites arbitrary URLs in chat markdown, so a host allowlist can only ever be an incomplete list of dead links. Limiting it to http(s) is the boundary that matters, since it excludes file:, javascript: and custom app schemes that can act on the machine; openExternal re-checks the scheme in TS (src/lib/tauri.ts).",
+  "description": "Least-privilege capability for the main window. http:default allows https everywhere (minus the private-range denies) plus http on loopback, which exists only for local MCP servers and is re-checked in TS on every request (src/lib/mcp.ts). opener:allow-open-url is scoped by *scheme*, not host: an agent cites arbitrary URLs in chat markdown, so a host allowlist can only ever be an incomplete list of dead links. Limiting it to http(s) is the boundary that matters, since it excludes file:, javascript: and custom app schemes that can act on the machine; openExternal re-checks the scheme in TS (src/lib/tauri.ts). updater:default checks and installs signed releases from this repo (endpoint pinned in tauri.conf.json); process:allow-restart relaunches the app after an update installs.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "updater:default",
+    "process:allow-restart",
     "notification:default",
     "opener:allow-reveal-item-in-dir",
     {

@@ -24,13 +24,37 @@ import { openExternal } from "@/lib/tauri";
 // id helpers are imported statically; handlers `import()` the rest on use.
 import type { TinfoilModel } from "@/lib/tinfoil";
 import { isTinfoilModel, TINFOIL_MODEL_PREFIX } from "@/lib/tinfoil-model";
+import { checkForUpdates, simulateUpdate, type UpdateState, useUpdateState } from "@/lib/updater";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 export const MAX_USER_NAME_LENGTH = 32;
 
 export type ThemePreference = "system" | "light" | "dark";
 
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.1.1";
+
+/** The Updates tab status line under the version. One sentence per phase; the
+ *  sidebar card carries the interactive part, this is the quiet summary. */
+function updateBlurb(update: UpdateState): string {
+  switch (update.phase) {
+    case "checking":
+      return "Checking GitHub Releases…";
+    case "up-to-date":
+      return `Up to date (checked ${new Date(update.checkedAt).toLocaleTimeString()})`;
+    case "available":
+      return `Blobbies ${update.version} is ready to download.`;
+    case "downloading":
+      return `Downloading ${update.version} — ${update.percent}%`;
+    case "ready":
+      return `${update.version} downloaded — see the sidebar to install and restart.`;
+    case "installing":
+      return `Installing ${update.version}…`;
+    case "failed":
+      return update.message;
+    default:
+      return "Updates arrive through GitHub Releases.";
+  }
+}
 
 /** The dialog's tabs; also what the search palette can jump straight to. */
 export type SettingsTab = "general" | "model" | "plugins" | "updates";
@@ -271,7 +295,7 @@ export function SettingsModal({
   onClose,
 }: SettingsModalProps) {
   const [tab, setTab] = useState<SettingsTab>(initialTab);
-  const [updateStatus, setUpdateStatus] = useState("You're up to date");
+  const update = useUpdateState();
   const [track, setTrack] = useState("stable");
   const [ollama, setOllama] = useState<OllamaStatus>({ kind: "idle" });
   const [tinfoil, setTinfoil] = useState<TinfoilStatus>({ kind: "idle" });
@@ -866,18 +890,28 @@ export function SettingsModal({
                 <div className="modal-row modal-row-multiline">
                   <span className="modal-row-text">
                     <span className="modal-row-title">Blobbies {APP_VERSION}</span>
-                    <span className="modal-row-blurb">
-                      Updates follow the {track === "stable" ? "Stable" : "Beta"} track
-                      <br />
-                      {updateStatus}
-                    </span>
+                    <span className="modal-row-blurb">{updateBlurb(update)}</span>
                   </span>
+                  {import.meta.env.DEV ? (
+                    <button
+                      type="button"
+                      className="modal-button"
+                      onClick={() => void simulateUpdate()}
+                    >
+                      Simulate Update
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="modal-button"
-                    onClick={() => setUpdateStatus("You're up to date")}
+                    disabled={
+                      update.phase === "checking" ||
+                      update.phase === "downloading" ||
+                      update.phase === "installing"
+                    }
+                    onClick={() => void checkForUpdates()}
                   >
-                    Check for Updates
+                    {update.phase === "checking" ? "Checking…" : "Check for Updates"}
                   </button>
                 </div>
               </div>

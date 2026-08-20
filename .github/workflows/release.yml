@@ -146,9 +146,14 @@ jobs:
       # bash on every OS so the comma bundle list and the conditional signing
       # config compose the same way. The thumbprint override reaches Tauri via
       # --config rather than tauri.conf.json, so no secret-shaped value is
-      # ever committed.
+      # ever committed. TAURI_SIGNING_PRIVATE_KEY makes the bundler emit the
+      # .sig files the in-app updater verifies against the pubkey in
+      # tauri.conf.json.
       - name: Build bundles
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           args=(--bundles "${{ matrix.bundles }}")
@@ -162,6 +167,11 @@ jobs:
       # shasum would hit directories. One flat dir per artifact keeps the
       # release assets flat, and Tauri already puts the arch in each filename
       # (…_aarch64.dmg, …_x64-setup.exe) so nothing collides on merge.
+      #
+      # Updater artifacts ride along: the .app.tar.gz (+.sig) the macOS
+      # updater downloads (not the dmg), and .sig for the AppImage and the
+      # NSIS setup exe. Missing .sig means the build ran without the signing
+      # key — caught here rather than as a client that silently can't update.
       - name: Collect installers
         shell: bash
         run: |
@@ -175,7 +185,11 @@ jobs:
             ${{ matrix.bundle-dir }}/dmg/*.dmg \
             ${{ matrix.bundle-dir }}/deb/*.deb \
             ${{ matrix.bundle-dir }}/appimage/*.AppImage \
-            ${{ matrix.bundle-dir }}/nsis/*.exe; do
+            ${{ matrix.bundle-dir }}/appimage/*.AppImage.sig \
+            ${{ matrix.bundle-dir }}/nsis/*-setup.exe \
+            ${{ matrix.bundle-dir }}/nsis/*-setup.exe.sig \
+            ${{ matrix.bundle-dir }}/macos/*.app.tar.gz \
+            ${{ matrix.bundle-dir }}/macos/*.app.tar.gz.sig; do
             cp "$file" out/
           done
           ls -l out
@@ -204,6 +218,10 @@ jobs:
       # artifacts uploaded moments earlier by v7 — measured. Same-major pair
       # avoids the cross-major metadata mismatch; SHA256SUMS below still gives
       # users an integrity check at download time.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
       - uses: actions/download-artifact@v7
         with:
           path: dist
@@ -211,6 +229,14 @@ jobs:
 
       - name: Checksum installers
         run: cd dist && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      # The updater's endpoint: releases/latest/download/latest.json. Written
+      # after checksumming so SHA256SUMS covers installers only, then uploaded
+      # with the rest.
+      - name: Write updater manifest
+        run: node scripts/update-manifest.mjs dist "${TAG_NAME}"
+        env:
+          TAG_NAME: ${{ github.ref_name }}
 
       - name: Create draft release
         env:

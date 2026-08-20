@@ -47,6 +47,8 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | @tauri-apps/plugin-http | 2.5.9 | MIT OR Apache-2.0 | https://github.com/tauri-apps/plugins-workspace |
 | @tauri-apps/plugin-notification | 2.3.3 | MIT OR Apache-2.0 | https://github.com/tauri-apps/plugins-workspace |
 | @tauri-apps/plugin-opener | 2.5.4 | MIT OR Apache-2.0 | https://github.com/tauri-apps/plugins-workspace |
+| @tauri-apps/plugin-process | 2.3.1 | MIT OR Apache-2.0 | https://github.com/tauri-apps/plugins-workspace |
+| @tauri-apps/plugin-updater | 2.10.1 | MIT OR Apache-2.0 | https://github.com/tauri-apps/plugins-workspace |
 | @tinfoilsh/verifier | 1.2.1 | Apache-2.0 — Tinfoil | git+https://github.com/tinfoilsh/tinfoil-js.git |
 | @types/debug | 4.1.13 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped.git |
 | @types/estree | 1.0.9 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped.git |
@@ -180,6 +182,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | alloc-stdlib | 0.2.4 | BSD-3-Clause — Daniel Reiter Horn <danielrh@dropbox.com> | https://github.com/dropbox/rust-alloc-no-stdlib |
 | android_system_properties | 0.1.6 | MIT OR Apache-2.0 — Nicolas Silva <nical@fastmail.com> | https://github.com/nical/android_system_properties |
 | anyhow | 1.0.104 | MIT OR Apache-2.0 — David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/anyhow |
+| arbitrary | 1.4.2 | MIT OR Apache-2.0 — The Rust-Fuzz Project Developers, Nick Fitzgerald <fitzgen@gmail.com>, Manish Goregaokar <manishsmail@gmail.com>, Simonas Kazlauskas <arbitrary@kazlauskas.me>, Brian L. Troutwine <brian@troutwine.us>, Corey Farwell <coreyf@rwell.org> | https://github.com/rust-fuzz/arbitrary/ |
 | async-broadcast | 0.7.2 | MIT OR Apache-2.0 — Stjepan Glavina <stjepang@gmail.com>, Yoshua Wuyts <yoshuawuyts@gmail.com>, Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/smol-rs/async-broadcast |
 | async-channel | 2.5.0 | Apache-2.0 OR MIT — Stjepan Glavina <stjepang@gmail.com> | https://github.com/smol-rs/async-channel |
 | async-executor | 1.14.0 | Apache-2.0 OR MIT — Stjepan Glavina <stjepang@gmail.com>, John Nunley <dev@notgull.net> | https://github.com/smol-rs/async-executor |
@@ -253,6 +256,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | dbus | 0.9.12 | Apache-2.0/MIT — David Henningsson <diwic@ubuntu.com> | https://github.com/diwic/dbus-rs |
 | dbus-secret-service | 4.1.0 | MIT OR Apache-2.0 — Daniel Brotsky <dev@brotsky.com> | https://github.com/brotskydotcom/dbus-secret-service.git |
 | deranged | 0.5.8 | MIT OR Apache-2.0 — Jacob Pratt <jacob@jhpratt.dev> | https://github.com/jhpratt/deranged |
+| derive_arbitrary | 1.4.2 | MIT OR Apache-2.0 — The Rust-Fuzz Project Developers, Nick Fitzgerald <fitzgen@gmail.com>, Manish Goregaokar <manishsmail@gmail.com>, Andre Bogus <bogusandre@gmail.com>, Corey Farwell <coreyf@rwell.org> | https://github.com/rust-fuzz/arbitrary |
 | derive_more | 2.1.1 | MIT — Jelte Fennema <github-tech@jeltef.nl> | https://github.com/JelteF/derive_more |
 | derive_more-impl | 2.1.1 | MIT — Jelte Fennema <github-tech@jeltef.nl> | https://github.com/JelteF/derive_more |
 | digest | 0.10.7 | MIT OR Apache-2.0 — RustCrypto Developers | https://github.com/RustCrypto/traits |
@@ -286,6 +290,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | fastrand | 2.5.0 | Apache-2.0 OR MIT — Stjepan Glavina <stjepang@gmail.com> | https://github.com/smol-rs/fastrand |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 — The image-rs Developers | https://github.com/image-rs/fdeflate |
 | field-offset | 0.3.6 | MIT OR Apache-2.0 — Diggory Blake <diggsey@googlemail.com> | https://github.com/Diggsey/rust-field-offset |
+| filetime | 0.2.29 | MIT/Apache-2.0 — Alex Crichton <alex@alexcrichton.com> | https://github.com/alexcrichton/filetime |
 | find-msvc-tools | 0.1.10 | MIT OR Apache-2.0 | https://github.com/rust-lang/cc-rs |
 | flatbuffers | 24.12.23 | Apache-2.0 — Robert Winslow <hello@rwinslow.com>, FlatBuffers Maintainers | https://github.com/google/flatbuffers |
 | flate2 | 1.1.9 | MIT OR Apache-2.0 — Alex Crichton <alex@alexcrichton.com>, Josh Triplett <josh@joshtriplett.org> | https://github.com/rust-lang/flate2-rs |
@@ -366,6 +371,8 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | javascriptcore-rs | 1.1.2 | MIT | https://github.com/tauri-apps/javascriptcore-rs |
 | javascriptcore-rs-sys | 1.1.1 | MIT — The Gtk-rs Project Developers | https://github.com/tauri-apps/javascriptcore-rs |
 | jni | 0.21.1 | MIT/Apache-2.0 — Josh Chase <josh@prevoty.com> | https://github.com/jni-rs/jni-rs |
+| jni | 0.22.4 | MIT OR Apache-2.0 — jni team | https://github.com/jni-rs/jni-rs |
+| jni-macros | 0.22.4 | MIT OR Apache-2.0 | https://github.com/jni-rs/jni-rs |
 | jni-sys | 0.3.1 | MIT OR Apache-2.0 — Steven Fackler <sfackler@gmail.com> | https://github.com/jni-rs/jni-sys |
 | jni-sys | 0.4.1 | MIT OR Apache-2.0 — Steven Fackler <sfackler@gmail.com>, Robert Bragg <robert@sixbynine.org> | https://github.com/jni-rs/jni-sys |
 | jni-sys-macros | 0.4.1 | MIT OR Apache-2.0 — Robert Bragg <robert@sixbynine.org> | https://github.com/jni-rs/jni-sys |
@@ -391,6 +398,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | memchr | 2.8.3 | Unlicense OR MIT — Andrew Gallant <jamslam@gmail.com>, bluss | https://github.com/BurntSushi/memchr |
 | memoffset | 0.9.1 | MIT — Gilad Naaman <gilad.naaman@gmail.com> | https://github.com/Gilnaa/memoffset |
 | mime | 0.3.17 | MIT OR Apache-2.0 — Sean McArthur <sean@seanmonstar.com> | https://github.com/hyperium/mime |
+| minisign-verify | 0.2.5 | MIT — Frank Denis <github@pureftpd.org> | https://github.com/jedisct1/rust-minisign-verify |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 — Frommi <daniil.liferenko@gmail.com>, oyvindln <oyvindln@users.noreply.github.com>, Rich Geldreich richgel99@gmail.com | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide |
 | mio | 1.2.2 | MIT — Carl Lerche <me@carllerche.com>, Thomas de Zeeuw <thomasdezeeuw@gmail.com>, Tokio Contributors <team@tokio.rs> | https://github.com/tokio-rs/mio |
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 — Radzivon Bartoshyk | https://github.com/awxkee/moxcms.git |
@@ -417,6 +425,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | objc2-exception-helper | 0.1.1 | Zlib OR Apache-2.0 OR MIT — Mads Marquart <mads@marquart.dk> | https://github.com/madsmtm/objc2 |
 | objc2-foundation | 0.3.2 | MIT | https://github.com/madsmtm/objc2 |
 | objc2-io-surface | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
+| objc2-osa-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-quartz-core | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-ui-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-user-notifications | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
@@ -424,8 +433,10 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | ocrs | 0.12.2 | MIT OR Apache-2.0 — Robert Knight | https://github.com/robertknight/ocrs |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 — Aleksey Kladov <aleksey.kladov@gmail.com> | https://github.com/matklad/once_cell |
 | open | 5.4.1 | MIT — Sebastian Thiel <byronimo@gmail.com> | https://github.com/Byron/open-rs |
+| openssl-probe | 0.2.1 | MIT OR Apache-2.0 — Alex Crichton <alex@alexcrichton.com> | https://github.com/rustls/openssl-probe |
 | option-ext | 0.2.0 | MPL-2.0 — Simon Ochsenreither <simon@ochsenreither.de> | https://github.com/soc/option-ext.git |
 | ordered-stream | 0.2.0 | MIT OR Apache-2.0 — Daniel De Graaf <code@danieldg.net>, Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/danieldg/ordered-stream |
+| osakit | 0.3.1 | MIT OR Apache-2.0 — Marat Dulin <mdevils@gmail.com> | https://github.com/mdevils/rust-osakit |
 | pango | 0.18.3 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk-rs-core |
 | pango-sys | 0.18.0 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk-rs-core |
 | parking | 2.2.1 | Apache-2.0 OR MIT — Stjepan Glavina <stjepang@gmail.com>, The Rust Project Developers | https://github.com/smol-rs/parking |
@@ -498,11 +509,15 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT — The Rust Project Developers | https://github.com/rust-lang/rustc-hash |
 | rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT — Dan Gohman <dev@sunfishcode.online>, Jakub Konka <kubkon@jakubkonka.com> | https://github.com/bytecodealliance/rustix |
 | rustls | 0.23.43 | Apache-2.0 OR ISC OR MIT | https://github.com/rustls/rustls |
+| rustls-native-certs | 0.8.4 | Apache-2.0 OR ISC OR MIT | https://github.com/rustls/rustls-native-certs |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | https://github.com/rustls/pki-types |
+| rustls-platform-verifier | 0.7.0 | MIT OR Apache-2.0 | https://github.com/rustls/rustls-platform-verifier |
+| rustls-platform-verifier-android | 0.1.1 | MIT OR Apache-2.0 | https://github.com/rustls/rustls-platform-verifier |
 | rustls-webpki | 0.103.14 | ISC | https://github.com/rustls/webpki |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 — David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/rustversion |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 — David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/ryu |
 | same-file | 1.0.6 | Unlicense/MIT — Andrew Gallant <jamslam@gmail.com> | https://github.com/BurntSushi/same-file |
+| schannel | 0.1.29 | MIT — Steven Fackler <sfackler@gmail.com>, Steffen Butzer <steffen.butzer@outlook.com> | https://github.com/steffengy/schannel-rs |
 | schemars | 0.8.22 | MIT — Graham Esau <gesau@hotmail.co.uk> | https://github.com/GREsau/schemars |
 | schemars | 0.9.0 | MIT — Graham Esau <gesau@hotmail.co.uk> | https://github.com/GREsau/schemars |
 | schemars | 1.2.2 | MIT — Graham Esau <gesau@hotmail.co.uk> | https://github.com/GREsau/schemars |
@@ -531,7 +546,9 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | sha2 | 0.10.9 | MIT OR Apache-2.0 — RustCrypto Developers | https://github.com/RustCrypto/hashes |
 | shlex | 2.0.1 | MIT OR Apache-2.0 — comex <comexk@gmail.com>, Fenhl <fenhl@fenhl.net>, Adrian Taylor <adetaylor@chromium.org>, Alex Touchet <alextouchet@outlook.com>, Daniel Parks <dp+git@oxidized.org>, Garrett Berg <googberg@gmail.com> | https://github.com/comex/rust-shlex |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 — Michal 'vorner' Vaner <vorner@vorner.cz>, Masaki Hara <ackie.h.gmai@gmail.com> | https://github.com/vorner/signal-hook |
+| simd_cesu8 | 1.2.0 | Apache-2.0 OR MIT — Sean C. Roach <me@seancroach.dev> | https://github.com/seancroach/simd_cesu8 |
 | simd-adler32 | 0.3.10 | MIT — Marvin Countryman <me@maar.vin> | https://github.com/mcountryman/simd-adler32 |
+| simdutf8 | 0.1.5 | MIT OR Apache-2.0 — Hans Kratz <hans@appfour.com> | https://github.com/rusticstuff/simdutf8 |
 | siphasher | 1.0.3 | MIT/Apache-2.0 — Frank Denis <github@pureftpd.org> | https://github.com/jedisct1/rust-siphash |
 | slab | 0.4.12 | MIT — Carl Lerche <me@carllerche.com> | https://github.com/tokio-rs/slab |
 | smallvec | 1.15.2 | MIT OR Apache-2.0 — The Servo Project Developers | https://github.com/servo/rust-smallvec |
@@ -555,6 +572,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | system-deps | 6.2.2 | MIT OR Apache-2.0 — Guillaume Desmottes <guillaume.desmottes@collabora.com>, Josh Triplett <josh@joshtriplett.org> | https://github.com/gdesmott/system-deps |
 | tao | 0.35.3 | Apache-2.0 — Tauri Programme within The Commons Conservancy, The winit contributors | https://github.com/tauri-apps/tao |
 | tao-macros | 0.1.4 | MIT OR Apache-2.0 — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tao |
+| tar | 0.4.46 | MIT OR Apache-2.0 — Alex Crichton <alex@alexcrichton.com> | https://github.com/composefs/tar-rs |
 | target-lexicon | 0.12.16 | Apache-2.0 WITH LLVM-exception — Dan Gohman <sunfish@mozilla.com> | https://github.com/bytecodealliance/target-lexicon |
 | tauri | 2.11.5 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tauri |
 | tauri-build | 2.6.3 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tauri |
@@ -565,6 +583,8 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | tauri-plugin-http | 2.5.9 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/plugins-workspace |
 | tauri-plugin-notification | 2.3.3 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/plugins-workspace |
 | tauri-plugin-opener | 2.5.4 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/plugins-workspace |
+| tauri-plugin-process | 2.3.1 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/plugins-workspace |
+| tauri-plugin-updater | 2.10.1 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/plugins-workspace |
 | tauri-runtime | 2.11.3 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tauri |
 | tauri-runtime-wry | 2.11.4 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tauri |
 | tauri-utils | 2.9.3 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tauri |
@@ -640,6 +660,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | web-time | 1.1.0 | MIT OR Apache-2.0 | https://github.com/daxpedda/web-time |
 | webkit2gtk | 2.0.2 | MIT | https://github.com/tauri-apps/webkit2gtk-rs |
 | webkit2gtk-sys | 2.0.2 | MIT | https://github.com/tauri-apps/webkit2gtk-rs |
+| webpki-root-certs | 1.0.9 | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots |
 | webpki-roots | 1.0.9 | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots |
 | webview2-com | 0.38.2 | MIT | https://github.com/wravery/webview2-rs |
 | webview2-com-macros | 0.8.1 | MIT | https://github.com/wravery/webview2-rs |
@@ -707,6 +728,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | wry | 0.55.1 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/wry |
 | x11 | 2.21.0 | MIT — daggerbot <daggerbot@gmail.com>, Erle Pereira <erle@erlepereira.com>, AltF02 <contact@altf2.dev> | https://github.com/AltF02/x11-rs.git |
 | x11-dl | 2.21.0 | MIT — daggerbot <daggerbot@gmail.com>, Erle Pereira <erle@erlepereira.com>, AltF02 <contact@altf2.dev> | https://github.com/AltF02/x11-rs.git |
+| xattr | 1.6.1 | MIT OR Apache-2.0 — Steven Allen <steven@stebalien.com> | https://github.com/Stebalien/xattr |
 | yoke | 0.8.3 | Unicode-3.0 — Manish Goregaokar <manishsmail@gmail.com> | https://github.com/unicode-org/icu4x |
 | yoke-derive | 0.8.2 | Unicode-3.0 — Manish Goregaokar <manishsmail@gmail.com> | https://github.com/unicode-org/icu4x |
 | zbus | 5.13.2 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
@@ -721,6 +743,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | zerotrie | 0.2.5 | Unicode-3.0 — The ICU4X Project Developers | https://github.com/unicode-org/icu4x |
 | zerovec | 0.11.7 | Unicode-3.0 — The ICU4X Project Developers | https://github.com/unicode-org/icu4x |
 | zerovec-derive | 0.11.4 | Unicode-3.0 — Manish Goregaokar <manishsmail@gmail.com> | https://github.com/unicode-org/icu4x |
+| zip | 4.6.1 | MIT — Mathijs van de Nes <git@mathijs.vd-nes.nl>, Marli Frost <marli@frost.red>, Ryan Levick <ryan.levick@gmail.com>, Chris Hennick <hennickc@amazon.com> | https://github.com/zip-rs/zip2.git |
 | zmij | 1.0.23 | MIT — David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/zmij |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib | https://github.com/etemesi254/zune-image |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib — caleb <etemesicaleb@gmail.com> | https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg |

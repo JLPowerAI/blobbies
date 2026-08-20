@@ -1,4 +1,5 @@
 import {
+  ArrowUpCircle,
   Bell,
   ChevronDown,
   Copy,
@@ -30,6 +31,7 @@ import { type Group, MAX_GROUP_MEMBERS } from "@/lib/groups";
 import { readPreference, writePreference } from "@/lib/preferences";
 import { isTauri } from "@/lib/tauri";
 import { formatAgentTime } from "@/lib/time";
+import { updateClickAction, useUpdateState } from "@/lib/updater";
 import { useBlobDrag } from "@/lib/useBlobDrag";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
@@ -136,6 +138,72 @@ function initialsOf(name: string): string {
     .join("")
     .slice(0, 2);
   return letters.length > 0 ? letters : "?";
+}
+
+/** Label for the sidebar update control at each phase, collapsed or not. */
+function updateLabel(phase: string, percent: number): string {
+  if (phase === "downloading") return `Downloading… ${percent}%`;
+  if (phase === "ready") return "Install and Restart now";
+  if (phase === "installing") return "Installing…";
+  if (phase === "failed") return "Update failed — retry";
+  return "New Update Available";
+}
+
+/**
+ * The green update entry in the sidebar footer: hidden until an update is
+ * available, then one control through the whole flow — announce, download
+ * (progress bar + percent, sized by the sidebar width), install + restart.
+ * Collapsed, it shrinks to the same icon button as the rest of the rail
+ * with the percent standing in for the bar.
+ */
+function SidebarUpdateCard({ collapsed }: { collapsed: boolean }) {
+  const update = useUpdateState();
+  const visible =
+    update.phase === "available" ||
+    update.phase === "downloading" ||
+    update.phase === "ready" ||
+    update.phase === "installing" ||
+    update.phase === "failed";
+  if (!visible) return null;
+
+  const phase = update.phase;
+  const percent = phase === "downloading" ? update.percent : 0;
+  const label = updateLabel(phase, percent);
+  const busy = phase === "installing";
+
+  return (
+    <button
+      type="button"
+      className={
+        phase === "available" || phase === "failed"
+          ? "update-card update-card-green"
+          : "update-card"
+      }
+      title={collapsed ? label : undefined}
+      aria-label={label}
+      disabled={busy}
+      onClick={updateClickAction}
+    >
+      {collapsed ? (
+        <>
+          <ArrowUpCircle size={15} strokeWidth={1.8} aria-hidden="true" />
+          {phase === "downloading" ? <span className="update-pct">{percent}%</span> : null}
+        </>
+      ) : (
+        <>
+          <ArrowUpCircle size={15} strokeWidth={1.8} aria-hidden="true" />
+          <span className="update-card-body">
+            <span className="update-card-label">{label}</span>
+            {phase === "downloading" ? (
+              <span className="update-progress" role="progressbar" aria-valuenow={percent}>
+                <span className="update-progress-fill" style={{ width: `${percent}%` }} />
+              </span>
+            ) : null}
+          </span>
+        </>
+      )}
+    </button>
+  );
 }
 
 export function Sidebar({
@@ -1135,6 +1203,7 @@ export function Sidebar({
       ) : null}
 
       <div className="sidebar-footer">
+        <SidebarUpdateCard collapsed={collapsed} />
         {/* Collapsed rail: + moves down here, above the account avatar. Only
             mounted while collapsed so the expanded tree has one New button. */}
         {collapsed ? (

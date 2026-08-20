@@ -449,10 +449,11 @@ describe("App", () => {
     // Timezone select defaults to auto-detect.
     expect(within(dialog).getByLabelText("Timezone")).toHaveValue("auto");
 
-    // Updates tab is Blobbies-branded.
+    // Updates tab is Blobbies-branded; outside the Tauri webview the updater
+    // stays idle and the blurb says where updates come from.
     await user.click(within(dialog).getByRole("button", { name: "Updates" }));
-    expect(within(dialog).getByText(/Blobbies 0\.1\.0/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/You're up to date/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Blobbies 0\.1\.\d/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/GitHub Releases/)).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
