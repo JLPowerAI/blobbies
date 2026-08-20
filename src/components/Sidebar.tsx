@@ -1244,8 +1244,11 @@ export function Sidebar({
                 role="menuitem"
                 className="account-menu-item"
                 onClick={() => {
-                  // Jump straight out; the modal takes over the screen.
-                  setMenuOpen(false);
+                  // Same exit as every other dismissal: the menu sinks out
+                  // behind the opening modal instead of vanishing in one
+                  // frame. Skipping the animation here was the one abrupt
+                  // exit in the app.
+                  requestClose();
                   onOpenSettings();
                 }}
               >
