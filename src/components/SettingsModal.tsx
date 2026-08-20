@@ -148,7 +148,9 @@ function tinfoilBlurb(status: TinfoilStatus): string {
     case "checking":
       return "Checking for a saved Tinfoil key…";
     case "none":
-      return "Private cloud models in secure enclaves — verified by this device.";
+      // Kept short so every state renders on one line: the row height must
+      // not change when the save flips the status (and unmounts the link).
+      return "Private cloud models in secure enclaves.";
     case "configured": {
       const count = status.models.length;
       return `API key saved · ${count} ${count === 1 ? "model" : "models"} available`;
@@ -296,7 +298,6 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const update = useUpdateState();
-  const [track, setTrack] = useState("stable");
   const [ollama, setOllama] = useState<OllamaStatus>({ kind: "idle" });
   const [tinfoil, setTinfoil] = useState<TinfoilStatus>({ kind: "idle" });
   const [tinfoilKeyDraft, setTinfoilKeyDraft] = useState("");
@@ -868,25 +869,6 @@ export function SettingsModal({
 
               <p className="modal-section-label">Updates</p>
               <div className="modal-card">
-                <div className="modal-row modal-row-multiline">
-                  <span className="modal-row-text">
-                    <span className="modal-row-title">Update Track</span>
-                    <span className="modal-row-blurb">
-                      Stable is the safe default. Other tracks ship new builds earlier and more
-                      often.
-                    </span>
-                  </span>
-                  <PillSelect
-                    id="track-select"
-                    label="Update track"
-                    value={track}
-                    onChange={setTrack}
-                  >
-                    <option value="stable">Stable</option>
-                    <option value="beta">Beta</option>
-                  </PillSelect>
-                </div>
-                <div className="modal-divider" />
                 <div className="modal-row modal-row-multiline">
                   <span className="modal-row-text">
                     <span className="modal-row-title">Blobbies {APP_VERSION}</span>

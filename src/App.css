@@ -4890,6 +4890,13 @@ a.modal-button {
   height: min(460px, 100%);
   translate: -50% -50%;
   pointer-events: none;
+  /* The trio stays mounted for the whole flow so appearing (after welcome)
+     and disappearing (back to it) fade smoothly instead of popping. */
+  transition: opacity var(--duration-panel) var(--ease-standard);
+}
+
+.onboarding-trio[data-hidden="true"] {
+  opacity: 0;
 }
 
 /* Orbit radius, registered so it can be *transitioned* while the rotation
@@ -4964,6 +4971,41 @@ a.modal-button {
   color: var(--text-primary);
   white-space: nowrap;
   transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* Each Blob bobs on its own loop — distinct durations and negative delays so
+   the three are never in phase, which is what reads as "playing" rather than
+   "marching". On its own wrapper so it composes with the orbit transform on
+   the outer span instead of overwriting it. */
+.onboarding-trio-avatar {
+  display: block;
+  animation: trio-bob 9s ease-in-out infinite;
+}
+
+.onboarding-trio-blob:nth-child(2) .onboarding-trio-avatar {
+  animation-duration: 12s;
+  animation-delay: -4s;
+}
+
+.onboarding-trio-blob:nth-child(3) .onboarding-trio-avatar {
+  animation-duration: 10.5s;
+  animation-delay: -7s;
+}
+
+@keyframes trio-bob {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(-2.5deg) scale(1);
+  }
+  25% {
+    transform: translate(9px, -14px) rotate(2deg) scale(1.02);
+  }
+  50% {
+    transform: translate(-7px, -6px) rotate(-1deg) scale(0.99);
+  }
+  75% {
+    transform: translate(5px, -17px) rotate(2.5deg) scale(1.01);
+  }
 }
 
 .onboarding-trio[data-compact="true"] .onboarding-trio-label {
@@ -5117,6 +5159,10 @@ a.modal-button {
   gap: 5px;
   font-size: 13px;
   color: var(--text-secondary);
+  /* Same vertical padding as .onboarding-allow so a row that swaps its button
+     for a settled state ("Sign in" → "Ready ✓", "Allow" → "Allowed") keeps
+     the exact same height — no flinch as the check lands. */
+  padding-block: 7px;
 }
 
 .onboarding-row-state[data-granted="true"] {
@@ -5153,7 +5199,10 @@ a.modal-button {
    and a flex `gap` would space the punctuation away from the word before it. */
 .onboarding-key-note {
   display: block;
-  min-height: 18px;
+  /* Two lines reserved: the three states have different lengths and sit at
+     the wrap boundary, so a one-line min-height let the card flinch whenever
+     a save flipped the note between one and two rendered lines. */
+  min-height: calc(2 * 1.45em);
   font-size: 12.5px;
   line-height: 1.45;
   color: var(--text-secondary);
@@ -5367,9 +5416,10 @@ a.modal-button {
   .pin-tray-empty,
   .pin-tile,
   .drag-tile,
-  /* The orbit is ambient motion with nothing to convey: with motion reduced
-     the three simply hold their spread positions. */
-  .onboarding-trio-blob {
+  /* The orbit and the bob are ambient motion with nothing to convey: with
+     motion reduced the three simply hold their spread positions. */
+  .onboarding-trio-blob,
+  .onboarding-trio-avatar {
     animation: none;
   }
 

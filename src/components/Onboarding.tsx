@@ -10,7 +10,7 @@ import {
   startComposioLogin,
 } from "@/lib/composio";
 import { requestNotificationPermission } from "@/lib/notify";
-import { setSecret } from "@/lib/secrets";
+import { getSecret, setSecret } from "@/lib/secrets";
 import { openExternal } from "@/lib/tauri";
 
 /**
@@ -183,6 +183,24 @@ export function Onboarding({ onDone }: OnboardingProps) {
     await tinfoil.configureTinfoilFromKeychain(true);
     setKeyState("saved");
   };
+
+  // A key saved in an earlier run (Settings, or a previous onboarding) should
+  // greet the user as done, not as a blank field asking for it again. Probed
+  // once per flow: after the first keystroke the user's own edit is the
+  // truth, and the keychain answer would only fight it.
+  const keyProbeDone = useRef(false);
+  useEffect(() => {
+    if (step !== "tinfoil" || keyProbeDone.current) {
+      return;
+    }
+    keyProbeDone.current = true;
+    void (async () => {
+      const existing = await getSecret("tinfoil-api-key");
+      if (existing !== null && KEY_PATTERN.test(existing.trim())) {
+        setKeyState("saved");
+      }
+    })();
+  }, [step]);
 
   // Probe when the Composio screen is reached, not on mount: it spawns a
   // process, and most of a first run never needs the answer.
@@ -518,29 +536,40 @@ export function Onboarding({ onDone }: OnboardingProps) {
       tabIndex={-1}
       data-tauri-drag-region
     >
-      {step === "welcome" ? null : (
-        <div className="onboarding-trio" data-compact={compact} aria-hidden={compact}>
-          {TRIO.map((blob, index) => (
-            <span
-              key={blob.job}
-              className="onboarding-trio-blob"
-              style={
-                {
-                  // Uncompacted, position comes from the orbit: one shared
-                  // anchor in CSS, spread by this phase offset.
-                  "--phase": index,
-                  ...(compact
-                    ? { left: blob.compactX, top: blob.compactY, scale: blob.compactScale }
-                    : {}),
-                } as CSSProperties
-              }
-            >
+      {/* Always mounted so it can fade in and out: the welcome screen hides
+          it, every other step shows it, and the opacity transition below is
+          the whole in/out animation. */}
+      <div
+        className="onboarding-trio"
+        data-compact={compact}
+        data-hidden={step === "welcome"}
+        aria-hidden={compact}
+      >
+        {TRIO.map((blob, index) => (
+          <span
+            key={blob.job}
+            className="onboarding-trio-blob"
+            style={
+              {
+                // Uncompacted, position comes from the orbit: one shared
+                // anchor in CSS, spread by this phase offset.
+                "--phase": index,
+                ...(compact
+                  ? { left: blob.compactX, top: blob.compactY, scale: blob.compactScale }
+                  : {}),
+              } as CSSProperties
+            }
+          >
+            {/* The bob animation lives on this inner wrapper so it composes
+                with (rather than fights) the orbit transform on the outer
+                span. */}
+            <span className="onboarding-trio-avatar">
               <BlobAvatar tone={blob.tone} shape={blob.shape} size={88} />
-              <span className="onboarding-trio-label">{blob.job}</span>
             </span>
-          ))}
-        </div>
-      )}
+            <span className="onboarding-trio-label">{blob.job}</span>
+          </span>
+        ))}
+      </div>
 
       {/* Scrolls when the content outgrows a short window; the actions below
           sit outside it, so Next and Back are reachable at any size. */}
