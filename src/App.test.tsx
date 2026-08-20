@@ -1148,7 +1148,6 @@ describe("onboarding", () => {
   /** Undo the suite default: this describe is about the un-onboarded app. */
   function clearOnboarded() {
     window.localStorage.removeItem("pref:onboarded");
-    window.localStorage.removeItem("pref:forceOnboarding");
     window.localStorage.removeItem("pref:plugins");
   }
 
@@ -1242,7 +1241,7 @@ describe("onboarding", () => {
   });
 
   it("opens the creator on a replay, where a roster already exists", async () => {
-    // The dev toggle replays the flow with Blobs already on disk, so its exit
+    // A replay with Blobs already on disk, so its exit
     // cannot rely on the empty-roster fallback that renders the creator.
     await flushRoster([seedBlob(1, "Ken")]);
     const user = userEvent.setup();
@@ -1274,12 +1273,11 @@ describe("onboarding", () => {
     render(<App />);
 
     expect(screen.getByRole("dialog", { name: "Welcome to Blobbies" })).toBeInTheDocument();
-    // Replaying is not completing: neither preference is touched.
-    expect(window.localStorage.getItem("pref:forceOnboarding")).toBeNull();
+    // Replaying is not completing: the completed flag is untouched.
     expect(window.localStorage.getItem("pref:onboarded")).toBe("true");
   });
 
-  it("is skipped once completed, and replayed by the dev toggle", async () => {
+  it("is skipped once completed, and replayed once by the dev button", async () => {
     const user = userEvent.setup();
     // The suite default marks the app onboarded.
     const { unmount } = render(<App />);
@@ -1287,12 +1285,13 @@ describe("onboarding", () => {
 
     await user.click(screen.getByRole("button", { name: /Ken Kai/ }));
     await user.click(screen.getByRole("menuitem", { name: "Settings" }));
-    await user.click(screen.getByRole("switch", { name: "Show onboarding" }));
+    await user.click(screen.getByRole("button", { name: "Replay" }));
 
-    // Visible where it was switched on, and again on the next launch.
+    // Visible where it was triggered — and, being momentary, never again on
+    // the next launch, no matter how the replay ends.
     expect(screen.getByRole("dialog", { name: "Welcome to Blobbies" })).toBeInTheDocument();
     unmount();
     render(<App />);
-    expect(screen.getByRole("dialog", { name: "Welcome to Blobbies" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Welcome to Blobbies" })).not.toBeInTheDocument();
   });
 });

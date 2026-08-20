@@ -365,14 +365,10 @@ export function App() {
   const [reasoning, setReasoning] = useState(
     () => readPreference("pref:reasoning", "off") === "on",
   );
-  // First-run flow. Shown until it is completed once, or for as long as the
-  // dev switch below is on. An install that predates onboarding sees it once.
-  const [forceOnboarding, setForceOnboarding] = useState(
-    () => readPreference("pref:forceOnboarding", "off") === "on",
-  );
+  // First-run flow. Shown until it is completed once. An install that
+  // predates onboarding sees it once.
   const [onboarding, setOnboarding] = useState(
     () =>
-      forceOnboarding ||
       // Dev escape hatch: `VITE_ONBOARDING=1 pnpm tauri dev` replays the flow
       // without writing a preference, which is the only way back in once the
       // flag is set, since the webview owns the storage it lives in. Guarded
@@ -658,17 +654,14 @@ export function App() {
   };
 
   /**
-   * Dev switch: keep showing the first-run flow on every launch even though
-   * it has been completed. Turning it on opens the flow right away, so the
-   * change is visible where it was made rather than at the next launch.
+   * Dev action: replay the first-run flow once, right now. Momentary on
+   * purpose — nothing is persisted, so quitting mid-replay or finishing it
+   * both land on a normal next launch. A persisted "keep replaying" switch
+   * made every launch re-run the flow for whoever forgot it on.
    */
-  const changeForceOnboarding = (on: boolean) => {
-    setForceOnboarding(on);
-    writePreference("pref:forceOnboarding", on ? "on" : "off");
-    if (on) {
-      setSettingsOpen(false);
-    }
-    setOnboarding(on);
+  const replayOnboarding = () => {
+    setSettingsOpen(false);
+    setOnboarding(true);
   };
 
   const finishOnboarding = () => {
@@ -676,7 +669,7 @@ export function App() {
     setOnboarding(false);
     // The flow ends *on* the app's own Blob creator rather than carrying a
     // second copy of it. With an empty roster this is what would render
-    // anyway; on a replay (dev toggle) it is the screen the last step
+    // anyway; on a replay (dev button) it is the screen the last step
     // promised.
     setMode({ kind: "creator", initialName: "" });
   };
@@ -2601,8 +2594,7 @@ export function App() {
           onTimezoneChange={changeTimezone}
           model={model}
           onModelChange={changeModel}
-          forceOnboarding={forceOnboarding}
-          onForceOnboardingChange={changeForceOnboarding}
+          onReplayOnboarding={replayOnboarding}
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}

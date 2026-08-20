@@ -70,9 +70,8 @@ interface SettingsModalProps {
   onTimezoneChange: (timezone: string) => void;
   model: string;
   onModelChange: (model: string) => void;
-  /** Dev switch: replay the first-run flow on every launch. */
-  forceOnboarding: boolean;
-  onForceOnboardingChange: (on: boolean) => void;
+  /** Dev action: replay the first-run flow once, right now. */
+  onReplayOnboarding: () => void;
   onClose: () => void;
 }
 
@@ -292,8 +291,7 @@ export function SettingsModal({
   onTimezoneChange,
   model,
   onModelChange,
-  forceOnboarding,
-  onForceOnboardingChange,
+  onReplayOnboarding,
   onClose,
 }: SettingsModalProps) {
   const [tab, setTab] = useState<SettingsTab>(initialTab);
@@ -590,21 +588,13 @@ export function SettingsModal({
               <div className="modal-card">
                 <div className="modal-row modal-row-multiline">
                   <span className="modal-row-text">
-                    <span className="modal-row-title">Show onboarding</span>
+                    <span className="modal-row-title">Onboarding</span>
                     <span className="modal-row-blurb">
-                      Replay the first-run flow now and on every launch, even once it has been
-                      completed.
+                      Replay the first-run flow once, right now. Future launches are unaffected.
                     </span>
                   </span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={forceOnboarding}
-                    aria-label="Show onboarding"
-                    className={forceOnboarding ? "toggle toggle-on" : "toggle"}
-                    onClick={() => onForceOnboardingChange(!forceOnboarding)}
-                  >
-                    <span className="toggle-knob" aria-hidden="true" />
+                  <button type="button" className="modal-button" onClick={onReplayOnboarding}>
+                    Replay
                   </button>
                 </div>
               </div>
