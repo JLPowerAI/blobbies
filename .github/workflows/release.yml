@@ -258,8 +258,10 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           VER="${TAG#v}"
-          # The heredoc inherits YAML indentation; strip it or GitHub renders
-          # the table as a code block.
+          # Belt-and-braces: YAML strips the block's common indent, so the
+          # heredoc arrives unindented — but if the content ever gains extra
+          # indentation, GitHub would render the table as a code block. Strip
+          # leading whitespace defensively.
           cat > preamble.md <<EOF
           **Which file do I download?**
 
