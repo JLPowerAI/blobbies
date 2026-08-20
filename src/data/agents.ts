@@ -199,6 +199,11 @@ export interface Routine {
   schedule?: import("@/lib/schedule").RoutineSchedule;
   /** Epoch ms of the next scheduled fire; the scheduler claims it via CAS. */
   nextRunAt?: number;
+  /**
+   * Fires remaining on a counted interval; absent = unbounded. The scheduler
+   * decrements it as its claim and zeroes it when the burst retires itself.
+   */
+  runsLeft?: number;
   /** Epoch ms of the last completed fire. */
   lastRunAt?: number;
   lastRunStatus?: "done" | "failed" | "cancelled";

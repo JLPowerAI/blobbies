@@ -86,6 +86,9 @@ export function RoutinePanel({
   const [customOpen, setCustomOpen] = useState(false);
   const [customKind, setCustomKind] = useState<"interval" | "once" | "daily" | "weekly">("daily");
   const [customMinutes, setCustomMinutes] = useState("60");
+  // Optional run count for a bounded interval ("every minute, 5 times");
+  // empty string = unbounded.
+  const [customCount, setCustomCount] = useState("");
   const [customHour, setCustomHour] = useState("9");
   const [customMinute, setCustomMinute] = useState("0");
   const [customWeekday, setCustomWeekday] = useState("1");
@@ -147,6 +150,9 @@ export function RoutinePanel({
     if (current?.kind === "interval" || current?.kind === "once") {
       setCustomKind(current.kind);
       setCustomMinutes(String(current.minutes));
+      setCustomCount(
+        current.kind === "interval" && current.count !== undefined ? String(current.count) : "",
+      );
     } else if (current?.kind === "daily") {
       setCustomKind("daily");
       setCustomHour(String(current.hour));
@@ -163,9 +169,14 @@ export function RoutinePanel({
 
   /** Build the schedule from the editor fields; null shows why it failed. */
   const applyCustom = () => {
+    const bounded = customKind === "interval" && customCount.trim() !== "";
     const schedule = coerceSchedule(
       customKind === "interval" || customKind === "once"
-        ? { kind: customKind, minutes: Number(customMinutes) }
+        ? {
+            kind: customKind,
+            minutes: Number(customMinutes),
+            ...(bounded ? { count: Number(customCount) } : {}),
+          }
         : customKind === "daily"
           ? { kind: customKind, hour: Number(customHour), minute: Number(customMinute) }
           : {
@@ -176,7 +187,13 @@ export function RoutinePanel({
             },
     );
     if (schedule === null) {
-      setCustomError(customKind === "once" ? "Minutes must be 1–1440." : "Minutes must be 5–1440.");
+      setCustomError(
+        customKind === "once"
+          ? "Minutes must be 1–1440."
+          : bounded
+            ? "Minutes must be 1–1440, times 1–50."
+            : "Minutes must be 5–1440.",
+      );
       return;
     }
     setSchedule(describeSchedule(schedule), schedule);
@@ -331,18 +348,35 @@ export function RoutinePanel({
                           <option value="weekly">Every week</option>
                         </select>
                         {customKind === "interval" || customKind === "once" ? (
-                          <label className="trigger-custom-field">
-                            Minutes
-                            <input
-                              type="number"
-                              aria-label="Minutes"
-                              className="trigger-custom-input"
-                              min={customKind === "once" ? 1 : 5}
-                              max={1440}
-                              value={customMinutes}
-                              onChange={(event) => setCustomMinutes(event.currentTarget.value)}
-                            />
-                          </label>
+                          <>
+                            <label className="trigger-custom-field">
+                              Minutes
+                              <input
+                                type="number"
+                                aria-label="Minutes"
+                                className="trigger-custom-input"
+                                min={customKind === "interval" && customCount.trim() !== "" ? 1 : 5}
+                                max={1440}
+                                value={customMinutes}
+                                onChange={(event) => setCustomMinutes(event.currentTarget.value)}
+                              />
+                            </label>
+                            {customKind === "interval" ? (
+                              <label className="trigger-custom-field">
+                                Times
+                                <input
+                                  type="number"
+                                  aria-label="Times"
+                                  className="trigger-custom-input"
+                                  min={1}
+                                  max={50}
+                                  placeholder="∞"
+                                  value={customCount}
+                                  onChange={(event) => setCustomCount(event.currentTarget.value)}
+                                />
+                              </label>
+                            ) : null}
+                          </>
                         ) : (
                           <>
                             {customKind === "weekly" ? (
@@ -459,6 +493,9 @@ export function RoutinePanel({
             <span className="settings-label">Schedule</span>
             <p className="routine-empty-note">
               {describeSchedule(routine.schedule)}
+              {routine.runsLeft === undefined || !routine.active || routine.runsLeft === 0
+                ? ""
+                : ` \u00b7 ${routine.runsLeft} left`}
               {routine.nextRunAt === undefined || !routine.active
                 ? ""
                 : ` \u00b7 next ${new Date(routine.nextRunAt).toLocaleString([], {

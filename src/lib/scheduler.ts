@@ -1,5 +1,5 @@
 import type { Routine } from "@/data/agents";
-import { nextFireTime } from "@/lib/schedule";
+import { nextFireTime, scheduleBudget } from "@/lib/schedule";
 
 /**
  * Fires scheduled routines while the app is open.
@@ -64,11 +64,27 @@ export async function tick(host: SchedulerHost, now: number = Date.now()): Promi
         host.update(blobId, routine.id, { lastRunAt: now, lastRunStatus: status });
         return true;
       }
+      // A counted interval tracks its budget in runsLeft, defaulting to the
+      // schedule's count (armed paths set it; this also covers older data).
+      const budget = routine.schedule.kind === "interval" ? routine.schedule.count : undefined;
+      const runsLeft = budget === undefined ? undefined : Math.max(0, routine.runsLeft ?? budget);
+      if (runsLeft !== undefined && runsLeft <= 1) {
+        // The burst's final fire claims like a one-shot: deactivate with no
+        // next time. Re-enabling the routine re-arms a fresh budget.
+        host.update(blobId, routine.id, { active: false, nextRunAt: undefined, runsLeft: 0 });
+        const status = await host.fire(blobId, routine);
+        host.update(blobId, routine.id, { lastRunAt: now, lastRunStatus: status });
+        return true;
+      }
       let next = nextFireTime(routine.schedule, due);
       while (next <= now) {
         next = nextFireTime(routine.schedule, next);
       }
-      host.update(blobId, routine.id, { nextRunAt: next });
+      host.update(
+        blobId,
+        routine.id,
+        runsLeft === undefined ? { nextRunAt: next } : { nextRunAt: next, runsLeft: runsLeft - 1 },
+      );
       const status = await host.fire(blobId, { ...routine, nextRunAt: next });
       host.update(blobId, routine.id, { lastRunAt: now, lastRunStatus: status });
       return true;
@@ -99,7 +115,16 @@ export function armRoutines(host: SchedulerHost, now: number = Date.now()): numb
         continue;
       }
       if (routine.nextRunAt === undefined) {
-        host.update(blobId, routine.id, { nextRunAt: nextFireTime(routine.schedule, now) });
+        // Arming a counted interval resets its budget: a fresh arm means "run
+        // it count times from now", whether it just fired out or was edited.
+        const budget = scheduleBudget(routine.schedule);
+        host.update(
+          blobId,
+          routine.id,
+          budget === undefined
+            ? { nextRunAt: nextFireTime(routine.schedule, now) }
+            : { nextRunAt: nextFireTime(routine.schedule, now), runsLeft: budget },
+        );
         armed += 1;
       }
     }

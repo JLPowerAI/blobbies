@@ -34,6 +34,12 @@ describe("nextFireTime", () => {
     expect(nextFireTime({ kind: "once", minutes: 0 }, at(2, 9))).toBe(at(2, 9, MIN_ONCE_MINUTES));
   });
 
+  it("a counted interval may run every minute — the burst shape", () => {
+    // "Five tips, one a minute" is count-bounded, so the 5-minute floor
+    // (an endless-loop guard) does not apply.
+    expect(nextFireTime({ kind: "interval", minutes: 1, count: 5 }, at(2, 9))).toBe(at(2, 9, 1));
+  });
+
   it("daily fires later today when the time is still ahead", () => {
     expect(nextFireTime({ kind: "daily", hour: 17, minute: 30 }, at(2, 9))).toBe(at(2, 17, 30));
   });
@@ -74,6 +80,12 @@ describe("describeSchedule", () => {
     expect(describeSchedule({ kind: "interval", minutes: 60 })).toBe("Every hour");
     expect(describeSchedule({ kind: "interval", minutes: 120 })).toBe("Every 2 hours");
     expect(describeSchedule({ kind: "interval", minutes: 45 })).toBe("Every 45 minutes");
+    expect(describeSchedule({ kind: "interval", minutes: 30, count: 3 })).toBe(
+      "Every 30 minutes, 3 times",
+    );
+    expect(describeSchedule({ kind: "interval", minutes: 1, count: 5 })).toBe(
+      "Every minute, 5 times",
+    );
     expect(describeSchedule({ kind: "daily", hour: 9, minute: 5 })).toBe("Every day at 09:05");
     expect(describeSchedule({ kind: "weekly", weekday: 1, hour: 17, minute: 0 })).toBe(
       "Every Monday at 17:00",
@@ -87,6 +99,7 @@ describe("parseSchedule", () => {
   it("round-trips valid shapes", () => {
     for (const schedule of [
       { kind: "interval", minutes: 30 },
+      { kind: "interval", minutes: 1, count: 5 },
       { kind: "once", minutes: 1 },
       { kind: "daily", hour: 0, minute: 0 },
       { kind: "weekly", weekday: 6, hour: 23, minute: 59 },
@@ -133,6 +146,29 @@ describe("coerceSchedule", () => {
     expect(coerceSchedule({ kind: "interval", minutes: 99.4 })).toEqual({
       kind: "interval",
       minutes: 99,
+    });
+  });
+
+  it("clamps a run count, and only a usable count unlocks 1-minute steps", () => {
+    expect(coerceSchedule({ kind: "interval", minutes: 1, count: 5 })).toEqual({
+      kind: "interval",
+      minutes: 1,
+      count: 5,
+    });
+    expect(coerceSchedule({ kind: "interval", minutes: 1, count: 99 })).toEqual({
+      kind: "interval",
+      minutes: 1,
+      count: 50,
+    });
+    expect(coerceSchedule({ kind: "interval", minutes: 1, count: 0 })).toEqual({
+      kind: "interval",
+      minutes: 1,
+      count: 1,
+    });
+    // A junk count means unbounded, so the 5-minute floor returns.
+    expect(coerceSchedule({ kind: "interval", minutes: 1, count: "5" })).toEqual({
+      kind: "interval",
+      minutes: MIN_INTERVAL_MINUTES,
     });
   });
 

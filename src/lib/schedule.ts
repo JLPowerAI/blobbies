@@ -7,7 +7,7 @@
  */
 
 export type RoutineSchedule =
-  | { kind: "interval"; minutes: number }
+  | { kind: "interval"; minutes: number; count?: number }
   | { kind: "daily"; hour: number; minute: number }
   | { kind: "weekly"; weekday: number; hour: number; minute: number }
   | { kind: "once"; minutes: number };
@@ -17,6 +17,16 @@ export const MIN_INTERVAL_MINUTES = 5;
 export const MAX_INTERVAL_MINUTES = 24 * 60;
 
 /**
+ * A counted interval may run every minute: the run count is capped, so the
+ * 5-minute floor's reason (an endless hot loop) does not apply. This is the
+ * "five tips, one a minute" shape.
+ */
+export const MIN_BOUNDED_INTERVAL_MINUTES = 1;
+
+/** Ceiling on a counted interval: bursts, not a second calendar. */
+export const MAX_INTERVAL_COUNT = 50;
+
+/**
  * One-shot bounds: no floor above 1 (it fires a single time, so there is no
  * loop to thrash) and the same day-scale ceiling — further out is a daily.
  */
@@ -24,11 +34,37 @@ export const MIN_ONCE_MINUTES = 1;
 export const MAX_ONCE_MINUTES = 24 * 60;
 
 /** Clamp helper so a hand-edited store value cannot produce a hot loop. */
-function clampInterval(minutes: number): number {
+function clampInterval(minutes: number, minMinutes: number): number {
   if (!Number.isFinite(minutes)) {
     return MAX_INTERVAL_MINUTES;
   }
-  return Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, Math.round(minutes)));
+  return Math.min(MAX_INTERVAL_MINUTES, Math.max(minMinutes, Math.round(minutes)));
+}
+
+/**
+ * Clamp a model-written run count into 1..MAX_INTERVAL_COUNT; anything that is
+ * not a usable number means "no count" (undefined, unbounded).
+ */
+function clampCount(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.min(MAX_INTERVAL_COUNT, Math.max(1, Math.round(value)));
+}
+
+/** The minutes floor for an interval: counted bursts may run every minute. */
+function intervalFloor(schedule: { count?: number }): number {
+  return clampCount(schedule.count) === undefined
+    ? MIN_INTERVAL_MINUTES
+    : MIN_BOUNDED_INTERVAL_MINUTES;
+}
+
+/**
+ * Initial `runsLeft` for a schedule: the count on an interval, undefined for
+ * every unbounded shape. Arming sites use it to reset a burst's budget.
+ */
+export function scheduleBudget(schedule: RoutineSchedule): number | undefined {
+  return schedule.kind === "interval" ? clampCount(schedule.count) : undefined;
 }
 
 /** Same idea for a one-shot: a single fire, so the floor is 1 minute. */
@@ -46,7 +82,7 @@ function clampOnce(minutes: number): number {
 export function nextFireTime(schedule: RoutineSchedule, fromMs: number): number {
   switch (schedule.kind) {
     case "interval":
-      return fromMs + clampInterval(schedule.minutes) * 60_000;
+      return fromMs + clampInterval(schedule.minutes, intervalFloor(schedule)) * 60_000;
     case "once":
       return fromMs + clampOnce(schedule.minutes) * 60_000;
     case "daily": {
@@ -83,12 +119,21 @@ function clock(hour: number, minute: number): string {
 export function describeSchedule(schedule: RoutineSchedule): string {
   switch (schedule.kind) {
     case "interval": {
-      const minutes = clampInterval(schedule.minutes);
+      const count = clampCount(schedule.count);
+      const minutes = clampInterval(
+        schedule.minutes,
+        count === undefined ? MIN_INTERVAL_MINUTES : MIN_BOUNDED_INTERVAL_MINUTES,
+      );
+      let every: string;
       if (minutes % 60 === 0) {
         const hours = minutes / 60;
-        return hours === 1 ? "Every hour" : `Every ${hours} hours`;
+        every = hours === 1 ? "Every hour" : `Every ${hours} hours`;
+      } else if (minutes === 1) {
+        every = "Every minute";
+      } else {
+        every = `Every ${minutes} minutes`;
       }
-      return `Every ${minutes} minutes`;
+      return count === undefined ? every : `${every}, ${count} times`;
     }
     case "once": {
       const minutes = clampOnce(schedule.minutes);
@@ -132,7 +177,18 @@ export function coerceSchedule(value: unknown): RoutineSchedule | null {
   switch (raw.kind) {
     case "interval": {
       const minutes = int("minutes");
-      return minutes === null ? null : { kind: "interval", minutes: clampInterval(minutes) };
+      if (minutes === null) {
+        return null;
+      }
+      const count = clampCount(raw.count);
+      return {
+        kind: "interval",
+        minutes: clampInterval(
+          minutes,
+          count === undefined ? MIN_INTERVAL_MINUTES : MIN_BOUNDED_INTERVAL_MINUTES,
+        ),
+        ...(count === undefined ? {} : { count }),
+      };
     }
     case "once": {
       const minutes = int("minutes");
@@ -166,7 +222,18 @@ export function parseSchedule(value: unknown): RoutineSchedule | null {
   switch (raw.kind) {
     case "interval": {
       const minutes = int("minutes");
-      return minutes === null ? null : { kind: "interval", minutes: clampInterval(minutes) };
+      if (minutes === null) {
+        return null;
+      }
+      const count = clampCount(raw.count);
+      return {
+        kind: "interval",
+        minutes: clampInterval(
+          minutes,
+          count === undefined ? MIN_INTERVAL_MINUTES : MIN_BOUNDED_INTERVAL_MINUTES,
+        ),
+        ...(count === undefined ? {} : { count }),
+      };
     }
     case "once": {
       const minutes = int("minutes");

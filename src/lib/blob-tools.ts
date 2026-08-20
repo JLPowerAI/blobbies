@@ -967,7 +967,8 @@ export interface RoutineAccess {
 /** Validation refusal shared by every routine tool that carries a schedule. */
 const BAD_SCHEDULE =
   "Not done: the schedule is not valid. kind 'interval' needs minutes " +
-  "(5-1440); 'once' needs minutes (1-1440); 'daily' needs hour 0-23; " +
+  "(5-1440, or 1-1440 when count is given) and optionally count (1-50); " +
+  "'once' needs minutes (1-1440); 'daily' needs hour 0-23; " +
   "'weekly' needs weekday 0-6 and hour 0-23. Times are the user's local time.";
 
 /**
@@ -1009,7 +1010,15 @@ export function makeRoutineTools(routines: RoutineAccess): AgentTool[] {
       .number()
       .int()
       .optional()
-      .describe("For interval (5-1440) and once (1-1440): how many minutes"),
+      .describe("For interval (5-1440, or 1-1440 with count) and once (1-1440): how many minutes"),
+    count: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        "For interval only: stop after this many runs (1-50). e.g. minutes 1, " +
+          "count 5 = five runs one minute apart, then it stops on its own",
+      ),
     hour: z
       .number()
       .int()
@@ -1034,10 +1043,11 @@ export function makeRoutineTools(routines: RoutineAccess): AgentTool[] {
   const create: AgentTool<typeof createParameters> = {
     name: "create_routine",
     description:
-      "Set up a routine for yourself — recurring, or a one-shot delay " +
-      "('check on the user in 10 minutes' is kind 'once'). It runs on its own " +
-      "on the schedule you give, in this conversation. For a task you can " +
-      "just do now, do the task. A name that already exists is " +
+      "Set up a routine for yourself — recurring, a one-shot delay " +
+      "('check on the user in 10 minutes' is kind 'once'), or a bounded burst " +
+      "('every minute, 5 times' is interval with minutes 1 and count 5). It " +
+      "runs on its own on the schedule you give, in this conversation. For a " +
+      "task you can just do now, do the task. A name that already exists is " +
       "refused; change an existing one with update_routine.",
     parameters: createParameters,
     executionMode: "sequential",

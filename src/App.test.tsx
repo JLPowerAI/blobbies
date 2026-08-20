@@ -628,6 +628,33 @@ describe("App", () => {
     expect(within(editor).getByText(/Every day at 15:30 · next/)).toBeInTheDocument();
   });
 
+  it("schedules a counted burst — every minute, five times — through the custom picker", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+
+    await user.click(screen.getByRole("button", { name: "Show details panel" }));
+    const details = screen.getByRole("complementary", { name: "Ken details" });
+    await user.click(within(details).getByRole("button", { name: "Create Routine" }));
+
+    const editor = screen.getByRole("complementary", { name: "Routine" });
+    await user.type(within(editor).getByLabelText("Name"), "UI tips");
+    await user.click(within(editor).getByRole("button", { name: "Add trigger" }));
+    await user.click(within(editor).getByRole("menuitem", { name: "On a schedule" }));
+    await user.click(within(editor).getByRole("menuitem", { name: "Custom…" }));
+    await user.selectOptions(within(editor).getByLabelText("Repeat"), "interval");
+    await user.clear(within(editor).getByLabelText("Minutes"));
+    await user.type(within(editor).getByLabelText("Minutes"), "1");
+    // Empty "Times" means unbounded; filling it bounds the burst to five runs.
+    await user.type(within(editor).getByLabelText("Times"), "5");
+    await user.click(within(editor).getByRole("menuitem", { name: "Apply" }));
+
+    expect(
+      within(editor).getByText("Every minute, 5 times", { selector: ".trigger-row" }),
+    ).toBeInTheDocument();
+    expect(within(editor).getByText(/Every minute, 5 times · 5 left · next/)).toBeInTheDocument();
+  });
+
   it("browses plugins and reports why a connect failed, on the row that failed", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -820,6 +847,18 @@ describe("App", () => {
         lastRunAt: 1,
         lastRunStatus: "done",
       },
+      {
+        id: "routine-2",
+        name: "Burst",
+        instruction: "Ping once",
+        triggers: ["Every minute, 5 times"],
+        active: true,
+        schedule: { kind: "interval", minutes: 1, count: 5 },
+        nextRunAt: 1,
+        // Mid-burst with one fire left: the copy must start over at five, not
+        // inherit the source's last run.
+        runsLeft: 1,
+      },
     ]);
     await flushWrites();
 
@@ -851,14 +890,17 @@ describe("App", () => {
 
     await flushWrites();
     const copied = await loadBlobRoutines(copy?.id ?? "");
-    expect(copied).toHaveLength(1);
-    expect(copied?.[0]).toMatchObject({ name: "Morning sweep", active: true });
-    expect(copied?.[0]?.id).not.toBe("routine-1");
-    expect(copied?.[0]?.lastRunAt).toBeUndefined();
-    expect(copied?.[0]?.lastRunStatus).toBeUndefined();
+    expect(copied).toHaveLength(2);
+    const sweep = copied?.find((routine) => routine.name === "Morning sweep");
+    expect(sweep).toMatchObject({ active: true });
+    expect(sweep?.id).not.toBe("routine-1");
+    expect(sweep?.lastRunAt).toBeUndefined();
+    expect(sweep?.lastRunStatus).toBeUndefined();
     // Re-armed: armRoutines only runs at startup, so a stale nextRunAt would
     // mean the copy's routine never fires.
-    expect(copied?.[0]?.nextRunAt ?? 0).toBeGreaterThan(Date.now());
+    expect(sweep?.nextRunAt ?? 0).toBeGreaterThan(Date.now());
+    const burst = copied?.find((routine) => routine.name === "Burst");
+    expect(burst?.runsLeft).toBe(5);
   });
 
   it("refuses to create or duplicate past the Blob cap", async () => {

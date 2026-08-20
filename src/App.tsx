@@ -63,7 +63,7 @@ import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
 import { blobSystemPrompt, configFieldEmpty, timeNote, trimHistory } from "@/lib/prompt";
 import { type ActiveRun, assertTransition, isTerminal, type RunTrigger } from "@/lib/run-state";
-import { describeSchedule, nextFireTime } from "@/lib/schedule";
+import { describeSchedule, nextFireTime, scheduleBudget } from "@/lib/schedule";
 import { startScheduler } from "@/lib/scheduler";
 import type { SearchResult } from "@/lib/search";
 import { listSkills, type Skill, skillLine } from "@/lib/skills";
@@ -179,12 +179,15 @@ function copyRoutine(routine: Routine): Routine {
     lastRunAt: _lastRunAt,
     lastRunStatus: _lastRunStatus,
     nextRunAt: _nextRunAt,
+    runsLeft: _runsLeft,
     ...rest
   } = routine;
+  const budget = rest.schedule === undefined ? undefined : scheduleBudget(rest.schedule);
   return {
     ...rest,
     id: newBlobId(),
     ...(rest.schedule === undefined ? {} : { nextRunAt: nextFireTime(rest.schedule, Date.now()) }),
+    ...(budget === undefined ? {} : { runsLeft: budget }),
   };
 }
 
@@ -1079,11 +1082,16 @@ export function App() {
         }
         const next = { ...candidate, ...patch };
         // (Re)arm on schedule edits; disarm when the schedule is removed.
+        // Arming a counted interval resets its budget: a fresh arm means "run
+        // it count times from now", including re-enabling a retired burst.
+        let armed = false;
         if ("schedule" in patch) {
           if (next.schedule === undefined) {
             delete next.nextRunAt;
+            delete next.runsLeft;
           } else {
             next.nextRunAt = nextFireTime(next.schedule, Date.now());
+            armed = true;
           }
         }
         // Re-enabling a fired one-shot (or any disarmed routine) must re-arm
@@ -1091,6 +1099,15 @@ export function App() {
         // only runs at startup.
         if (patch.active === true && next.schedule !== undefined && next.nextRunAt === undefined) {
           next.nextRunAt = nextFireTime(next.schedule, Date.now());
+          armed = true;
+        }
+        if (armed) {
+          const budget = next.schedule === undefined ? undefined : scheduleBudget(next.schedule);
+          if (budget === undefined) {
+            delete next.runsLeft;
+          } else {
+            next.runsLeft = budget;
+          }
         }
         return next;
       }),
@@ -1116,6 +1133,7 @@ export function App() {
   const routineAccess = (agentId: string): RoutineAccess => ({
     list: () => routinesRef.current[agentId] ?? [],
     create: (input) => {
+      const budget = input.schedule === undefined ? undefined : scheduleBudget(input.schedule);
       setAgentRoutines(agentId, (current) => [
         ...current,
         {
@@ -1127,6 +1145,7 @@ export function App() {
           ...(input.schedule === undefined
             ? {}
             : { schedule: input.schedule, nextRunAt: nextFireTime(input.schedule, Date.now()) }),
+          ...(budget === undefined ? {} : { runsLeft: budget }),
         },
       ]);
     },
@@ -1150,6 +1169,14 @@ export function App() {
           if (patch.schedule !== undefined) {
             next.schedule = patch.schedule;
             next.nextRunAt = nextFireTime(patch.schedule, Date.now());
+            // A new schedule takes effect from now: a counted interval starts
+            // its budget over, whatever the old one had left.
+            const budget = scheduleBudget(patch.schedule);
+            if (budget === undefined) {
+              delete next.runsLeft;
+            } else {
+              next.runsLeft = budget;
+            }
             // A new schedule on a routine that fired its one-shot (or was
             // otherwise disarmed) is a request for it to run again: leaving it
             // inactive would have update_routine report a schedule that never

@@ -760,6 +760,32 @@ describe("routine tools", () => {
     expect(routines.current[0]?.schedule).toEqual({ kind: "once", minutes: 1 });
   });
 
+  it("creates a bounded burst: every minute, five times, then it stops", async () => {
+    const routines = fakeRoutines();
+    const result = await find(routines.access, "create_routine")?.execute(
+      {
+        name: "UI tips",
+        instruction: "Give one quick UI or UX tip.",
+        kind: "interval",
+        minutes: 1,
+        count: 5,
+      },
+      context,
+    );
+    expect(result).toContain("Every minute, 5 times");
+    expect(routines.current[0]?.schedule).toEqual({ kind: "interval", minutes: 1, count: 5 });
+  });
+
+  it("clamps an out-of-range count instead of refusing the routine", async () => {
+    const routines = fakeRoutines();
+    const result = await find(routines.access, "create_routine")?.execute(
+      { name: "Burst", instruction: "y", kind: "interval", minutes: 1, count: 500 },
+      context,
+    );
+    expect(result).toContain("50 times");
+    expect(routines.current[0]?.schedule).toEqual({ kind: "interval", minutes: 1, count: 50 });
+  });
+
   it("refuses a duplicate name, which is what makes create_routine idempotent", async () => {
     const routines = fakeRoutines([
       { id: "r0", name: "Digest", instruction: "x", triggers: [], active: true },

@@ -97,6 +97,55 @@ describe("tick", () => {
     expect(h.fired).toEqual(["r1"]);
   });
 
+  it("a counted interval decrements runsLeft as its claim and stays armed", async () => {
+    const now = 10 * HOUR;
+    const h = makeHost({
+      b1: [
+        routine({
+          schedule: { kind: "interval", minutes: 1, count: 3 },
+          runsLeft: 3,
+          nextRunAt: now - 1,
+        }),
+      ],
+    });
+    expect(await tick(h.host, now)).toBe(true);
+    const after = h.get("b1", "r1");
+    expect(after?.runsLeft).toBe(2);
+    // The bounded floor applies — and the claim lands on due + 1 minute, the
+    // schedule-aligned time, not now + 1 minute.
+    expect(after?.nextRunAt).toBe(now - 1 + 60_000);
+    expect(after?.active).toBe(true);
+  });
+
+  it("a counted interval retires after its final fire, like a one-shot", async () => {
+    const now = 10 * HOUR;
+    const h = makeHost({
+      b1: [
+        routine({
+          schedule: { kind: "interval", minutes: 1, count: 2 },
+          runsLeft: 1,
+          nextRunAt: now - 1,
+        }),
+      ],
+    });
+    expect(await tick(h.host, now)).toBe(true);
+    const after = h.get("b1", "r1");
+    expect(after?.active).toBe(false);
+    expect(after?.nextRunAt).toBeUndefined();
+    expect(after?.runsLeft).toBe(0);
+    expect(await tick(h.host, now + HOUR)).toBe(false);
+    expect(h.fired).toEqual(["r1"]);
+  });
+
+  it("defaults runsLeft to the schedule's count when no arming path set it", async () => {
+    const now = 10 * HOUR;
+    const h = makeHost({
+      b1: [routine({ schedule: { kind: "interval", minutes: 1, count: 2 }, nextRunAt: now - 1 })],
+    });
+    await tick(h.host, now);
+    expect(h.get("b1", "r1")?.runsLeft).toBe(1);
+  });
+
   it("claims before running, so a re-entrant tick cannot double-fire", async () => {
     // The fire callback itself runs a tick — the worst-case re-entrancy.
     const now = 10 * HOUR;
@@ -171,6 +220,21 @@ describe("armRoutines", () => {
     const h = makeHost({ b1: [routine({ nextRunAt: undefined })] });
     expect(armRoutines(h.host, now)).toBe(1);
     expect(h.get("b1", "r1")?.nextRunAt).toBe(now + HOUR);
+  });
+
+  it("arms a counted interval with a fresh budget and the 1-minute floor", () => {
+    const now = 10 * HOUR;
+    const h = makeHost({
+      b1: [
+        routine({
+          schedule: { kind: "interval", minutes: 1, count: 5 },
+          nextRunAt: undefined,
+        }),
+      ],
+    });
+    expect(armRoutines(h.host, now)).toBe(1);
+    expect(h.get("b1", "r1")?.nextRunAt).toBe(now + 60_000);
+    expect(h.get("b1", "r1")?.runsLeft).toBe(5);
   });
 
   it("does not re-arm a fired one-shot at startup", () => {
