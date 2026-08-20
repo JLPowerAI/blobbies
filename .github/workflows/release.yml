@@ -4,11 +4,11 @@ name: Release build
 # to a draft GitHub Release. Triggered by pushing a `v*` tag — see
 # .github/RELEASING.md for the process and the optional signing secrets.
 #
-# Unsigned until the signing secrets exist: macOS builds get Gatekeeper's
-# right-click → Open flow, Windows shows SmartScreen. Adding the secrets
-# listed in RELEASING.md flips signing and notarization on automatically —
-# every signing step is conditional on its secret being present, so the
-# workflow never breaks for lack of a certificate.
+# macOS builds are signed with a Developer ID certificate and notarized
+# (secrets configured 2026-08-20; verified with spctl + stapler on the
+# shipped dmg). Windows builds are still unsigned — SmartScreen shows until
+# the WINDOWS_* secrets land; every signing step is conditional on its
+# secret being present, so the workflow never breaks for lack of one.
 
 on:
   push:

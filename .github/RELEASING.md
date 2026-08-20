@@ -23,14 +23,15 @@ Retagging re-runs safely: the release step uploads with `--clobber` if a
 draft for the tag already exists. `workflow_dispatch` runs the bundles
 without creating a release (artifact-only smoke test).
 
-## Signing (optional secrets)
+## Signing
 
-Without secrets everything still builds and releases — unsigned. macOS users
-see Gatekeeper ("right-click → Open" the first time); Windows shows
-SmartScreen. Adding a secret to
-[Settings → Secrets and variables → Actions](https://github.com/KenKaiii/blobbies/settings/secrets/actions)
-turns the matching behavior on automatically; every signing step checks for
-its secret and skips when absent.
+macOS: **signed + notarized** — the six APPLE_*/KEYCHAIN secrets are set,
+ and the shipped dmgs pass `spctl` ("accepted, source=Notarized Developer
+ ID") and `stapler validate`.
+
+Windows: **unsigned** — users see SmartScreen. Adding the three
+ WINDOWS_* secrets below turns signing on automatically; every signing step
+ checks for its secret and skips when absent.
 
 ### macOS (sign + notarize)
 
