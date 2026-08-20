@@ -56,18 +56,14 @@ jobs:
             bundles: nsis
             bundle-dir: src-tauri/target/release/bundle
     runs-on: ${{ matrix.os }}
-    # Probed by the conditional signing steps below. Secrets are job-env so
-    # `if: env.X != ''` works; empty means "not configured, build unsigned".
+    # Booleans only: an unset secret interpolates to an empty string, and a
+    # job-level `APPLE_CERTIFICATE: ""` is enough for Tauri's bundler to try
+    # (and fail) importing it — measured on the first v0.1.0 run. So the probe
+    # names differ from anything Tauri reads; the real values move through
+    # step env and GITHUB_ENV in the import steps below.
     env:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-      WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+      APPLE_CERT_CONFIGURED: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      WIN_CERT_CONFIGURED: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -103,7 +99,14 @@ jobs:
           workspaces: src-tauri
 
       - name: Import Apple signing certificate
-        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        if: runner.os == 'macOS' && env.APPLE_CERT_CONFIGURED == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
@@ -112,19 +115,32 @@ jobs:
           security set-keychain-settings -t 3600 -u build.keychain
           security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
-          security find-identity -v -p codesigning build.keychain
           rm certificate.p12
+          # Export what Tauri's bundler reads: the identity, and the
+          # notarization credentials. GITHUB_ENV reaches the build step as a
+          # real environment variable, present only when signing is on.
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+          if [ -z "$IDENTITY" ]; then echo "no Developer ID Application identity found"; exit 1; fi
+          {
+            echo "APPLE_SIGNING_IDENTITY=$IDENTITY"
+            echo "APPLE_ID=$APPLE_ID"
+            echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
 
       - name: Import Windows signing certificate
-        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
-        shell: pwsh
+        if: runner.os == 'Windows' && env.WIN_CERT_CONFIGURED == 'true'
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+        shell: bash
         run: |
-          New-Item -ItemType directory -Path certificate
-          Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
-          certutil -decode certificate/tempCert.txt certificate/certificate.pfx
-          Remove-Item certificate/tempCert.txt
-          Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
-          Remove-Item -Recurse certificate
+          echo "$WINDOWS_CERTIFICATE" | base64 --decode > certificate.pfx
+          pwsh -Command '
+            Import-PfxCertificate -FilePath certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)'
+          rm certificate.pfx
+          echo "WIN_CERT_THUMBPRINT=$WINDOWS_CERTIFICATE_THUMBPRINT" >> "$GITHUB_ENV"
 
       # bash on every OS so the comma bundle list and the conditional signing
       # config compose the same way. The thumbprint override reaches Tauri via
@@ -135,8 +151,8 @@ jobs:
         run: |
           set -euo pipefail
           args=(--bundles "${{ matrix.bundles }}")
-          if [[ "${{ runner.os }}" == "Windows" && -n "${WINDOWS_CERTIFICATE_THUMBPRINT:-}" ]]; then
-            args+=(--config "{\"bundle\":{\"windows\":{\"certificateThumbprint\":\"$WINDOWS_CERTIFICATE_THUMBPRINT\",\"digestAlgorithm\":\"sha256\",\"timestampUrl\":\"http://timestamp.comodoca.com\"}}}")
+          if [[ "${{ runner.os }}" == "Windows" && -n "${WIN_CERT_THUMBPRINT:-}" ]]; then
+            args+=(--config "{\"bundle\":{\"windows\":{\"certificateThumbprint\":\"$WIN_CERT_THUMBPRINT\",\"digestAlgorithm\":\"sha256\",\"timestampUrl\":\"http://timestamp.comodoca.com\"}}}")
           fi
           pnpm tauri build --target ${{ matrix.rust-target }} "${args[@]}"
 
