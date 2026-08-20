@@ -54,7 +54,7 @@ Every Blob keeps its own memories, plus facts you share with the whole team. Tel
 
 ### They actually do stuff
 
-Blobs plug into your apps. Gmail, Google Calendar, Slack, Notion, Spotify, hundreds more through Composio (an app-connecting service, your own account). "Clear my inbox and flag anything urgent" is a real request, not a demo.
+Blobs plug into your apps. Gmail, Google Calendar, Slack, Notion, Spotify — 889 apps in the catalog — through a connector service on your own account. "Clear my inbox and flag anything urgent" is a real request, not a demo.
 
 ### They work while you're away
 
@@ -84,7 +84,7 @@ Grok Bot is xAI's take on AI teammates: named Bots with jobs that work on a clou
 
 |  | 🫧 **Blobbies** | **Grok Bot** |
 | --- | --- | --- |
-| **Price** | Free, open source | Top tiers only: SuperGrok Heavy ($300/mo) or Cursor Ultra ($200/mo) |
+| **Price** | Free, open source | SuperGrok Heavy ($300/mo), Cursor Ultra ($200/mo), or a Premium team seat |
 | **Runs on** | Your computer | xAI's cloud |
 | **Your data** | Never leaves your machine | Stored on xAI's cloud, required by the app |
 | **Private by default** | Yes. It's the architecture, not a setting | No Legacy Privacy Mode. Cloud storage is required |
@@ -92,7 +92,7 @@ Grok Bot is xAI's take on AI teammates: named Bots with jobs that work on a clou
 | **The AI** | Your pick: free local models or Tinfoil's encrypted cloud | Grok models only |
 | **Memory** | Per-Blob plus team-wide, all viewable and editable | Bots keep memory, files, and logins across turns |
 | **Team chats** | Up to 6 Blobs per group, @mention who you want | Bots message each other and hand off tasks |
-| **Your apps** | Hundreds via your own Composio account | Bots sign into your apps themselves, plus connectors |
+| **Your apps** | 889 in the built-in catalog. Connect from the Plugins tab — one browser sign-in per app — and every Blob can use it right away | Plugins for supported services, plus Bots signing into any website themselves on their cloud computer |
 | **Works while you're away** | Yes, on your machine | Yes, in the cloud |
 | **Platforms** | macOS, Windows, Linux | macOS, Windows, iOS (no Linux) |
 | **Source code** | Open, AGPL-3.0 | Closed |
