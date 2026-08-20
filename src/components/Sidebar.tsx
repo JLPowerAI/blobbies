@@ -461,7 +461,18 @@ export function Sidebar({
     return () => clearInterval(timer);
   }, []);
   const accountRef = useRef<HTMLDivElement>(null);
-  const { closing, requestClose, finishClose } = useExitAnimation(() => setMenuOpen(false));
+  // A follow-up action to run once the menu's exit animation finishes. The
+  // Settings item used to open the modal while the menu was still animating
+  // out — two entrances/exits overlapping under a dimming backdrop read as
+  // fighting each other. Sequencing (menu sinks fully, then the modal rises)
+  // costs ~160ms and looks deliberate.
+  const afterClose = useRef<(() => void) | null>(null);
+  const { closing, requestClose, finishClose } = useExitAnimation(() => {
+    setMenuOpen(false);
+    const pending = afterClose.current;
+    afterClose.current = null;
+    pending?.();
+  });
 
   const [width, setWidth] = useState(() => {
     const stored = Number(readPreference("pref:sidebarWidth", "292"));
@@ -1244,12 +1255,10 @@ export function Sidebar({
                 role="menuitem"
                 className="account-menu-item"
                 onClick={() => {
-                  // Same exit as every other dismissal: the menu sinks out
-                  // behind the opening modal instead of vanishing in one
-                  // frame. Skipping the animation here was the one abrupt
-                  // exit in the app.
+                  // The menu exits first; the modal opens from the hook's
+                  // onClosed above, once the sink-out has actually finished.
+                  afterClose.current = onOpenSettings;
                   requestClose();
-                  onOpenSettings();
                 }}
               >
                 <Settings size={15} strokeWidth={1.8} aria-hidden="true" />
