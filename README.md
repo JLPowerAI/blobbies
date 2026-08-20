@@ -1,7 +1,7 @@
 # 🫧 Blobbies
 
 <p align="center">
-  <img src="src-tauri/icons/icon.png" alt="Blobbies" width="160">
+  <img src="assets/blobbies.png" alt="Blobbies" width="640">
 </p>
 
 <p align="center">
