@@ -1,7 +1,7 @@
 # 🫧 Blobbies
 
 <p align="center">
-  <img src="assets/blobbies.png" alt="Blobbies" width="640">
+  <img src="assets/blobbies.png" alt="Blobbies">
 </p>
 
 <p align="center">
