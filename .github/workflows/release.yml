@@ -167,11 +167,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
+          # nullglob makes this OS's missing bundle types vanish entirely,
+          # so a plain `cp <glob> out/` would become `cp out/` — hence the
+          # per-file loop with an existence check.
           shopt -s nullglob
-          cp ${{ matrix.bundle-dir }}/dmg/*.dmg out/
-          cp ${{ matrix.bundle-dir }}/deb/*.deb out/
-          cp ${{ matrix.bundle-dir }}/appimage/*.AppImage out/
-          cp ${{ matrix.bundle-dir }}/nsis/*.exe out/
+          for file in \
+            ${{ matrix.bundle-dir }}/dmg/*.dmg \
+            ${{ matrix.bundle-dir }}/deb/*.deb \
+            ${{ matrix.bundle-dir }}/appimage/*.AppImage \
+            ${{ matrix.bundle-dir }}/nsis/*.exe; do
+            cp "$file" out/
+          done
           ls -l out
 
       - uses: actions/upload-artifact@v7
