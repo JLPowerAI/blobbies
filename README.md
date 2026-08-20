@@ -9,10 +9,15 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/KenKaiii/blobbies/releases/latest"><img src="https://img.shields.io/github/v/release/KenKaiii/blobbies?style=for-the-badge&label=Download&color=brightgreen" alt="Download the latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg?style=for-the-badge" alt="AGPL-3.0 License"></a>
   <a href="https://img.shields.io/badge/Price-Free-brightgreen?style=for-the-badge"><img src="https://img.shields.io/badge/Price-Free-brightgreen?style=for-the-badge" alt="Free"></a>
   <a href="https://youtube.com/@kenkaidoesai"><img src="https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube"></a>
   <a href="https://skool.com/kenkai"><img src="https://img.shields.io/badge/Skool-Community-7C3AED?style=for-the-badge" alt="Skool"></a>
+</p>
+
+<p align="center">
+  macOS · Windows · Linux — installers on the <a href="https://github.com/KenKaiii/blobbies/releases/latest">release page</a>; the app updates itself afterwards.
 </p>
 
 ---
@@ -100,7 +105,7 @@ Fair is fair: Grok Bot's Bots each get a screen on a shared cloud computer and c
 
 ## 🚀 Get it
 
-Installers are on the way. Until then, anyone comfortable with a terminal can build it in a few minutes, setup steps at the bottom of this page.
+Grab the installer for your system from the [latest release](https://github.com/KenKaiii/blobbies/releases/latest) — macOS (Apple Silicon and Intel), Windows, and Linux (`.deb` + AppImage). Anyone comfortable with a terminal can also build it in a few minutes, setup steps at the bottom of this page.
 
 ---
 
