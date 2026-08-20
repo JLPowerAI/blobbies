@@ -84,7 +84,7 @@ Grok Bot is xAI's take on AI teammates: named Bots with jobs that work on a clou
 
 |  | 🫧 **Blobbies** | **Grok Bot** |
 | --- | --- | --- |
-| **Price** | Free, open source | SuperGrok Heavy ($300/mo), Cursor Ultra ($200/mo), or a Premium team seat |
+| **Price** | Free, open source | SuperGrok Heavy ($300/mo), Cursor Ultra ($200/mo) |
 | **Runs on** | Your computer | xAI's cloud |
 | **Your data** | Never leaves your machine | Stored on xAI's cloud, required by the app |
 | **Private by default** | Yes. It's the architecture, not a setting | No Legacy Privacy Mode. Cloud storage is required |
