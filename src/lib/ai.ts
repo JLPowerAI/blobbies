@@ -487,12 +487,13 @@ export async function streamBlobTurn(options: {
   /** Read/write access to the Blob's persistent memories. */
   memory: MemoryAccess;
   /**
-   * "chat" (default) is the tuned interactive turn: intent router + web pair,
-   * nothing else — its measured behavior must not drift. "routine" is an
-   * autonomous turn fired by the scheduler: no router (routine turns never
-   * write memories), and the catalog adds the Blob's files, ask_user,
-   * run_subagent, the roster tools and any MCP server's tools, because there
-   * is no human in the loop to fill gaps.
+   * "chat" (default) is an interactive turn; "routine" is an autonomous
+   * one (scheduler fire, answer to an ask, Blob→Blob hand-off). The tool
+   * catalog is the SAME either way — a Blob spawns, messages, uses files,
+   * the shell, connected apps, MCP servers and ask_user no matter who
+   * started the turn. Scope changes only the router: chat turns classify
+   * the message first (the sole path that writes memories or config),
+   * routine turns skip it and never write memories.
    */
   scope?: "chat" | "routine";
   /**
@@ -504,11 +505,15 @@ export async function streamBlobTurn(options: {
    * same sentence and N private copies of one fact.
    */
   intent?: Intent;
-  /** The Blob's sandboxed home folder; enables file tools on routine turns. */
+  /**
+   * The Blob's sandboxed home folder; enables the file tools on any turn
+   * that has it.
+   */
   home?: HomeBackend;
   /**
-   * Roster access; enables spawn_blob/delete_blob on routine turns. The
-   * calling Blob's own name gates self-deletion.
+   * Roster access; enables spawn_blob/message_blob/delete_blob on any turn
+   * that has it, chat included. The calling Blob's own name gates
+   * self-deletion.
    */
   roster?: { access: RosterAccess; selfName: string };
   /**
@@ -518,9 +523,9 @@ export async function streamBlobTurn(options: {
    */
   routines?: RoutineAccess;
   /**
-   * Local MCP servers. Their tools join the routine catalog only — a
-   * third-party server's tool descriptions are text we did not write, and the
-   * chat path's restraint is measured with a fixed catalog.
+   * Local MCP servers; their tools join the catalog of any turn that knows
+   * of them — a server's descriptions are third-party text, but namespaced
+   * (`mcp__server__tool`), capped and fenced by `loadMcpTools`.
    */
   mcpServers?: McpServerConfig[];
   /**
@@ -658,10 +663,11 @@ export async function streamBlobTurn(options: {
   /** Set when the last loop stopped on its turn budget, mid-task. */
   let cutShort = false;
 
-  // Contacted once per turn, and only on routine turns. An unreachable server
-  // costs nothing: loadMcpTools drops it and the run keeps its other tools.
+  // Contacted once per turn — every turn now: a chat request is as entitled
+  // to a server's tools as a scheduled one. An unreachable server costs
+  // nothing: loadMcpTools drops it and the run keeps its other tools.
   const mcpTools =
-    scope === "routine" && (options.mcpServers ?? []).length > 0
+    (options.mcpServers ?? []).length > 0
       ? await loadMcpTools(options.mcpServers ?? [], options.signal)
       : [];
 
@@ -705,44 +711,40 @@ export async function streamBlobTurn(options: {
     // rounds discovering there is nothing to call. Deliberately outside the
     // router's web verdict — see the `tools` line below.
     const appTools = options.hasConnectedApps === true ? makeComposioTools() : [];
-    // Routine turns run unattended, so they get the full autonomous catalog;
-    // chat turns keep the tuned small surface plus the routine tools — a chat
-    // request like "check in on me daily at 3pm" is the most common way a
-    // routine is born, and hiding them behind a router round misfired live
-    // (the model, told the tools exist but unable to call them, went fishing
-    // for schedulers in connected apps). Idempotent by name, capped by
-    // MAX_ROUTINES.
+    // One catalog for every turn (2026-08-20, owner's call): a Blob's
+    // capabilities must not depend on who started the turn — "spawn up 3
+    // bots", "read that file", "run that command" are chat requests as much
+    // as scheduled ones, and a catalog that withheld them had the model
+    // apologizing for tools its own prompt names. Gated only by the access
+    // the host passed: no home means no file tools, no roster means no spawn,
+    // nothing connected means no app meta-tools. The one deliberate absence
+    // is unchanged: memory/config writes, which belong to the router (see the
+    // comment above) — a measured guard, not a capability gate.
     const fs = options.home === undefined ? null : makeFsTools(options.home);
-    const tools =
-      scope === "routine"
-        ? [
-            ...webTools,
-            ...appTools,
-            // Unattended turns get the local shell; a chat turn does not need
-            // it and the surface is worth keeping small.
-            makeShellTool(),
-            ...(fs === null ? [] : [...fs.readOnly, ...fs.mutating]),
-            ...(options.roster === undefined
-              ? []
-              : makeRosterTools(options.roster.access, options.roster.selfName)),
-            ...(options.routines === undefined ? [] : makeRoutineTools(options.routines)),
-            ...mcpTools,
-            makeAskTool((ask) => {
-              pendingAsk = ask;
-            }),
-            makeSubagentTool({
-              model: options.model,
-              blobName: "this Blob",
-              thinking: options.thinking === true,
-              readOnlyTools: [...webTools, ...(fs === null ? [] : fs.readOnly)],
-              signal: options.signal,
-            }),
-          ]
-        : [
-            ...webTools,
-            ...appTools,
-            ...(options.routines === undefined ? [] : makeRoutineTools(options.routines)),
-          ];
+    const rosterTools =
+      options.roster === undefined
+        ? []
+        : makeRosterTools(options.roster.access, options.roster.selfName);
+    const subagent = makeSubagentTool({
+      model: options.model,
+      blobName: "this Blob",
+      thinking: options.thinking === true,
+      readOnlyTools: [...webTools, ...(fs === null ? [] : fs.readOnly)],
+      signal: options.signal,
+    });
+    const tools = [
+      ...webTools,
+      ...appTools,
+      makeShellTool(),
+      ...(fs === null ? [] : [...fs.readOnly, ...fs.mutating]),
+      ...rosterTools,
+      ...(options.routines === undefined ? [] : makeRoutineTools(options.routines)),
+      ...mcpTools,
+      makeAskTool((ask) => {
+        pendingAsk = ask;
+      }),
+      subagent,
+    ];
     const loop = agentLoop(conversation, {
       provider: providerFor(options.model),
       model: options.model,

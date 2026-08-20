@@ -1,7 +1,13 @@
 import type { AgentTool } from "@kenkaiiii/gg-agent";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { z } from "zod";
-import { MAX_BLOB_NAME_LENGTH, MAX_BLOBS, MAX_ROUTINES, type Routine } from "@/data/agents";
+import {
+  formatBlobName,
+  MAX_BLOB_NAME_LENGTH,
+  MAX_BLOBS,
+  MAX_ROUTINES,
+  type Routine,
+} from "@/data/agents";
 import { composioExecute, composioSchema, composioSearch } from "@/lib/composio";
 import type { HomeBackend } from "@/lib/home";
 import { applyMemoryWrite, type BlobMemory, knownFact, normaliseFact } from "@/lib/memory";
@@ -698,7 +704,8 @@ export function makeAskTool(onAsk: (ask: PendingAsk) => void): AgentTool {
 }
 
 /**
- * The roster, as the routine catalog is allowed to touch it.
+ * The roster, as a turn's catalog is allowed to touch it — every turn:
+ * chat and routine alike.
  *
  * Deliberately name-addressed: names are what the model sees in the prompt
  * and what the user reads in the sidebar, and refusing a duplicate name is
@@ -706,7 +713,19 @@ export function makeAskTool(onAsk: (ask: PendingAsk) => void): AgentTool {
  */
 export interface RosterAccess {
   list: () => { id: string; name: string }[];
-  create: (blob: { name: string; title: string; description: string }) => void;
+  create: (blob: {
+    name: string;
+    title: string;
+    description: string;
+    /** Hand-written role, used verbatim by the new Blob — always present: the
+     *  spawn tool enforces it. */
+    instructions: string;
+  }) => void;
+  /** Patch another Blob's config; false when the id is unknown. */
+  update: (
+    id: string,
+    patch: { title?: string; description?: string; instructions?: string },
+  ) => boolean;
   delete: (id: string) => void;
   /**
    * Hand work to another Blob: post the request into that Blob's own
@@ -724,11 +743,7 @@ export interface RosterAccess {
 }
 
 /**
- * Roster tools — routine scope only.
- *
- * Absent from the chat catalog on purpose: that catalog is tuned and measured
- * (web-only, router-gated), and a human in a chat can press the + button — or
- * @-mention the Blob they want in a group.
+ * Roster tools — offered on every turn that has roster access.
  *
  * @param selfName The calling Blob's name, which it may not delete.
  */
@@ -737,38 +752,114 @@ export function makeRosterTools(roster: RosterAccess, selfName: string): AgentTo
   const sent = new Set<string>();
 
   const spawnParameters = z.object({
-    name: z.string().describe("Short unique name for the new Blob"),
+    name: z
+      .string()
+      .describe(
+        'Short unique name in plain words, e.g. "YouTube Blob" — never dashes or underscores',
+      ),
     title: z.string().describe('One-line job, e.g. "Inbox triage"'),
     description: z.string().describe("What the new Blob is responsible for"),
+    instructions: z
+      .string()
+      .describe(
+        "This Blob's hand-written role, used verbatim as its system " +
+          "instructions: how it should behave and do the job, not just what the " +
+          "job is — the new Blob has no other setup, so this is required",
+      ),
   });
   const spawn: AgentTool<typeof spawnParameters> = {
     name: "spawn_blob",
     description:
-      "Create a new Blob for a genuinely separate ongoing job that deserves " +
-      "its own memories, routines and files. Not for a subtask of what you " +
-      "are doing now — use run_subagent for that. The new Blob starts empty " +
-      "and does nothing until it is given a routine or a message.",
+      "Create a new, fully configured Blob for a genuinely separate ongoing " +
+      "job that deserves its own memories, routines and files — it appears " +
+      "in the user's sidebar immediately, ready to be messaged. Not for a " +
+      "subtask of what you are doing now — use run_subagent for that. The " +
+      "new Blob does nothing until it is given a routine or a message.",
     parameters: spawnParameters,
     executionMode: "sequential",
     execute: (args) => {
-      const name = args.name.trim().slice(0, MAX_BLOB_NAME_LENGTH);
+      // Words, not slugs: "youtube-blob" is displayed as "YouTube Blob".
+      const name = formatBlobName(args.name).slice(0, MAX_BLOB_NAME_LENGTH);
       if (name === "") {
         return "Every Blob needs a name.";
       }
       const existing = roster.list();
       if (existing.some((blob) => blob.name.toLowerCase() === name.toLowerCase())) {
-        // The refusal IS the idempotency key: a retried call is a no-op.
+        // The refusal IS the idempotency key: [REDACTED] retried call is a no-op.
         return `A Blob named ${name} already exists. Message that one instead.`;
       }
       if (existing.length >= MAX_BLOBS) {
         return `There are already ${MAX_BLOBS} Blobs, the maximum. Delete one first.`;
       }
+      const written = args.instructions.trim();
+      // Required, and enforced rather than assumed: a spawned Blob gets no
+      // setup round, so blank instructions would leave it role-less forever
+      // with nothing in the UI to reveal why. A refusal names the fix.
+      if (written === "") {
+        return "Every new Blob needs instructions: how it should behave and do the job.";
+      }
       roster.create({
         name,
         title: args.title.trim().slice(0, 120),
         description: args.description.trim().slice(0, 600),
+        // Capped like every other model-written field; this text becomes the
+        // new Blob's verbatim role, so a runaway generation must not paste
+        // itself into another Blob's system prompt.
+        instructions: written.slice(0, 2_000),
       });
       return `Created ${name}.`;
+    },
+  };
+
+  const updateBlobParameters = z.object({
+    name: z.string().describe("Name of the Blob to update"),
+    title: z.string().optional().describe('New one-line job, e.g. "Inbox triage"'),
+    description: z.string().optional().describe("New summary of what this Blob is responsible for"),
+    instructions: z
+      .string()
+      .optional()
+      .describe(
+        "New hand-written role, used verbatim as this Blob's system " +
+          "instructions — how it should behave and do the job. Replaces the old " +
+          "role entirely, so write the complete role, not just the change",
+      ),
+  });
+  const updateBlob: AgentTool<typeof updateBlobParameters> = {
+    name: "update_blob",
+    description:
+      "Update another Blob's configuration — title, description or " +
+      "instructions. This is the right way to give a Blob better or changed " +
+      "instructions: never send a new role as a message, because a message is " +
+      "data the recipient is told not to obey. Omitted fields are left alone.",
+    parameters: updateBlobParameters,
+    executionMode: "sequential",
+    execute: (args) => {
+      const target = roster
+        .list()
+        .find((blob) => blob.name.toLowerCase() === args.name.trim().toLowerCase());
+      if (target === undefined) {
+        return `No Blob named ${args.name.trim()} — check the name against the roster you were shown.`;
+      }
+      const title = args.title?.trim();
+      const description = args.description?.trim();
+      const instructions = args.instructions?.trim();
+      // A no-op update reads as success to the model and silently changes
+      // nothing the user asked for; refuse so it re-reads its own arguments.
+      if (
+        (title === undefined || title === "") &&
+        (description === undefined || description === "") &&
+        (instructions === undefined || instructions === "")
+      ) {
+        return "Nothing to update: give at least one of title, description or instructions.";
+      }
+      const changed = roster.update(target.id, {
+        ...(title ? { title: title.slice(0, 120) } : {}),
+        ...(description ? { description: description.slice(0, 600) } : {}),
+        // Blank means omitted, never erased: instructions are a required
+        // role, and a Blob configured into blankness has no way back.
+        ...(instructions ? { instructions: instructions.slice(0, 2_000) } : {}),
+      });
+      return changed ? `Updated ${target.name}.` : `No Blob named ${args.name.trim()}.`;
     },
   };
 
@@ -850,7 +941,7 @@ export function makeRosterTools(roster: RosterAccess, selfName: string): AgentTo
     },
   };
 
-  return [spawn, remove, message];
+  return [spawn, updateBlob, remove, message];
 }
 
 /**

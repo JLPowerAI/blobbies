@@ -78,6 +78,8 @@ interface SidebarProps {
   onRenameGroup: (id: string, name: string) => void;
   composing: boolean;
   userName: string;
+  /** The Blob whose turn is running; its row and pin tile animate busy. */
+  thinkingId: string | null;
   onSelect: (id: string) => void;
   onStartCompose: () => void;
   onOpenSettings: () => void;
@@ -216,6 +218,7 @@ export function Sidebar({
   onRenameGroup,
   composing,
   userName,
+  thinkingId,
   onSelect,
   onStartCompose,
   onOpenSettings,
@@ -646,7 +649,11 @@ export function Sidebar({
               every row, and it vanished entirely when the sidebar collapsed
               to avatars — exactly when it is the only signal left. */}
           <span className="agent-row-face">
-            <BlobAvatar tone={agent.tone} shape={agent.shape} />
+            <BlobAvatar
+              tone={agent.tone}
+              shape={agent.shape}
+              variant={thinkingId === agent.id ? "thinking" : "idle"}
+            />
             {agent.unread === true ? (
               <span className="unread-dot" role="status" aria-label="Unread messages" />
             ) : null}
@@ -776,7 +783,12 @@ export function Sidebar({
                     openContextMenu(event, { kind: "blob", agentId: agent.id })
                   }
                 >
-                  <BlobAvatar tone={agent.tone} shape={agent.shape} size={44} />
+                  <BlobAvatar
+                    tone={agent.tone}
+                    shape={agent.shape}
+                    size={44}
+                    variant={thinkingId === agent.id ? "thinking" : "idle"}
+                  />
                   <span className="pin-tile-name">{agent.name}</span>
                 </button>
               ))

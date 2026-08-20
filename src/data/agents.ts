@@ -6,6 +6,7 @@
 // Type-only, so this never becomes a runtime cycle (attachments → blob-tools
 // → this module).
 import type { Attachment } from "@/lib/attachments";
+import { configFieldEmpty } from "@/lib/prompt";
 
 export type AvatarTone =
   | "purple"
@@ -27,6 +28,69 @@ export type AgentShape =
   | "pebble"
   | "triangle"
   | "squircle";
+
+/** Every tone/shape the avatar renderer knows, in UI order. */
+export const AVATAR_TONES: AvatarTone[] = [
+  "purple",
+  "blue",
+  "green",
+  "teal",
+  "brown",
+  "orange",
+  "gold",
+  "red",
+  "pink",
+  "gray",
+];
+export const AGENT_SHAPES: AgentShape[] = [
+  "sphere",
+  "droplet",
+  "cloud",
+  "egg",
+  "pebble",
+  "triangle",
+  "squircle",
+];
+
+/**
+ * A style for a newly born Blob that still has one nobody else wears.
+ *
+ * Unused-first, so a batch of spawns reads as a varied set rather than N gray
+ * spheres; once the roster outgrows the palette it falls back to any member.
+ */
+export function freshBlobStyle(taken: { tone: AvatarTone; shape: AgentShape }[]): {
+  tone: AvatarTone;
+  shape: AgentShape;
+} {
+  const pick = <T>(options: T[]): T | undefined =>
+    options[Math.floor(Math.random() * options.length)];
+  const tones = AVATAR_TONES.filter((tone) => !taken.some((blob) => blob.tone === tone));
+  const shapes = AGENT_SHAPES.filter((shape) => !taken.some((blob) => blob.shape === shape));
+  // The literal fallbacks are unreachable (both palettes are non-empty), but
+  // indexed access is `T | undefined` under noUncheckedIndexedAccess.
+  return {
+    tone: pick(tones) ?? pick(AVATAR_TONES) ?? "gray",
+    shape: pick(shapes) ?? pick(AGENT_SHAPES) ?? "sphere",
+  };
+}
+
+/**
+ * A name the sidebar can display as words: "youtube-blob" → "YouTube Blob".
+ *
+ * Models love slugging names; people read Title Case. Dashes and underscores
+ * become spaces, whitespace collapses, each word capitalises. Applied before
+ * the duplicate check, so "youtube-blob" and "YouTube Blob" are the same
+ * Blob and a retried spawn stays idempotent.
+ */
+export function formatBlobName(raw: string): string {
+  return raw
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .map((word) => (word === "" ? word : (word[0] ?? "").toUpperCase() + word.slice(1)))
+    .join(" ");
+}
 
 export interface Agent {
   id: string;
@@ -281,6 +345,15 @@ export function transcriptFor(agent: Agent): Message[] {
   const seeded = transcripts[agent.id];
   if (seeded !== undefined) {
     return seeded;
+  }
+  // Only the unconfigured get the setup greeting. A Blob born configured —
+  // spawner-set title/description (spawn_blob requires both), or one whose
+  // setup round already ran — would otherwise open with "tell me what to
+  // handle" over a role it already has; worse, this history is fed to the
+  // model too, where those canned lines read as the Blob's own prior words
+  // and quietly argue against the configuration it was born with.
+  if (!configFieldEmpty(agent.title) || !configFieldEmpty(agent.description)) {
+    return [];
   }
   // Fixed text, not agent.snippet: the snippet follows the latest activity,
   // and the greeting must not echo it. Two entries, matching how a real

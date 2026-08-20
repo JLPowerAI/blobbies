@@ -176,17 +176,21 @@ export function blobSystemPrompt(
     "Tools",
     // Short name-first lines, one per tool: a catalog, not a rulebook — the
     // when/why detail lives in each tool's own description, and measured
-    // against deepseek the longer prose version scored worse. Named
-    // unconditionally though only routine turns carry the roster/routine
-    // tools: the system prompt has no scope, and a line naming a tool the
-    // model cannot see costs less than the confusion it prevents when it can.
+    // against deepseek the longer prose version scored worse. Roster lines
+    // are dropped for group turns — the catalog withholds those tools there
+    // (App.tsx), and naming a tool the model cannot see is the measured
+    // misfire this list must never repeat.
     "- web_search: look up public facts you don't know (news, docs, prices).\n" +
       "- web_fetch: read one page; after a search, fetch the best result before " +
       "answering from snippets.\n" +
       "- run_subagent: one bounded research step inside this task.\n" +
-      "- spawn_blob: start a separate ongoing job — never a step of this task.\n" +
-      "- message_blob: message another Blob; its reply arrives later in its own " +
-      "conversation.\n" +
+      (extensions.group === undefined
+        ? "- spawn_blob: start a separate ongoing job — never a step of this task.\n" +
+          "- message_blob: message another Blob; its reply arrives later in its own " +
+          "conversation.\n" +
+          "- update_blob: change another Blob's title, description or instructions — " +
+          "a new role goes here, never in a message.\n"
+        : "") +
       "- create_routine / update_routine / delete_routine / list_routines: " +
       "your own scheduled work \u2014 recurring or a delayed one-shot ('check on me " +
       "in 10 minutes' is kind 'once'); times are the user's local time, and only " +

@@ -599,7 +599,9 @@ select:focus:not(:focus-visible) {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--accent-blue);
+  /* Green, not the app accent: the dot means "done, come read it" — work
+     finished and waiting, not something addressed to you mid-flight. */
+  background: var(--accent-green);
 }
 
 /* Badged on the avatar's bottom-right, not trailing the snippet: at the end
@@ -626,8 +628,8 @@ select:focus:not(:focus-visible) {
 
 /* On a group header the dot carries the same sweep as an @mention: both mean
    “something addressed to you is here”, and one shared motion is what makes
-   that legible without a legend. Colour is the app accent — a group has no
-   single Blob's colour to borrow. */
+   that legible without a legend. It inherits the base dot's green — the same
+   "finished work is waiting" meaning, on a group that has no single Blob. */
 .unread-dot-shimmer {
   margin-inline-start: 6px;
   animation: unread-pulse 3.6s ease-in-out infinite;
@@ -3134,9 +3136,12 @@ a.modal-button {
   border-color: #d99a2b;
 }
 
-/* System status line in the transcript (routine fired, run interrupted). */
+/* System status line in the transcript (routine fired, Blob spawned,
+   hand-off arrived). Short and legible: bold in the accent green — these say
+   "work happened / finished", matching the unread dot's meaning. */
 .transcript-event {
-  font-style: italic;
+  font-weight: 600;
+  color: var(--accent-green);
 }
 
 /* Bar under the transcript while an "action" ask waits on the user. */

@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Agent } from "@/data/agents";
+import { AGENT_SHAPES, type Agent, AVATAR_TONES } from "@/data/agents";
 import type { streamBlobTurn as StreamBlobTurn } from "@/lib/ai";
 import type { SchedulerHost } from "@/lib/scheduler";
 import type { Settings } from "@/lib/store";
@@ -91,7 +91,8 @@ const { makeRosterTools } = await import("@/lib/blob-tools");
 const toolContext = { signal: new AbortController().signal, toolCallId: "t1" };
 
 /**
- * Run a roster tool exactly as a routine turn would.
+ * Run a roster tool exactly as a turn's catalog would — chat and routine
+ * turns both offer these now.
  *
  * Deliberately the REAL `makeRosterTools` against the REAL `RosterAccess`
  * App built — blob-tools.test.ts already covers the refusals against a fake
@@ -110,6 +111,16 @@ async function callRosterTool(name: string, args: Record<string, unknown>) {
     throw new Error(`no such tool: ${name}`);
   }
   return String(await tool.execute(args, toolContext));
+}
+
+/**
+ * Who spoke in a captured turn — the system prompt opens "You are <Name>.",
+ * the one identity marker a turn always carries (a group turn has no roster
+ * to read a selfName from).
+ */
+function speakerName(call: TurnOptions | undefined): string {
+  const prompt = String(call?.messages.find((entry) => entry.role === "system")?.content ?? "");
+  return /^You are (.+)\.$/m.exec(prompt)?.[1] ?? "";
 }
 
 /**
@@ -257,6 +268,40 @@ describe("turn wiring", () => {
     }
   });
 
+  it("animates the sidebar row's avatar while its turn runs", async () => {
+    const user = userEvent.setup();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    script = [
+      async () => {
+        // Held open so the mid-turn state is observable — the whole case: a
+        // turn running while the user is looking at the sidebar, not the chat.
+        await held;
+        return "Done.";
+      },
+    ];
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+    await user.type(screen.getByPlaceholderText("Message Ken"), "hello{Enter}");
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    // "Ken" alone is ambiguous — the account row says "Ken Kai" too — so pick
+    // the conversation row itself.
+    const row = within(conversations)
+      .getAllByRole("button", { name: /Ken/ })
+      .find((button) => button.classList.contains("agent-row"));
+    expect(row).toBeDefined();
+    // Mid-turn: the row's avatar animates busy, exactly like the chat pane's.
+    await waitFor(() => expect(row?.querySelector(".blob-avatar-thinking")).not.toBeNull());
+
+    release();
+    await waitFor(() => expect(screen.getByText("Done.")).toBeInTheDocument());
+    // Settled: the row rests — the animation is a state, not a stuck decoration.
+    await waitFor(() => expect(row?.querySelector(".blob-avatar-thinking")).toBeNull());
+  });
+
   it("puts an attached file in the Blob's files and fences its text into the prompt", async () => {
     const user = userEvent.setup();
     script = [() => "Read it."];
@@ -366,12 +411,13 @@ describe("turn wiring", () => {
         name: "Filer",
         title: "Files things",
         description: "Keeps the inbox tidy.",
+        instructions: "Be terse. File by sender, then date.",
       }),
     ).toBe("Created Filer.");
 
     // Visible to the user, not just in memory.
     await waitFor(() => expect(screen.getByRole("button", { name: /Filer/ })).toBeInTheDocument());
-    // The spawning Blob keeps the view: a routine runs in the background and
+    // The spawning Blob keeps the view: the turn runs in the background and
     // must not yank the user out of the conversation they are reading.
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Ken");
 
@@ -379,8 +425,77 @@ describe("turn wiring", () => {
     // returns, so this write cannot sit in the debounce queue.
     const filer = (await store.loadRoster())?.find((blob) => blob.name === "Filer");
     expect(filer?.title).toBe("Files things");
+    // Born configured: the spawner's hand-written role persisted with it, so
+    // the new Blob's first prompt already knows how to behave.
+    expect(filer?.instructions).toBe("Be terse. File by sender, then date.");
+    // Born styled: a random tone/shape nobody on the roster wears (see the
+    // variety test below), never the drab gray-sphere default.
+    expect(AVATAR_TONES).toContain(filer?.tone);
+    expect(AGENT_SHAPES).toContain(filer?.shape);
     // A real id, so the scheduler and per-Blob slices can address it.
     expect(filer?.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("gives each spawned Blob a different style, not N gray spheres", async () => {
+    const user = userEvent.setup();
+    script = [() => "Done."];
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+    await say(user, "hello");
+
+    for (const name of ["Filer", "Quill"]) {
+      await callRosterTool("spawn_blob", {
+        name,
+        title: "t",
+        description: "d",
+        instructions: "Does the thing.",
+      });
+    }
+    const roster = await store.loadRoster();
+    const styles = roster
+      ?.filter((blob) => blob.name !== "Ken")
+      .map((blob) => `${blob.tone}/${blob.shape}`);
+    // Unused-first picking: with three Blobs and 10 tones / 7 shapes, both
+    // spawns are guaranteed a style the roster didn't already wear — so the
+    // two differ, and neither repeats Ken's blue sphere.
+    expect(new Set(styles).size).toBe(2);
+    expect(styles).not.toContain("blue/sphere");
+  });
+
+  it("updates another Blob's configuration through update_blob", async () => {
+    const user = userEvent.setup();
+    script = [() => "Done."];
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+    await say(user, "hello");
+    await callRosterTool("spawn_blob", {
+      name: "Filer",
+      title: "t",
+      description: "d",
+      instructions: "Files things.",
+    });
+
+    expect(
+      await callRosterTool("update_blob", {
+        name: "Filer",
+        instructions: "Be terse. File by sender, then date.",
+      }),
+    ).toBe("Updated Filer.");
+    // The roster save is debounced, so waitFor for the flush; the config
+    // write is immediate either way.
+    await waitFor(async () =>
+      expect((await store.loadRoster())?.find((blob) => blob.name === "Filer")?.instructions).toBe(
+        "Be terse. File by sender, then date.",
+      ),
+    );
+    // Short status pill in the acting conversation, not a text dump.
+    expect(await screen.findByText("Filer updated")).toBeInTheDocument();
+
+    // Unknown name and empty patch are refused, not silently "updated".
+    expect(await callRosterTool("update_blob", { name: "Ghost", title: "t" })).toContain(
+      "No Blob named Ghost",
+    );
+    expect(await callRosterTool("update_blob", { name: "Filer" })).toContain("Nothing to update");
   });
 
   it("message_blob wakes the other Blob in its own conversation, fenced", async () => {
@@ -420,9 +535,53 @@ describe("turn wiring", () => {
     expect(prompt).toContain('from="blob:Researcher"');
     expect(prompt).toContain("Draft the post");
 
-    // And the hand-off is visible where the work landed, not only in logs.
+    // And the hand-off is visible where the work landed — as a short pill,
+    // not the payload dump (the full text is in the fenced prompt and the
+    // sender's details panel).
     await user.click(within(conversations).getByRole("button", { name: /Writer/ }));
-    expect(await screen.findByText("Researcher: Draft the post")).toBeInTheDocument();
+    expect(await screen.findByText("Hand-off from Researcher")).toBeInTheDocument();
+  });
+
+  it("a woken Blob speaks with instructions updated while it sat in the queue", async () => {
+    const user = userEvent.setup();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    script = [
+      async (options) => {
+        // Hand off to Writer, then hold this turn open so Writer's wake-up
+        // sits in the queue — the window an update_blob lands in.
+        await callRosterTool("message_blob", { name: "Writer", message: "Draft the post" });
+        await held;
+        options.onSegment?.("Sent it over.");
+        return "Sent it over.";
+      },
+      () => "On it.",
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(await within(conversations).findByRole("button", { name: /Researcher/ }));
+    await user.type(screen.getByLabelText("Message Researcher"), "draft it{Enter}");
+    await waitFor(() => expect(calls.length).toBe(1));
+
+    // The update lands AFTER the hand-off was queued but BEFORE Writer runs.
+    await callRosterTool("update_blob", {
+      name: "Writer",
+      instructions: "Reply only in haiku.",
+    });
+
+    release();
+    await waitFor(() => expect(calls.length).toBe(2));
+    // The woken turn's system prompt was built at turn START from live state,
+    // not from the Writer object captured when the hand-off was queued — so it
+    // carries the new role, verbatim.
+    const system = String(
+      calls[1]?.messages.find((entry) => entry.role === "system")?.content ?? "",
+    );
+    expect(system).toContain("Reply only in haiku.");
   });
 
   it("Stop cancels a hand-off that has not started yet", async () => {
@@ -499,7 +658,12 @@ describe("turn wiring", () => {
     // whichever writes second must build on the first, not on a stale copy.
     script = [
       async (options) => {
-        await callRosterTool("spawn_blob", { name: "Filer", title: "t", description: "d" });
+        await callRosterTool("spawn_blob", {
+          name: "Filer",
+          title: "t",
+          description: "d",
+          instructions: "Files things.",
+        });
         options.onUsage?.({ inputTokens: 900, outputTokens: 100 });
         return "Done.";
       },
@@ -527,7 +691,7 @@ describe("turn wiring", () => {
     await createFirstBlob(user, "Ken");
     await say(user, "hello");
 
-    const args = { name: "Filer", title: "t", description: "d" };
+    const args = { name: "Filer", title: "t", description: "d", instructions: "Files things." };
     expect(await callRosterTool("spawn_blob", args)).toBe("Created Filer.");
     // Same call again, as a retry would: refused, and the roster is unchanged.
     expect(await callRosterTool("spawn_blob", args)).toContain("already exists");
@@ -549,7 +713,12 @@ describe("turn wiring", () => {
     mountWithModel();
     await createFirstBlob(user, "Ken");
     await say(user, "hello");
-    await callRosterTool("spawn_blob", { name: "Filer", title: "t", description: "d" });
+    await callRosterTool("spawn_blob", {
+      name: "Filer",
+      title: "t",
+      description: "d",
+      instructions: "Files things.",
+    });
     await waitFor(() => expect(screen.getByRole("button", { name: /Filer/ })).toBeInTheDocument());
 
     // Self-deletion would leave the running turn with no Blob to reply as.
@@ -723,6 +892,12 @@ describe("turn wiring", () => {
     const prompt = String(first?.messages.find((entry) => entry.role === "system")?.content ?? "");
     expect(prompt).toContain("Group chat");
     expect(prompt).toContain("Writer");
+    // No roster tools in a room: spawning from a group makes ownership
+    // unreadable (which member birthed this Blob, in front of everyone?), so
+    // neither the catalog nor the prompt carries spawn/message/delete_blob.
+    expect(first?.roster).toBeUndefined();
+    expect(prompt).not.toContain("spawn_blob");
+    expect(prompt).not.toContain("message_blob");
 
     // The second member sees the first's line as somebody else's, labelled:
     // as an assistant message it would read as its own earlier answer.
@@ -755,7 +930,9 @@ describe("turn wiring", () => {
 
     await waitFor(() => expect(screen.getByText("On it.")).toBeInTheDocument());
     expect(calls.length).toBe(1);
-    expect(calls[0]?.roster?.selfName).toBe("Writer");
+    // Group turns carry no roster (spawning from a room is withheld), so the
+    // speaker is read from its system prompt's identity line.
+    expect(speakerName(calls[0])).toBe("Writer");
   });
 
   it("a fact told to a group is saved once, shared, not per Blob", async () => {
@@ -821,7 +998,7 @@ describe("turn wiring", () => {
     expect(screen.queryByText("PASS")).not.toBeInTheDocument();
     // But it must leave a trace: the thinking blob already appeared for it,
     // and vanishing without one is indistinguishable from a crash.
-    expect(await screen.findByText(/Writer had nothing to add/)).toBeInTheDocument();
+    expect(await screen.findByText(/Writer stayed out/)).toBeInTheDocument();
     window.dispatchEvent(new Event("beforeunload"));
     const saved = (await store.loadGroupTranscript(GROUP_ID)) ?? [];
     expect(
@@ -848,7 +1025,7 @@ describe("turn wiring", () => {
     // anyway, a stray "PASS" is better than a silent non-answer to a direct
     // question — the user would otherwise have no idea anything ran.
     expect(await screen.findByText("PASS")).toBeInTheDocument();
-    expect(screen.queryByText(/No one here picked this up/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No one picked this up/)).not.toBeInTheDocument();
   });
 
   it("has every member answer @everyone — nobody may opt out", async () => {
@@ -876,7 +1053,7 @@ describe("turn wiring", () => {
     // Both replies stand. A stray "PASS" on screen is a prompt problem the
     // user can see; deleting it would hide that the Blob answered at all.
     await waitFor(() => expect(screen.getAllByText("PASS")).toHaveLength(2));
-    expect(screen.queryByText(/No one here picked this up/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No one picked this up/)).not.toBeInTheDocument();
     expect(screen.queryByText(/had nothing to add/)).not.toBeInTheDocument();
   });
 
@@ -946,7 +1123,7 @@ describe("turn wiring", () => {
     // blobs appeared, so both are accounted for by name — and the way out is
     // one @ away.
     expect(
-      await screen.findByText(/Researcher and Writer had nothing to add \u2014 @ a Blob/),
+      await screen.findByText(/Researcher and Writer stayed out \u2014 @ a Blob/),
     ).toBeInTheDocument();
   });
 
@@ -1017,7 +1194,7 @@ describe("turn wiring", () => {
     await user.click(within(conversations).getByRole("button", { name: "Launch" }));
     await user.type(screen.getByLabelText(/^Message Launch/), "thanks all{Enter}");
 
-    expect(await screen.findByText(/No one here picked this up/)).toBeInTheDocument();
+    expect(await screen.findByText(/No one picked this up/)).toBeInTheDocument();
     expect(calls.length).toBe(0);
   });
 
@@ -1049,7 +1226,7 @@ describe("turn wiring", () => {
     // referred to stays out, and a Blob that has spoken never speaks twice —
     // between them, an exchange always ends.
     expect(calls.length).toBe(2);
-    expect(calls[1]?.roster?.selfName).toBe("Writer");
+    expect(speakerName(calls[1])).toBe("Writer");
   });
 
   it("asks only the mentioned member of a group", async () => {
@@ -1070,7 +1247,7 @@ describe("turn wiring", () => {
     await waitFor(() => expect(screen.getByText("On it.")).toBeInTheDocument());
     // One turn, and it is the mentioned Blob's: the other member stays quiet.
     expect(calls.length).toBe(1);
-    expect(calls[0]?.roster?.selfName).toBe("Writer");
+    expect(speakerName(calls[0])).toBe("Writer");
   });
 
   it("gives the turn its own identity, and no servers when none are configured", async () => {

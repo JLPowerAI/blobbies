@@ -21,6 +21,7 @@ import {
   type Agent,
   type AgentShape,
   type AvatarTone,
+  freshBlobStyle,
   GREETING,
   MAX_BLOB_NAME_LENGTH,
   MAX_BLOBS,
@@ -328,7 +329,7 @@ export function App() {
       return [];
     }
   });
-  /** Local MCP servers; only enabled ones are contacted, on routine turns. */
+  /** Local MCP servers; only enabled ones are contacted, on every turn. */
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   /**
    * Installed skills, named in every Blob's prompt.
@@ -694,6 +695,12 @@ export function App() {
     setSelectedGroupId(null);
     setMode({ kind: "chat" });
     setDetailView({ kind: "info" });
+    // Reading it is what clears the dot — same rule as a group's (openGroup):
+    // a routine's or hand-off's reply badgeing a row the user is now looking
+    // at would be a dot that never goes away.
+    if (agentsRef.current.some((agent) => agent.id === id && agent.unread === true)) {
+      updateBlob(id, { unread: false });
+    }
   };
 
   /** Open a group chat. The details panel is per-Blob, so it closes. */
@@ -1250,7 +1257,8 @@ export function App() {
   };
 
   /**
-   * The roster as a routine's tools may touch it (spawn_blob / delete_blob).
+   * The roster as any turn's tools may touch it (spawn_blob / message_blob /
+   * delete_blob) — chat turns included, not just routines.
    * Reads go through the ref: a tool executes long after its render.
    *
    * A spawned Blob does NOT steal the view — the user may be reading another
@@ -1260,7 +1268,10 @@ export function App() {
    */
   const rosterAccess: RosterAccess = {
     list: () => agentsRef.current.map(({ id, name }) => ({ id, name })),
-    create: ({ name, title, description }) => {
+    create: ({ name, title, description, instructions }) => {
+      // A style nobody on the roster wears yet, so a batch of spawns reads as
+      // a varied set instead of N default gray spheres.
+      const { tone, shape } = freshBlobStyle(agentsRef.current);
       const blob: Agent = {
         id: newBlobId(),
         // Model-chosen, so the likeliest of all to collide with a sibling.
@@ -1270,11 +1281,16 @@ export function App() {
         ),
         title,
         description,
+        // The spawner's hand-written role, required by the spawn tool and used
+        // verbatim by the new Blob from its first prompt on.
+        instructions,
         time: "Now",
         lastActivityAt: Date.now(),
-        snippet: GREETING,
-        tone: "gray",
-        shape: "sphere",
+        // The job line, not the setup greeting: this Blob is born configured,
+        // so the sidebar should say what it does, not ask the user to decide.
+        snippet: title,
+        tone,
+        shape,
       };
       const next = commitAgents((previous) => [blob, ...previous]);
       // Not debounced: the id is referenced the moment the tool returns.
@@ -1282,6 +1298,14 @@ export function App() {
       store.saveBlobConfig(blob.id, blob);
     },
     delete: deleteBlob,
+    update: (id, patch) => {
+      if (!agentsRef.current.some((candidate) => candidate.id === id)) {
+        return false;
+      }
+      // updateBlob commits state and persists roster + config in one go.
+      updateBlob(id, patch);
+      return true;
+    },
     // Replaced per turn in `requestReply`, which is where the sender and its
     // hop count are known. Unreachable in practice; a refusal beats a throw.
     message: () => "Messaging another Blob is not available in this turn.",
@@ -1329,11 +1353,14 @@ export function App() {
         );
       }
       // Visible in the receiving conversation, so a hand-off is never work the
-      // user cannot see happening.
+      // user cannot see happening — a short pill, not the payload: the full
+      // text reaches the Blob through its prompt and stays in the sender's
+      // details panel, and a transcript that dumps whole instructions is a
+      // wall of text between every exchange.
       appendMessage(target.id, {
         id: `event-${crypto.randomUUID()}`,
         kind: "event",
-        text: `${from.name}: ${message.text}`,
+        text: `Hand-off from ${from.name}`,
         timestampMs: Date.now(),
       });
       if (agent?.id !== target.id) {
@@ -1341,7 +1368,10 @@ export function App() {
       }
       // The fenced form, built beside `wrapUntrusted` in blob-tools — the
       // receiver must read this as data, not as orders from its user.
-      return requestReply(target, [...transcriptFor(target), ...sent], {
+      // Re-resolved here for the same reason requestReply does it: this Blob
+      // may have been updated while its wake-up sat in the queue.
+      const fresh = agentsRef.current.find((candidate) => candidate.id === target.id) ?? target;
+      return requestReply(fresh, [...transcriptFor(fresh), ...sent], {
         trigger: "routine",
         prompt: message.prompt,
         hop: hop + 1,
@@ -1410,6 +1440,13 @@ export function App() {
   ): Promise<"done" | "failed" | "cancelled"> => {
     const trigger = turn?.trigger ?? "user";
     const group = turn?.group;
+    // A queued turn runs long after it was queued, and the `target` it was
+    // handed is the object captured THEN: an update_blob or a Settings edit
+    // that landed while it waited would otherwise have this turn speak with
+    // the Blob's old name and instructions. Re-resolve from the ref at turn
+    // start — the id is stable, everything mutable is fresh. The fallback is
+    // a Blob deleted mid-queue: it still owes its queued reply.
+    const speaker = agentsRef.current.find((candidate) => candidate.id === target.id) ?? target;
     // Where the words go. Everything else in this function stays keyed to the
     // Blob: one Blob can be mid-turn in a group and own a run of its own.
     const convoId = group === undefined ? target.id : groupConversationId(group.id);
@@ -1445,7 +1482,7 @@ export function App() {
       return "failed";
     }
     // One backend for the whole turn: attachment reads below and the fs tools
-    // a routine turn gets both point at this Blob's sandbox.
+    // the turn's catalog carries both point at this Blob's sandbox.
     const home = homeFor(target.id);
     const aiMessages: AiMessage[] = [
       // Byte-stable across turns (no clock inside): the system prompt plus the
@@ -1454,12 +1491,12 @@ export function App() {
       {
         role: "system",
         content: blobSystemPrompt(
-          target,
+          speaker,
           { userName, timezone },
           {
             userMemories,
-            // Named in the prompt for both scopes so the Blob knows what it
-            // has; the tools themselves stay routine-only.
+            // Named in the prompt so the Blob knows what it has — which is
+            // also the catalog's, on any turn.
             mcpServers: mcpServers.map((server) => server.name),
             // Already sorted by the Rust side; passed through untouched so
             // the cached prompt prefix stays byte-identical between turns.
@@ -1624,7 +1661,7 @@ export function App() {
       const content =
         group === undefined || bubbleCount > 0
           ? rawContent
-          : stripSelfMention(rawContent, target.name);
+          : stripSelfMention(rawContent, speaker.name);
       if (content.trim() === "") {
         return;
       }
@@ -1683,18 +1720,54 @@ export function App() {
         thinking: reasoning,
         forceConfigure:
           trigger === "user" &&
-          configFieldEmpty(target.title) &&
-          configFieldEmpty(target.description),
+          configFieldEmpty(speaker.title) &&
+          configFieldEmpty(speaker.description),
         scope: trigger === "user" ? "chat" : "routine",
         ...(turn?.intent === undefined ? {} : { intent: turn.intent }),
         home,
-        roster: {
-          access: {
-            ...rosterAccess,
-            message: (id, message) => handOff(target, id, message, turn?.hop ?? 0),
-          },
-          selfName: target.name,
-        },
+        // No roster tools inside a group: a spawn from a room makes ownership
+        // unreadable (which member birthed this Blob, in front of everyone?)
+        // and a message_blob reply would land in a transcript the room never
+        // sees. Groups collaborate by @-mention; spawning is a 1:1 or
+        // autonomous-turn act. The system prompt omits the roster lines for
+        // the same turns (see prompt.ts) so no tool is named that cannot be
+        // called.
+        ...(group === undefined
+          ? {
+              roster: {
+                access: {
+                  ...rosterAccess,
+                  message: (id, message) => handOff(speaker, id, message, turn?.hop ?? 0),
+                  // Roster writes pill into THIS conversation, short by design:
+                  // the tool call's full arguments live in the details panel,
+                  // so the transcript carries a status word, not a text dump.
+                  create: (blob) => {
+                    rosterAccess.create(blob);
+                    appendMessage(convoId, {
+                      id: `event-${crypto.randomUUID()}`,
+                      kind: "event",
+                      text: `Spawned ${blob.name}`,
+                      timestampMs: Date.now(),
+                    });
+                  },
+                  update: (id, patch) => {
+                    const changed = rosterAccess.update(id, patch);
+                    if (changed) {
+                      const who = agentsRef.current.find((candidate) => candidate.id === id)?.name;
+                      appendMessage(convoId, {
+                        id: `event-${crypto.randomUUID()}`,
+                        kind: "event",
+                        text: who === undefined ? "Blob updated" : `${who} updated`,
+                        timestampMs: Date.now(),
+                      });
+                    }
+                    return changed;
+                  },
+                },
+                selfName: speaker.name,
+              },
+            }
+          : {}),
         routines: routineAccess(target.id),
         mcpServers,
         // Three meta-tools, gated on having something to reach.
@@ -1814,11 +1887,9 @@ export function App() {
     }
     // Persist once the reply settled; per-delta saves would thrash the store.
     flushTranscript();
-    // Only a routine turn carries file tools, so only it can have written
-    // something the Files list is not showing yet.
-    if (trigger !== "user") {
-      setFilesKey((key) => key + 1);
-    }
+    // Any turn can have written a file now (the catalog is shared), so the
+    // Files list re-reads whenever a turn settles.
+    setFilesKey((key) => key + 1);
     return run.status === "waiting_input" ? "done" : outcome;
   };
 
@@ -2062,8 +2133,7 @@ export function App() {
       // that ran and stayed out. Still said out loud: a group where nothing
       // happens is indistinguishable from a broken one, and the fix is one @
       // away.
-      const nobodySpoke = () =>
-        note("No one here picked this up \u2014 @ a Blob to ask them directly.");
+      const nobodySpoke = () => note("No one picked this up — @ a Blob");
       if (queue.length === 0) {
         nobodySpoke();
         return "done" as const;
@@ -2178,11 +2248,7 @@ export function App() {
           passed.length === 1
             ? passed[0]
             : `${passed.slice(0, -1).join(", ")} and ${passed.at(-1)}`;
-        note(
-          answered
-            ? `${who} had nothing to add.`
-            : `${who} had nothing to add \u2014 @ a Blob to ask them directly.`,
-        );
+        note(answered ? `${who} stayed out.` : `${who} stayed out — @ a Blob`);
       } else if (!answered) {
         nobodySpoke();
       }
@@ -2340,6 +2406,7 @@ export function App() {
         onRenameGroup={renameGroup}
         composing={composing}
         userName={userName}
+        thinkingId={thinkingFor}
         onSelect={openConversation}
         onStartCompose={() => setMode({ kind: "palette" })}
         onOpenSettings={() => openSettingsModal("general")}

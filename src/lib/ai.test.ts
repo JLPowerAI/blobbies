@@ -138,7 +138,9 @@ describe("blobSystemPrompt", () => {
     // The ask-before-acting rule lives on app_run_tool's description, not
     // here: it is read at the moment it applies, and repeating it in the
     // prompt is the bloat this pass exists to remove. `ask_user` is never
-    // named — it only exists on routine turns, and most of this is chat.
+    // named — the prompt's tool list is a short catalog of what a small model
+    // most needs to be told exists, and ask_user's own description carries
+    // when to call it.
     expect(prompt).not.toContain("ask_user");
     expect(prompt).toContain("never guess a tool name");
 
@@ -222,6 +224,12 @@ describe("blobSystemPrompt", () => {
     // The label rule is the load-bearing part: another Blob's line arrives in
     // the user role, so unexplained it reads as the user's own words.
     expect(prompt).toContain("[Name]");
+    // A group turn's catalog withholds the roster tools (App.tsx: spawning
+    // from a room is unreadable ownership), so the prompt must not name
+    // them — a named-but-uncallable tool is the measured misfire.
+    expect(prompt).not.toContain("spawn_blob");
+    expect(prompt).not.toContain("message_blob");
+    expect(prompt).not.toContain("update_blob");
   });
 
   it("treats placeholder 'none' config as unconfigured, so the setup round re-arms", async () => {
@@ -553,16 +561,21 @@ describe("streamBlobTurn", () => {
     const streamed = requests[requests.length - 1];
     const exchange = JSON.stringify(((streamed?.messages ?? []) as unknown[]).slice(-2));
     expect(exchange).toContain("Created Afternoon check-in");
-    // The catalog the model actually saw: web pair plus the four routine
-    // tools. No hidden round ever runs — a routine is a tool call now.
+    // The catalog the model actually saw: web pair, the research helper,
+    // ask_user, the shell and the four routine tools. No hidden round ever
+    // runs — a routine is a tool call now.
     expect(offeredTools.slice().sort()).toEqual([
+      "ask_user",
       "create_routine",
       "delete_routine",
       "list_routines",
+      "run_command",
+      "run_subagent",
       "update_routine",
       "web_fetch",
       "web_search",
     ]);
+    // This turn passed no roster access, so no roster tool appears at all.
     // No op-round ever ran — the router's format schema contains "action",
     // never "op"; a routine is a plain tool call now.
     expect(requests.some((request) => JSON.stringify(request.format ?? {}).includes('"op"'))).toBe(
@@ -681,8 +694,15 @@ describe("streamBlobTurn", () => {
       onConfigure: () => {},
       onToolCall: (record) => records.push({ name: record.name, result: record.result }),
     });
-    // The catalog itself is the guarantee — no write tool for any model to misuse.
-    expect([...offeredTools].sort()).toEqual(["web_fetch", "web_search"]);
+    // The catalog itself is the guarantee — no memory or config write tool
+    // for any model to misuse; those belong to the router alone.
+    expect([...offeredTools].sort()).toEqual([
+      "ask_user",
+      "run_command",
+      "run_subagent",
+      "web_fetch",
+      "web_search",
+    ]);
     // Nothing persisted: the memory survived the misfire.
     expect(saved).toBeNull();
     expect(records[0]?.result).toContain("Unknown tool");
@@ -845,7 +865,13 @@ describe("streamBlobTurn routine scope", () => {
       scope: "routine",
       home: memoryHome(),
       roster: {
-        access: { list: () => [], create: () => {}, delete: () => {}, message: () => "sent" },
+        access: {
+          list: () => [],
+          create: () => {},
+          update: () => true,
+          delete: () => {},
+          message: () => "sent",
+        },
         selfName: "Ken",
       },
       memory: { list: () => [], save: () => {} },
@@ -867,6 +893,7 @@ describe("streamBlobTurn routine scope", () => {
       "run_command",
       "run_subagent",
       "spawn_blob",
+      "update_blob",
       "web_fetch",
       "web_search",
       "write_file",
@@ -890,7 +917,13 @@ describe("streamBlobTurn routine scope", () => {
       scope: "routine",
       home: memoryHome(),
       roster: {
-        access: { list: () => [], create: () => {}, delete: () => {}, message: () => "sent" },
+        access: {
+          list: () => [],
+          create: () => {},
+          update: () => true,
+          delete: () => {},
+          message: () => "sent",
+        },
         selfName: "Ken",
       },
       routines: { list: () => [], create: () => {}, update: () => false, delete: () => false },
@@ -904,13 +937,35 @@ describe("streamBlobTurn routine scope", () => {
     }
   });
 
-  it("chat scope keeps its tuned catalog: no fs/roster tools, but the routine tools ride along", async () => {
-    // The interactive path is sim-tuned: fs/shell/roster/MCP tools must never
-    // leak into it. The routine tools are the exception by design (2026-08-19:
-    // hiding them behind a router round sent the model fishing for schedulers
-    // in connected apps) — pinned here so the exception is deliberate.
+  it("chat and routine turns share one catalog: fs, shell, MCP, ask_user included", async () => {
+    // 2026-08-19 pinned this chat catalog as web+apps+routines only; one day
+    // later the owner overrode it twice — first the roster trio, then the
+    // whole split — because a Blob's capabilities must not depend on who
+    // started the turn: "spawn up 3 bots", "read that file", "run that
+    // command" are chat requests too. This now mirrors the routine-scope
+    // pin above (plus the routine tools and a live MCP server's namespaced
+    // tool), so the two scopes cannot drift apart again.
+    const server = "http://127.0.0.1:39917/mcp";
     let offeredTools: string[] = [];
-    fetchHandler = async (_input, init) => {
+    fetchHandler = async (input, init) => {
+      if (String(input) === server) {
+        const rpc = JSON.parse(String(init?.body)) as { id?: number; method?: string };
+        const result =
+          rpc.method === "initialize"
+            ? { protocolVersion: "2025-06-18", capabilities: {} }
+            : rpc.method === "tools/list"
+              ? {
+                  tools: [
+                    {
+                      name: "lookup",
+                      description: "Looks things up",
+                      inputSchema: { type: "object" },
+                    },
+                  ],
+                }
+              : { content: [{ type: "text", text: "ok" }] };
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
+      }
       const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
       if (request.format !== undefined) {
         return new Response(JSON.stringify({ message: { content: '{"action":"none"}' } }));
@@ -926,7 +981,13 @@ describe("streamBlobTurn routine scope", () => {
       messages: [{ role: "user", content: "hello" }],
       home: memoryHome(),
       roster: {
-        access: { list: () => [], create: () => {}, delete: () => {}, message: () => "sent" },
+        access: {
+          list: () => [],
+          create: () => {},
+          update: () => true,
+          delete: () => {},
+          message: () => "sent",
+        },
         selfName: "Ken",
       },
       routines: {
@@ -937,29 +998,41 @@ describe("streamBlobTurn routine scope", () => {
         update: () => false,
         delete: () => false,
       },
+      mcpServers: [{ id: "1", name: "Files", url: server, enabled: true }],
       memory: { list: () => [], save: () => {} },
       onSegment: () => {},
       onConfigure: () => {},
     });
     expect([...offeredTools].sort()).toEqual([
+      "ask_user",
       "create_routine",
+      "delete_blob",
+      "delete_file",
       "delete_routine",
+      "list_files",
       "list_routines",
+      "mcp__files__lookup",
+      "message_blob",
+      "read_file",
+      "run_command",
+      "run_subagent",
+      "spawn_blob",
+      "update_blob",
       "update_routine",
       "web_fetch",
       "web_search",
+      "write_file",
     ]);
   });
 
-  it("never offers an MCP server's tools on the tuned chat path", async () => {
-    // A third-party server's tool descriptions are text we did not write, so
-    // they must not reach the catalog whose restraint is a measured number.
+  it("an unreachable MCP server costs a chat turn nothing", async () => {
+    // Every turn contacts its servers now, so the failure path matters as
+    // much as the happy one: loadMcpTools drops a dead server and the run
+    // keeps every other tool — no half-empty catalog, no failed turn.
     let offeredTools: string[] = [];
-    let reachedServer = false;
     fetchHandler = async (input, init) => {
       if (String(input).includes(":39917")) {
-        reachedServer = true;
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }));
+        return new Response("down", { status: 500 });
       }
       const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
       if (request.format !== undefined) {
@@ -970,7 +1043,7 @@ describe("streamBlobTurn routine scope", () => {
       );
       return ndjson(textChunks("Hi."));
     };
-    await streamBlobTurn({
+    const text = await streamBlobTurn({
       model: "llama3.2:latest",
       messages: [{ role: "user", content: "hello" }],
       mcpServers: [{ id: "1", name: "Files", url: "http://127.0.0.1:39917/mcp", enabled: true }],
@@ -978,9 +1051,11 @@ describe("streamBlobTurn routine scope", () => {
       onSegment: () => {},
       onConfigure: () => {},
     });
-    expect([...offeredTools].sort()).toEqual(["web_fetch", "web_search"]);
-    // Not merely filtered out afterwards — a chat turn must not even connect.
-    expect(reachedServer).toBe(false);
+    expect(text).toBe("Hi.");
+    expect(offeredTools).not.toContain("mcp__files__lookup");
+    // The rest of the floor catalog survived the dead server.
+    expect(offeredTools).toContain("web_search");
+    expect(offeredTools).toContain("ask_user");
   });
 
   it("reports token usage for every loop the turn runs", async () => {
@@ -1136,7 +1211,13 @@ describe("streamBlobTurn routine scope", () => {
       scope: "routine",
       home: memoryHome(),
       roster: {
-        access: { list: () => [], create: () => {}, delete: () => {}, message: () => "sent" },
+        access: {
+          list: () => [],
+          create: () => {},
+          update: () => true,
+          delete: () => {},
+          message: () => "sent",
+        },
         selfName: "Ken",
       },
       memory: { list: () => [], save: () => {} },

@@ -450,14 +450,23 @@ describe("roster tools", () => {
     const blobs = names.map((name, index) => ({ id: `id-${index}`, name }));
     const created: string[] = [];
     const deleted: string[] = [];
+    const updated: { id: string; instructions?: string }[] = [];
     const messaged: { id: string; text: string; prompt: string }[] = [];
     return {
       created,
       deleted,
+      updated,
       messaged,
       access: {
         list: () => blobs,
         create: (blob: { name: string }) => created.push(blob.name),
+        update: (id: string, patch: { instructions?: string }) => {
+          if (!blobs.some((blob) => blob.id === id)) {
+            return false;
+          }
+          updated.push({ id, ...patch });
+          return true;
+        },
         delete: (id: string) => deleted.push(id),
         message: (id: string, message: { text: string; prompt: string }) => {
           messaged.push({ id, ...message });
@@ -467,10 +476,54 @@ describe("roster tools", () => {
     };
   };
 
+  it("updates another Blob's instructions through update_blob", async () => {
+    // "Give Filer better instructions" is a config write, not a message: the
+    // sanctioned path is this tool, because a message's words are fenced as
+    // data the recipient is told not to obey.
+    const roster = fakeRoster(["Scout"]);
+    const tools = makeRosterTools(roster.access, "Ken");
+    const update = tools.find((tool) => tool.name === "update_blob");
+    expect(
+      await update?.execute({ name: "scout", instructions: "Be terse. File by sender." }, context),
+    ).toBe("Updated Scout.");
+    expect(roster.updated).toEqual([{ id: "id-0", instructions: "Be terse. File by sender." }]);
+    expect(await update?.execute({ name: "Ghost", title: "t" }, context)).toContain(
+      "No Blob named Ghost",
+    );
+    expect(await update?.execute({ name: "Scout" }, context)).toContain("Nothing to update");
+    // Blank instructions mean "left alone", never "erased".
+    expect(await update?.execute({ name: "Scout", instructions: "   " }, context)).toContain(
+      "Nothing to update",
+    );
+    expect(roster.updated).toHaveLength(1);
+  });
+
+  it("spawns with a display name, not a slug: 'youtube-blob' → 'Youtube Blob'", async () => {
+    // Models slug names by habit; the sidebar reads words. Normalised before
+    // the duplicate check, so the slug and the pretty form are one Blob and
+    // a retried spawn stays idempotent. (Mechanical Title Case: "Youtube",
+    // not the brand's "YouTube" — word boundaries are the fix, not casing
+    // trivia.)
+    const roster = fakeRoster([]);
+    const spawn = makeRosterTools(roster.access, "Ken").find((tool) => tool.name === "spawn_blob");
+    expect(
+      await spawn?.execute(
+        { name: "youtube-blob", title: "t", description: "d", instructions: "Watches uploads." },
+        context,
+      ),
+    ).toBe("Created Youtube Blob.");
+    expect(roster.created).toEqual(["Youtube Blob"]);
+    // (Slug-vs-pretty idempotency against a live roster is pinned in
+    // App.turns.test.tsx — this fake's list() is static by design.)
+  });
+
   it("refuses a duplicate name, which is what makes spawn_blob idempotent", async () => {
     const roster = fakeRoster(["Scout"]);
     const spawn = makeRosterTools(roster.access, "Ken").find((tool) => tool.name === "spawn_blob");
-    const result = await spawn?.execute({ name: "scout", title: "t", description: "d" }, context);
+    const result = await spawn?.execute(
+      { name: "scout", title: "t", description: "d", instructions: "x" },
+      context,
+    );
     expect(result).toContain("already exists");
     expect(roster.created).toEqual([]);
   });
@@ -479,7 +532,7 @@ describe("roster tools", () => {
     const roster = fakeRoster(Array.from({ length: MAX_BLOBS }, (_, index) => `Blob${index}`));
     const spawn = makeRosterTools(roster.access, "Ken").find((tool) => tool.name === "spawn_blob");
     const result = await spawn?.execute(
-      { name: "One more", title: "t", description: "d" },
+      { name: "One more", title: "t", description: "d", instructions: "x" },
       context,
     );
     expect(result).toContain(`${MAX_BLOBS}`);
@@ -489,10 +542,53 @@ describe("roster tools", () => {
   it("creates a Blob when the name is free", async () => {
     const roster = fakeRoster(["Scout"]);
     const spawn = makeRosterTools(roster.access, "Ken").find((tool) => tool.name === "spawn_blob");
-    expect(await spawn?.execute({ name: "Filer", title: "t", description: "d" }, context)).toBe(
-      "Created Filer.",
-    );
+    expect(
+      await spawn?.execute(
+        { name: "Filer", title: "t", description: "d", instructions: "Files things." },
+        context,
+      ),
+    ).toBe("Created Filer.");
     expect(roster.created).toEqual(["Filer"]);
+  });
+
+  it("refuses blank instructions: a spawned Blob has no other setup", async () => {
+    // Required means enforced. A spawned Blob never runs the configure round,
+    // so instructions are its entire role — a whitespace-only pass would
+    // birth a Blob with nothing in its system prompt and no way to get one.
+    const roster = fakeRoster(["Scout"]);
+    const spawn = makeRosterTools(roster.access, "Ken").find((tool) => tool.name === "spawn_blob");
+    expect(
+      await spawn?.execute(
+        { name: "Filer", title: "t", description: "d", instructions: "   " },
+        context,
+      ),
+    ).toContain("needs instructions");
+    expect(roster.created).toEqual([]);
+  });
+
+  it("spawns a Blob already configured: instructions ride along, trimmed", async () => {
+    // The spawner configures what it births — instructions are the new
+    // Blob's verbatim role, trimmed on the way in and capped.
+    const created: { name: string; instructions?: string }[] = [];
+    const spawn = makeRosterTools(
+      {
+        list: () => [],
+        create: (blob) => created.push(blob),
+        update: () => true,
+        delete: () => {},
+        message: () => "Sent.",
+      },
+      "Ken",
+    ).find((tool) => tool.name === "spawn_blob");
+    expect(
+      await spawn?.execute(
+        { name: "Filer", title: "t", description: "d", instructions: "  Be terse.  " },
+        context,
+      ),
+    ).toBe("Created Filer.");
+    expect(created).toEqual([
+      { name: "Filer", title: "t", description: "d", instructions: "Be terse." },
+    ]);
   });
 
   it("refuses a delete whose confirmation does not match", async () => {
