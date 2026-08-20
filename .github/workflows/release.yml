@@ -39,12 +39,14 @@ jobs:
           - name: macOS arm64
             os: macos-latest
             rust-target: aarch64-apple-darwin
-            bundles: dmg
+            # "app" is required for the updater artifact: with dmg alone Tauri
+            # skips the .app.tar.gz + .sig the in-app updater downloads.
+            bundles: app,dmg
             bundle-dir: src-tauri/target/aarch64-apple-darwin/release/bundle
           - name: macOS x64
             os: macos-latest
             rust-target: x86_64-apple-darwin
-            bundles: dmg
+            bundles: app,dmg
             bundle-dir: src-tauri/target/x86_64-apple-darwin/release/bundle
           - name: Linux x64
             os: ubuntu-latest
