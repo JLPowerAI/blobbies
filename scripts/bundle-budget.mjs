@@ -11,7 +11,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
-/** Budget for the startup chunk, gzip bytes. Measured 168 kB on 2026-08-17.
+/** Budget for the startup chunk, gzip bytes. Measured 160 kB on 2026-08-21
+ *  (zod moved out of the eager graph — was 188 kB, 168 kB on 2026-08-17).
  *  Headroom is deliberately loose: zlib output for byte-identical files
  *  differs across platforms (measured: same chunk hash, 185 kB on macOS,
  *  186 kB on Linux), so the gate must not sit at the boundary. It exists to

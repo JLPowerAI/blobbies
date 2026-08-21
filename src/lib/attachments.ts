@@ -15,13 +15,13 @@
  * left, Office files included, is refused with a reason the user sees.
  */
 
-import { wrapUntrusted } from "@/lib/blob-tools";
 import type { HomeBackend } from "@/lib/home";
 // Statically imported, unlike the two pdf.js modules: this one is a byte
 // sniff plus an IPC call, so there is no payload worth deferring — the OCR
 // engine itself lives in Rust.
 import { IMAGE_MAGIC_BYTES, isImage, ocrImage } from "@/lib/ocr";
 import { imagePreview } from "@/lib/preview";
+import { wrapUntrusted } from "@/lib/untrusted";
 
 /** An attached file, as recorded on the message that carried it. */
 export interface Attachment {

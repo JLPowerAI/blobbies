@@ -57,7 +57,7 @@ import {
 } from "@/lib/groups";
 import { homeFor } from "@/lib/home";
 import type { Intent } from "@/lib/intent";
-import { type McpServerConfig, parseLoopbackUrl } from "@/lib/mcp";
+import { type McpServerConfig, parseLoopbackUrl } from "@/lib/mcp-config";
 import { notify, shouldNotify } from "@/lib/notify";
 import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
