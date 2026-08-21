@@ -14,6 +14,16 @@
 //! `UNNotificationSound soundNamed:` against the bundle's `Library/Sounds`
 //! (which Tauri's bundler cannot populate) or `~/Library/Sounds`, so the
 //! bundled resource is copied there on first grant.
+//!
+//! Every entry point goes through `center()`, because
+//! `currentNotificationCenter` is not a function that can fail politely: with
+//! no app bundle around the process it raises `NSInternalInconsistencyException`
+//! ("bundleProxyForCurrentProcess is nil"), and an Objective-C exception
+//! unwinding into Rust aborts the process outright — no panic, no `Result`,
+//! nothing to catch. `cargo run` produces exactly that: a bare binary at
+//! `target/debug/Blobbies`, which is why clicking Allow under `tauri dev`
+//! killed the app. Bundled builds are unaffected, so this never reached a
+//! user, but the guard is what makes the call site honest either way.
 
 // The one `unsafe` in this module dereferences the settings pointer that the
 // OS hands its completion block; the pointer is non-null by signature and
@@ -32,6 +42,18 @@ const SOUND_NAME: &str = "blobbies-notif";
 /// system sounds, failing silently for bundled ones.
 const SOUND_FILE: &str = "blobbies-notif.caf";
 
+/// The notification center, or `None` when this process has no app bundle.
+///
+/// `NSBundle.bundleIdentifier` is nil for an unbundled binary, which is the
+/// same condition macOS is complaining about when it raises
+/// `bundleProxyForCurrentProcess is nil`. Checking it first turns an abort
+/// into an ordinary `None` the callers can report.
+#[cfg(target_os = "macos")]
+fn center() -> Option<objc2::rc::Retained<objc2_user_notifications::UNUserNotificationCenter>> {
+    objc2_foundation::NSBundle::mainBundle().bundleIdentifier()?;
+    Some(objc2_user_notifications::UNUserNotificationCenter::currentNotificationCenter())
+}
+
 /// Ask the OS for alert+sound authorization. Windows and Linux need no
 /// separate prompt through this command (the plugin's send path handles
 /// them), so it reports granted there.
@@ -41,9 +63,13 @@ pub(crate) async fn request_notification_permission(
 ) -> Result<&'static str, String> {
     #[cfg(target_os = "macos")]
     {
-        use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
+        use objc2_user_notifications::UNAuthorizationOptions;
 
-        let center = UNUserNotificationCenter::currentNotificationCenter();
+        // "unavailable", not an error: the frontend already draws this state,
+        // and a dev build with no bundle has nothing the user can act on.
+        let Some(center) = center() else {
+            return Ok("unavailable");
+        };
         let (tx, rx) = std::sync::mpsc::channel::<bool>();
         // The completion handler: called once with whether the user allowed
         // it. Retained by the notification center for the duration of the
@@ -89,10 +115,11 @@ pub(crate) async fn send_notification(
         use objc2_foundation::NSString;
         use objc2_user_notifications::{
             UNMutableNotificationContent, UNNotificationRequest, UNNotificationSound,
-            UNUserNotificationCenter,
         };
 
-        let center = UNUserNotificationCenter::currentNotificationCenter();
+        let Some(center) = center() else {
+            return Ok(());
+        };
         if !authorized(&center) {
             return Ok(());
         }
@@ -169,4 +196,18 @@ fn install_sound(app: &tauri::AppHandle) {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::copy(resource, dest);
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::center;
+
+    /// The regression: this test binary is not an app bundle, so before the
+    /// guard `center()` raised an Objective-C exception and took the whole
+    /// process with it. A crash cannot be asserted on — the test run simply
+    /// dies — so reaching the assertion at all is the proof.
+    #[test]
+    fn no_app_bundle_returns_none_instead_of_aborting() {
+        assert!(center().is_none());
+    }
 }

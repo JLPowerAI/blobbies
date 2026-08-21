@@ -493,4 +493,44 @@ describe("ChatPane", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("says so when the conversation has stopped saving", () => {
+    // Silence is the dangerous case here: every message is still on screen,
+    // so nothing looks wrong until a restart drops the unsaved tail.
+    const { rerender } = render(
+      <ChatPane
+        agent={agent}
+        messages={messages}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    rerender(
+      <ChatPane
+        agent={agent}
+        messages={messages}
+        notSaving
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+    // `alert`, not `status`: a screen reader should interrupt for this.
+    expect(screen.getByRole("alert")).toHaveTextContent(/too long to save/i);
+    // Says what to do about it, not just that something broke.
+    expect(screen.getByRole("alert")).toHaveTextContent(/start a new chat/i);
+  });
 });

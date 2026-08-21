@@ -2280,6 +2280,9 @@ a.modal-button {
 }
 
 .plugins-tab {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
   padding: 6px 12px;
   border-radius: 8px;
   font-size: 13px;
@@ -2288,6 +2291,17 @@ a.modal-button {
   transition:
     background-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
+}
+
+/* Secondary to its label at every state, including the active tab: the count
+   is a detail of the tab, and matching weight made the pair read as two
+   words. Tabular figures so 4 -> 12 -> 100 does not shift the label beside
+   it, and the count of one tab does not jitter when the other's data lands. */
+.plugins-tab-count {
+  font-size: 12px;
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
 }
 
 .plugins-tab:hover {
@@ -3155,6 +3169,29 @@ a.modal-button {
   border: 1.5px solid #d99a2b;
   border-radius: 10px;
   font-size: 13px;
+}
+
+/* Data is about to be lost, so this one is red rather than the amber used for
+   "needs you" — and it has no dismiss: it clears itself the moment a save
+   succeeds, and nothing else would make it true again. */
+.not-saving-bar {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 4px 0;
+  padding: 8px 12px;
+  border: 1.5px solid var(--status-err);
+  border-radius: 10px;
+  color: var(--status-err);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.not-saving-bar svg {
+  flex: none;
+  /* Optical: aligns the glyph with the first line's cap height rather than
+     its box, which otherwise rides high next to wrapped text. */
+  margin-block-start: 1px;
 }
 
 /* Files section: routine-row plus a trailing delete button. The row rule

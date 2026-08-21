@@ -28,6 +28,49 @@ describe("store (browser fallback)", () => {
     expect(await store.loadRoster()).toEqual([ken]);
   });
 
+  it("announces a slice that stopped saving, and again when it recovers", async () => {
+    // A transcript past the 8 MB cap is refused by Rust (`store.rs`), which is
+    // correct — but the app keeps every message in memory and on screen, so
+    // without this signal the conversation looks fine until a restart eats it.
+    vi.useFakeTimers();
+    const seen: string[][] = [];
+    const stop = store.onSaveFailure((keys) => seen.push([...keys]));
+    const message: Message = {
+      id: "m1",
+      kind: "text",
+      author: "user",
+      segments: [{ text: "hi" }],
+    };
+
+    // Driven through the Tauri IPC, because that is the only path that can
+    // report this: the browser fallback deliberately swallows a localStorage
+    // failure and keeps the value in memory.
+    let refuse = true;
+    const invoke = vi.fn(async (command: string) => {
+      if (command === "store_write" && refuse) {
+        throw new Error("stored file is too large to load");
+      }
+      return null;
+    });
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = { invoke };
+
+    store.saveBlobTranscript(BLOB_ID, [message]);
+    await vi.runAllTimersAsync();
+    expect(seen.at(-1)).toEqual([`blobs/${BLOB_ID}/transcript`]);
+
+    // The next successful write carries everything the failed one did, so the
+    // warning clears itself rather than needing a dismiss.
+    refuse = false;
+    store.saveBlobTranscript(BLOB_ID, [message]);
+    await vi.runAllTimersAsync();
+    expect(seen.at(-1)).toEqual([]);
+
+    // One notification per transition, not one per keystroke.
+    expect(seen).toHaveLength(2);
+    stop();
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+
   it("debounces queued writes and flushes them on beforeunload", async () => {
     vi.useFakeTimers();
     store.saveBlobRoutines(BLOB_ID, [

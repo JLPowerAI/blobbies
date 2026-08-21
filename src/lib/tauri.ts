@@ -77,17 +77,25 @@ export interface CommandOutput {
 }
 
 /**
- * Run one allowlisted program with literal arguments.
+ * Run one allowlisted program with literal arguments, inside `blobId`'s home.
+ *
+ * `blobId` is the containment root for every path argument (`shell.rs`), so a
+ * caller without one gets the file-reading programs refused rather than the
+ * whole filesystem.
  *
  * Returns a string on refusal or failure — the caller shows it to the model,
  * which can then tell the user rather than aborting the turn.
  */
-export async function runCommand(program: string, args: string[]): Promise<CommandOutput | string> {
+export async function runCommand(
+  program: string,
+  args: string[],
+  blobId?: string,
+): Promise<CommandOutput | string> {
   if (!isTauri()) {
     return "Local commands only run in the desktop app.";
   }
   try {
-    return await invoke<CommandOutput>("shell_run", { program, args });
+    return await invoke<CommandOutput>("shell_run", { id: blobId ?? null, program, args });
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }

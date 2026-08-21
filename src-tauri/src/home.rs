@@ -8,6 +8,11 @@
 //! No shell access here by design: `blob_home_shell` deliberately does not
 //! exist. A command runner on the user's machine is a different risk class and
 //! needs its own review before it is ever added.
+//!
+//! `home_root` and `resolve_in_home` are `pub(crate)` because `shell.rs` binds
+//! the allowlisted read commands to the same sandbox. One containment rule for
+//! every path the model can name — two would drift, and the weaker one would
+//! be the one that matters.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -52,7 +57,7 @@ fn is_valid_blob_id(id: &str) -> bool {
 }
 
 /// The Blob's home directory, created on first use.
-fn home_root(data_root: &Path, id: &str) -> Result<PathBuf> {
+pub(crate) fn home_root(data_root: &Path, id: &str) -> Result<PathBuf> {
     if !is_valid_blob_id(id) {
         return Err(Error::InvalidSliceKey);
     }
@@ -66,7 +71,7 @@ fn home_root(data_root: &Path, id: &str) -> Result<PathBuf> {
 /// Rejects absolute paths, drive prefixes, `..` and empty input before any
 /// filesystem access; then verifies the canonicalized parent still lives
 /// under the canonicalized home so symlinks cannot escape either.
-fn resolve_in_home(home: &Path, relative: &str) -> Result<PathBuf> {
+pub(crate) fn resolve_in_home(home: &Path, relative: &str) -> Result<PathBuf> {
     if relative.is_empty() || relative.len() > 512 {
         return Err(Error::PathOutsideHome);
     }

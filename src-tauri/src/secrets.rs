@@ -7,6 +7,14 @@
 use crate::error::{Error, Result};
 
 /// Keychain service the entries live under (shows up in Keychain Access).
+///
+/// Deliberately still the pre-rename bundle identifier, and not to be
+/// "tidied" to match `tauri.conf.json`. The keychain looks entries up by this
+/// exact string: change it and every existing user's saved API key becomes
+/// unreachable — present in Keychain Access, invisible to the app, with the
+/// app silently acting as though they never entered one. The service name has
+/// no relationship to the bundle identifier beyond having once been copied
+/// from it.
 const SERVICE: &str = "com.blobbies.app";
 
 /// Every secret name the webview may read or write. Default-deny.

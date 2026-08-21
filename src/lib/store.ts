@@ -121,6 +121,46 @@ async function rawWrite(key: string, value: unknown): Promise<void> {
   backendSet(`slice:${key}`, JSON.stringify(value));
 }
 
+/** Slice keys whose most recent write failed. */
+const failedKeys = new Set<string>();
+const saveFailureListeners = new Set<(keys: ReadonlySet<string>) => void>();
+
+/**
+ * Watch for slices that have stopped saving.
+ *
+ * A failed write is otherwise invisible: the app holds every message in
+ * memory and keeps rendering it, so a conversation that no longer persists
+ * looks exactly like one that does — until a restart, when everything after
+ * the failure is gone. The likeliest cause is a transcript outgrowing
+ * `MAX_SLICE_BYTES` (8 MB, enforced in `store.rs`), where refusing the write
+ * is correct: a larger file could never be read back, and the next save would
+ * overwrite the last good copy. Correct, but worth saying out loud.
+ *
+ * Returns an unsubscribe function.
+ */
+export function onSaveFailure(listener: (keys: ReadonlySet<string>) => void): () => void {
+  saveFailureListeners.add(listener);
+  return () => {
+    saveFailureListeners.delete(listener);
+  };
+}
+
+/** Record a slice's write outcome, notifying only when it actually changes. */
+function setFailed(key: string, failed: boolean): void {
+  const changed = failed ? !failedKeys.has(key) : failedKeys.delete(key);
+  if (failed) {
+    failedKeys.add(key);
+  }
+  // Every keystroke queues a write; re-notifying on each success would
+  // re-render subscribers for nothing.
+  if (!changed) {
+    return;
+  }
+  for (const listener of saveFailureListeners) {
+    listener(failedKeys);
+  }
+}
+
 /**
  * Start a write nobody is awaiting, and report a failure instead of dropping
  * it on the floor.
@@ -132,13 +172,18 @@ async function rawWrite(key: string, value: unknown): Promise<void> {
  *
  * Deliberately not a retry: a write that failed here is already superseded by
  * whatever is in memory, and the next change writes the whole slice again.
+ * That is also why a later success clears the flag: the next write carries
+ * everything the failed one would have.
  */
 function startWrite(key: string, value: unknown): void {
-  void rawWrite(key, value).catch((error: unknown) => {
-    // Naming the key is the point: "roster" failing and one Blob's transcript
-    // failing are very different problems.
-    console.error(`Could not save ${key}:`, error);
-  });
+  void rawWrite(key, value)
+    .then(() => setFailed(key, false))
+    .catch((error: unknown) => {
+      // Naming the key is the point: "roster" failing and one Blob's transcript
+      // failing are very different problems.
+      console.error(`Could not save ${key}:`, error);
+      setFailed(key, true);
+    });
 }
 
 /** Write immediately, cancelling any pending debounce for the key. */
@@ -289,6 +334,18 @@ export function saveConversation(conversationId: string, messages: Message[]): v
     return;
   }
   saveGroupTranscript(groupId, messages);
+}
+
+/**
+ * The slice key a conversation's messages are written to.
+ *
+ * Exported so the UI can match a conversation against `onSaveFailure` without
+ * rebuilding the key format — a second copy of `blobs/${id}/transcript` would
+ * drift from this one and quietly stop matching.
+ */
+export function conversationSliceKey(conversationId: string): string {
+  const groupId = groupIdFromConversation(conversationId);
+  return groupId === null ? `blobs/${conversationId}/transcript` : `groups/${groupId}/transcript`;
 }
 
 export async function loadBlobRun(id: string): Promise<ActiveRun | null> {

@@ -15,6 +15,13 @@ export interface HomeEntry {
  * the Tauri IPC.
  */
 export interface HomeBackend {
+  /**
+   * The Blob this sandbox belongs to. Carried on the backend rather than
+   * passed alongside it so there is one source of truth for *which* sandbox:
+   * `run_command` contains its file arguments against this same home
+   * (`shell.rs`), and a second id argument could drift from this one.
+   */
+  readonly id: string;
   list(dir?: string): Promise<HomeEntry[]>;
   read(path: string): Promise<string>;
   write(path: string, content: string): Promise<void>;
@@ -24,6 +31,7 @@ export interface HomeBackend {
 /** The real backend: Rust commands, sandboxed under blobs/<id>/home/. */
 export function tauriHome(blobId: string): HomeBackend {
   return {
+    id: blobId,
     list: (dir) => invoke<HomeEntry[]>("blob_home_list", { id: blobId, dir: dir ?? null }),
     read: (path) => invoke<string>("blob_home_read", { id: blobId, path }),
     write: (path, content) => invoke<void>("blob_home_write", { id: blobId, path, content }),
@@ -36,7 +44,7 @@ export function tauriHome(blobId: string): HomeBackend {
  * outside Tauri. Deliberately no persistence — parity with localStorage-level
  * dev ergonomics, not a real store.
  */
-export function memoryHome(): HomeBackend {
+export function memoryHome(id = "dev"): HomeBackend {
   const files = new Map<string, { content: string; modifiedMs: number }>();
   const clean = (path: string): string => {
     const parts = path.split("/").filter((part) => part !== "" && part !== ".");
@@ -47,6 +55,7 @@ export function memoryHome(): HomeBackend {
   };
   // All async so bad paths become rejections, matching the Tauri backend.
   return {
+    id,
     list: async (dir) => {
       const prefix = dir === undefined || dir === "" ? "" : `${clean(dir)}/`;
       const rows = new Map<string, HomeEntry>();
@@ -105,7 +114,7 @@ const devHomes = new Map<string, HomeBackend>();
 function devHome(blobId: string): HomeBackend {
   let home = devHomes.get(blobId);
   if (home === undefined) {
-    home = memoryHome();
+    home = memoryHome(blobId);
     devHomes.set(blobId, home);
   }
   return home;

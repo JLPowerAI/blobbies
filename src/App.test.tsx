@@ -3,6 +3,7 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "@/App";
 import { type Agent, MAX_BLOBS } from "@/data/agents";
+import { loadPlugins } from "@/data/plugins";
 import { readPreference } from "@/lib/preferences";
 import { getSecret } from "@/lib/secrets";
 import {
@@ -676,6 +677,17 @@ describe("App", () => {
     // startup bundle), so the list's controls appear a beat after the dialog.
     await within(dialog).findByLabelText("Search plugins");
 
+    // Each tab carries its own total: how many apps exist, and how many are
+    // the user's. Asserted against the real catalog rather than a literal,
+    // which would need editing on every `pnpm plugins` run.
+    const catalog = await loadPlugins();
+    const marketplaceTab = within(dialog).getByRole("tab", { name: "Marketplace" });
+    expect(marketplaceTab).toHaveTextContent(String(catalog.length));
+    // Nothing is connected outside Tauri, and an empty "Yours" says that by
+    // itself — a "0" beside it would be decoration, so the badge only appears
+    // once there is something to count.
+    expect(within(dialog).getByRole("tab", { name: "Yours" })).toHaveTextContent(/^Yours$/);
+
     // Search narrows the marketplace. The phrase is Gmail's own hand-written
     // description rather than "gmail", which in a 900-app catalog also matches
     // long-tail apps whose blurbs happen to mention Gmail. Connecting runs
@@ -683,6 +695,9 @@ describe("App", () => {
     // must never read "Connected" unless Composio said so.
     await user.type(within(dialog).getByLabelText("Search plugins"), "Triage the inbox");
     expect(within(dialog).queryByText("Connected")).not.toBeInTheDocument();
+    // The count is a total, so it stays put while the list beneath it
+    // narrows — otherwise it would just be the row count restated.
+    expect(marketplaceTab).toHaveTextContent(String(catalog.length));
 
     // A failed connect explains itself on the row that was clicked. Without
     // this, a missing CLI and an abandoned browser tab are both just a button

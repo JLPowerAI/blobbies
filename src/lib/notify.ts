@@ -57,7 +57,9 @@ export async function requestNotificationPermission(): Promise<
   }
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    return await invoke<"granted" | "denied">("request_notification_permission");
+    // "unavailable" also arrives from Rust when the process has no app bundle
+    // to hang a notification center on — i.e. a `cargo run` dev build.
+    return await invoke<"granted" | "denied" | "unavailable">("request_notification_permission");
   } catch {
     // The command is missing or the OS refused to answer.
     return "unavailable";

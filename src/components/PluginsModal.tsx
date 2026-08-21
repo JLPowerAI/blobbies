@@ -260,14 +260,29 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
     detailId === null || catalog === null ? null : (catalog.find((p) => p.id === detailId) ?? null);
   const trimmed = query.trim().toLowerCase();
 
+  /**
+   * "Yours" answers "what do I have", not "what did I bookmark": an app
+   * connected before the shortlist auto-add existed (or outside the app
+   * entirely) is still the user's, so the union of the shortlist and the live
+   * account list is the honest membership. A connection only counts once its
+   * account is known usable — expired ones are not "yours" in any sense the
+   * Connect button can act on.
+   *
+   * One predicate for the tab's filter and its count: two would drift, and a
+   * badge reading 5 over a list of 4 is worse than no badge.
+   */
+  const isYours = (plugin: PluginDef) => installed.includes(plugin.id) || isConnected(plugin.id);
+
+  /**
+   * Zero is left blank rather than shown: an empty "Yours" already says
+   * nothing is connected, and a badge repeating it is decoration. It appears
+   * on the first connection and counts up from there. Doubles as the
+   * still-loading state, which is also nothing worth stating.
+   */
+  const yoursCount = loaded && catalog !== null ? catalog.filter(isYours).length : 0;
+
   const visiblePlugins = (catalog ?? []).filter((plugin) => {
-    // "Yours" answers "what do I have", not "what did I bookmark": an app
-    // connected before the shortlist auto-add existed (or outside the app
-    // entirely) is still the user's, so the union of the shortlist and the
-    // live account list is the honest membership. A connection only counts
-    // once its account is known usable — expired ones are not "yours" in any
-    // sense the Connect button can act on.
-    if (tab === "yours" && !installed.includes(plugin.id) && !isConnected(plugin.id)) {
+    if (tab === "yours" && !isYours(plugin)) {
       return false;
     }
     if (categoryFilter !== "all" && plugin.category !== categoryFilter) {
@@ -341,6 +356,19 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
             onClick={() => setTab("marketplace")}
           >
             Marketplace
+            {/* Unfiltered totals, so they stay put while the user searches — a
+                number that shrank with the query would just be the row count
+                restated. Nothing renders until the data behind it lands (the
+                catalog by dynamic import, the connections by probe): a "0"
+                that later becomes 6 is a wrong answer, not a pending one.
+                Decorative, hence aria-hidden — the tab is still named
+                "Marketplace", and the list itself is what a screen reader
+                counts. */}
+            {catalog === null ? null : (
+              <span className="plugins-tab-count" aria-hidden="true">
+                {catalog.length}
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -350,6 +378,11 @@ export function PluginsModal({ installed, onSetInstalled, onClose }: PluginsModa
             onClick={() => setTab("yours")}
           >
             Yours
+            {yoursCount === 0 ? null : (
+              <span className="plugins-tab-count" aria-hidden="true">
+                {yoursCount}
+              </span>
+            )}
           </button>
         </div>
         <div className="plugins-toolbar-end">

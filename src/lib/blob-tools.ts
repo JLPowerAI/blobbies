@@ -1235,9 +1235,14 @@ export function makeComposioTools(): AgentTool[] {
  * Deliberately not a shell. The Rust side takes argv and an allowlist, so a
  * poisoned web page or a hostile email cannot turn "run this" into arbitrary
  * execution — the model can only name a program that is already permitted,
- * and its arguments are literal text with no shell to parse them.
+ * its options are allowlisted per program, and its arguments are literal text
+ * with no shell to parse them.
+ *
+ * `blobId` is the sandbox the file-reading programs are contained to. Without
+ * one they are refused outright, matching `makeFsTools` being absent when a
+ * turn has no home.
  */
-export function makeShellTool(): AgentTool {
+export function makeShellTool(blobId?: string): AgentTool {
   const parameters = z.object({
     program: z.string().describe("Program name only, e.g. ls, rg, cat, composio"),
     args: z.array(z.string()).describe("Arguments as separate strings, never one joined string"),
@@ -1248,12 +1253,13 @@ export function makeShellTool(): AgentTool {
       "Run one program on this machine and return its output. There is no " +
       "shell: pipes, redirects, ; and && are literal text, so run one program " +
       "per call and combine the results yourself. Only a short list of " +
-      "read-only programs is permitted — if one is refused, say so instead of " +
-      "looking for another way in.",
+      "read-only programs is permitted, only with simple options, and files " +
+      "are limited to your own home folder — if a call is refused, say so " +
+      "instead of looking for another way in.",
     parameters,
     executionMode: "sequential",
     execute: async (args) => {
-      const result = await runCommand(args.program, args.args);
+      const result = await runCommand(args.program, args.args, blobId);
       if (typeof result === "string") {
         return result;
       }

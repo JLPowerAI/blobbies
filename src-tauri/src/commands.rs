@@ -112,14 +112,25 @@ pub(crate) fn ollama_start() -> Result<()> {
     let Some(binary) = find_ollama_binary() else {
         return Err(Error::Io("Ollama is not installed".into()));
     };
-    Command::new(binary)
+    let child = Command::new(binary)
         .arg("serve")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map(|_| ())
-        .map_err(|e| Error::Io(e.to_string()))
+        .map_err(|e| Error::Io(e.to_string()))?;
+    // Reap on a thread instead of dropping the handle. Dropping a `Child`
+    // does not reap it, and `ollama serve` exits immediately when a server is
+    // already listening — the common case, since this runs from a button the
+    // user can press repeatedly. Each press would otherwise leave a
+    // `<defunct>` entry holding a PID slot until the app quits. Waiting on a
+    // thread keeps the success path unblocked, where the child is a server
+    // meant to outlive this call.
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Free the model's memory when the app closes.

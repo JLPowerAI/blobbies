@@ -10,6 +10,7 @@ import {
   Plus,
   Smile,
   Square,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import {
@@ -58,6 +59,11 @@ interface ChatPaneProps {
   group?: { id: string; name: string; members: readonly Agent[] };
   /** Rename the open group (its members move with it — see App.renameGroup). */
   onRenameGroup?: (name: string) => void;
+  /**
+   * This conversation's last save failed, so what is on screen is no longer
+   * reaching disk. Almost always a transcript past the 8 MB slice cap.
+   */
+  notSaving?: boolean;
   /** True while the Blob is generating a reply; shows the thinking blob. */
   thinking?: boolean;
   /** In a group, which member is generating — `agent` is only the fallback. */
@@ -466,6 +472,7 @@ const COMPOSER_LINE_HEIGHT = 32;
 export function ChatPane({
   agent,
   messages,
+  notSaving = false,
   group,
   onRenameGroup,
   thinking = false,
@@ -1381,6 +1388,18 @@ export function ChatPane({
             <button type="button" className="modal-button" onClick={() => onSend("Done.")}>
               Done
             </button>
+          </div>
+        ) : null}
+        {/* Sits in the transcript flow, under the last message, because that
+            is where the unsaved messages are. `alert`, not `status`: this is
+            about to cost the user data, and it stays until a save succeeds. */}
+        {notSaving ? (
+          <div className="not-saving-bar" role="alert">
+            <TriangleAlert size={15} strokeWidth={2} aria-hidden="true" />
+            <span>
+              This conversation is too long to save. New messages stay on screen but will be lost
+              when you quit — start a new chat to keep them.
+            </span>
           </div>
         ) : null}
       </div>

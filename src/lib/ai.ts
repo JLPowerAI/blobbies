@@ -735,7 +735,9 @@ export async function streamBlobTurn(options: {
     const tools = [
       ...webTools,
       ...appTools,
-      makeShellTool(),
+      // Same sandbox as the fs tools: `run_command`'s file readers are
+      // contained to this Blob's home, and refused on a turn without one.
+      makeShellTool(options.home?.id),
       ...(fs === null ? [] : [...fs.readOnly, ...fs.mutating]),
       ...rosterTools,
       ...(options.routines === undefined ? [] : makeRoutineTools(options.routines)),

@@ -1025,6 +1025,59 @@ describe("streamBlobTurn routine scope", () => {
     ]);
   });
 
+  it("contains run_command to the same home folder the file tools use", async () => {
+    // The whole JS half of the sandbox fix, end to end: streamBlobTurn ->
+    // makeShellTool(home.id) -> runCommand -> invoke("shell_run", { id }).
+    // Rust resolves every path argument against the home named by that id
+    // (`shell.rs`), so if the id stops being threaded through, the readers
+    // fail closed and `cat` silently stops working for every user. Unit tests
+    // on either end both pass while that happens — only the seam catches it.
+    const invoke = vi.fn(async (..._args: unknown[]) => ({
+      stdout: "alpha\n",
+      stderr: "",
+      code: 0,
+    }));
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = { invoke };
+    let call = 0;
+    fetchHandler = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (request.format !== undefined) {
+        return new Response(JSON.stringify({ message: { content: '{"action":"none"}' } }));
+      }
+      call++;
+      if (call === 1) {
+        return ndjson(toolCallChunks("run_command", { program: "cat", args: ["notes.md"] }));
+      }
+      return ndjson(textChunks("It says alpha."));
+    };
+    const records: { name: string; result: string }[] = [];
+    try {
+      const text = await streamBlobTurn({
+        model: "llama3.2:latest",
+        messages: [{ role: "user", content: "read my notes" }],
+        home: memoryHome("61ec34f1-9ba5-4eff-b8e1-7acefb2148ea"),
+        memory: { list: () => [], save: () => {} },
+        onSegment: () => {},
+        onConfigure: () => {},
+        onToolCall: (record) => records.push({ name: record.name, result: record.result }),
+      });
+      expect(text).toBe("It says alpha.");
+    } finally {
+      // Scoped to this test: with the marker set, `httpFetch` would route the
+      // web tools through the Tauri HTTP plugin for every later test too.
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    }
+    // The command ran, and named the Blob whose sandbox contains it.
+    expect(invoke.mock.calls[0]?.[0]).toBe("shell_run");
+    expect(invoke.mock.calls[0]?.[1]).toEqual({
+      id: "61ec34f1-9ba5-4eff-b8e1-7acefb2148ea",
+      program: "cat",
+      args: ["notes.md"],
+    });
+    expect(records[0]?.name).toBe("run_command");
+    expect(records[0]?.result).toContain("alpha");
+  });
+
   it("an unreachable MCP server costs a chat turn nothing", async () => {
     // Every turn contacts its servers now, so the failure path matters as
     // much as the happy one: loadMcpTools drops a dead server and the run

@@ -285,6 +285,14 @@ export function App() {
     [],
   );
 
+  /**
+   * Slice keys whose last save failed — almost always a transcript that has
+   * outgrown the 8 MB slice cap. Held here rather than in ChatPane because
+   * the failing conversation is not necessarily the open one.
+   */
+  const [unsavedKeys, setUnsavedKeys] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => store.onSaveFailure((keys) => setUnsavedKeys(new Set(keys))), []);
+
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -2486,6 +2494,9 @@ export function App() {
               group={{ id: selectedGroup.id, name: selectedGroup.name, members }}
               onRenameGroup={(name) => renameGroup(selectedGroup.id, name)}
               messages={sentByAgent[groupConversationId(selectedGroup.id)] ?? []}
+              notSaving={unsavedKeys.has(
+                store.conversationSliceKey(groupConversationId(selectedGroup.id)),
+              )}
               thinking={speaking !== undefined}
               {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
               model={model}
@@ -2507,6 +2518,7 @@ export function App() {
           // when agent.id changes.
           agent={agent}
           messages={[...transcriptFor(agent), ...(sentByAgent[agent.id] ?? [])]}
+          notSaving={unsavedKeys.has(store.conversationSliceKey(agent.id))}
           thinking={thinkingFor === agent.id}
           model={model}
           onModelChange={changeModel}

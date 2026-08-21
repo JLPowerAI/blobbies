@@ -10,13 +10,16 @@
 // holds a dev API key, so treating it as data rather than code is the posture.
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ENV_FILE = new URL("../.env.local", import.meta.url);
 // tauri.js, not main.js: main.js only *exports* `run`, so node exits having
 // done nothing. tauri.js is the executable entry .bin/tauri points at.
 const CLI = new URL("../node_modules/@tauri-apps/cli/tauri.js", import.meta.url);
+// macOS only: runs the dev build from inside a real `.app` so the OS will
+// grant it a notification center. See the header of that file for why.
+const MACOS_RUNNER = new URL("./macos-dev-runner.mjs", import.meta.url);
 
 /** Parse `KEY=VALUE` lines into a map. Comments, blanks, and malformed lines
  *  (no `=`, empty key) are skipped; a value may contain `=`; matched single or
@@ -50,12 +53,27 @@ function loadEnvFile() {
   }
 }
 
+/** On macOS, hand Tauri our bundling runner instead of plain cargo — unless
+ *  the caller already chose one. Elsewhere there is nothing to fix. */
+function runnerArgs() {
+  if (process.platform !== "darwin" || process.argv.includes("--runner")) {
+    return [];
+  }
+  const runner = fileURLToPath(MACOS_RUNNER);
+  // Tauri spawns the runner directly, so it needs the executable bit; git
+  // records it, but a fresh checkout on a restrictive umask may not.
+  chmodSync(runner, 0o755);
+  return ["--runner", runner];
+}
+
 // Importable (and unit-testable) without launching anything.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   loadEnvFile();
-  const child = spawn(process.execPath, [fileURLToPath(CLI), "dev", ...process.argv.slice(2)], {
-    stdio: "inherit",
-  });
+  const child = spawn(
+    process.execPath,
+    [fileURLToPath(CLI), "dev", ...runnerArgs(), ...process.argv.slice(2)],
+    { stdio: "inherit" },
+  );
   child.on("error", (error) => {
     console.error(`could not run the Tauri CLI: ${error.message}`);
     process.exitCode = 1;

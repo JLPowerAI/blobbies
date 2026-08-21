@@ -230,6 +230,11 @@ pub(crate) fn data_root(app: &tauri::AppHandle) -> Result<PathBuf> {
         .map_err(|error| Error::Io(error.to_string()))
 }
 
+/// The bundle identifier before the `com.blobbies.desktop` rename. Kept only
+/// so the migration below can still find data written under the old name;
+/// nothing new should ever use it.
+const LEGACY_IDENTIFIER: &str = "com.blobbies.app";
+
 /// Bring a pre-`~/.blobbies` install across, once, at startup.
 ///
 /// Copy, never move: the legacy tree is left untouched on disk, so a failure
@@ -242,12 +247,12 @@ fn migrate_legacy_root(app: &tauri::AppHandle, root: &Path) {
     if root.exists() {
         return;
     }
-    let Ok(legacy) = app.path().app_data_dir().map(|dir| dir.join("data")) else {
+    let Ok(current) = app.path().app_data_dir() else {
         return;
     };
-    if !legacy.is_dir() {
+    let Some(legacy) = legacy_data_dir(&current) else {
         return;
-    }
+    };
     // Into a staging path first, renamed into place at the end: an interrupted
     // copy must not leave a half-populated `~/.blobbies` that the check above
     // would then treat as a finished migration.
@@ -258,6 +263,24 @@ fn migrate_legacy_root(app: &tauri::AppHandle, root: &Path) {
     } else {
         let _ = fs::remove_dir_all(&staging);
     }
+}
+
+/// The data directory to migrate from, given this build's `app_data_dir`.
+///
+/// `app_data_dir` is derived from the bundle identifier, so renaming the
+/// identifier moves it: a user still holding pre-`~/.blobbies` data under the
+/// old name would find nothing to migrate, and their chats would look deleted
+/// while sitting safely on disk. Both names are checked, current first, and
+/// this list only ever grows — an identifier that has been shipped can never
+/// be dropped from it.
+fn legacy_data_dir(current: &Path) -> Option<PathBuf> {
+    [
+        current.to_path_buf(),
+        current.with_file_name(LEGACY_IDENTIFIER),
+    ]
+    .into_iter()
+    .map(|dir| dir.join("data"))
+    .find(|dir| dir.is_dir())
 }
 
 /// Recursive directory copy; files only, no symlink following.
@@ -450,6 +473,28 @@ mod tests {
         assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/runs")).is_ok());
         assert!(resolve_slice_path(root, "groups").is_ok());
         assert!(resolve_slice_path(root, &format!("groups/{BLOB_ID}/transcript")).is_ok());
+    }
+
+    #[test]
+    fn data_written_under_the_old_bundle_identifier_is_still_found() {
+        // The rename to `com.blobbies.desktop` moved `app_data_dir`. Without
+        // this fallback an existing user's chats would sit on disk under the
+        // old identifier while the app showed an empty roster.
+        let base = temp_root("identifier-rename");
+        let current = base.join("com.blobbies.desktop");
+        let old = base.join(LEGACY_IDENTIFIER);
+
+        // Nothing anywhere: nothing to migrate.
+        assert_eq!(legacy_data_dir(&current), None);
+
+        // Only the pre-rename tree exists — it is still found.
+        fs::create_dir_all(old.join("data")).expect("old data dir");
+        assert_eq!(legacy_data_dir(&current), Some(old.join("data")));
+
+        // Once both exist the current identifier wins, so a fresh install
+        // never gets pulled back to a stale tree.
+        fs::create_dir_all(current.join("data")).expect("current data dir");
+        assert_eq!(legacy_data_dir(&current), Some(current.join("data")));
     }
 
     #[test]

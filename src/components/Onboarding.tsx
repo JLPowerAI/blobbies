@@ -421,8 +421,7 @@ export function Onboarding({
                 <span className="onboarding-row-text">
                   <span className="onboarding-row-title">Notifications</span>
                   <span className="onboarding-row-blurb">
-                    So a Blob can reach you when its work lands, or when it is stuck waiting on an
-                    answer.
+                    So a Blob can reach you when work lands or it needs an answer.
                   </span>
                 </span>
                 {notifications === "idle" ? (
@@ -453,8 +452,7 @@ export function Onboarding({
                 <span className="onboarding-row-text">
                   <span className="onboarding-row-title">Everything lives in one folder</span>
                   <span className="onboarding-row-blurb">
-                    Blobs, chats and files sit in {DATA_ROOT_LABEL}, one folder each. Nothing
-                    outside it can be read or written.
+                    Blobs, chats and files sit in {DATA_ROOT_LABEL}, one folder each.
                   </span>
                 </span>
               </div>
@@ -463,18 +461,16 @@ export function Onboarding({
                 <span className="onboarding-row-text">
                   <span className="onboarding-row-title">Where the thinking happens</span>
                   <span className="onboarding-row-blurb">
-                    A model on this machine, by default. Turn on the private cloud and requests are
-                    sealed before they leave, readable by nobody.
+                    A model on this machine, by default. Private cloud is a switch away.
                   </span>
                 </span>
               </div>
               <div className="onboarding-divider" />
               <div className="onboarding-row">
                 <span className="onboarding-row-text">
-                  <span className="onboarding-row-title">Links and Finder</span>
+                  <span className="onboarding-row-title">Links and files</span>
                   <span className="onboarding-row-blurb">
-                    Blobbies can open a link in your browser and point Finder at a file it saved. It
-                    runs nothing else for you.
+                    Opens links, shows files in Finder, reads files in its folder.
                   </span>
                 </span>
               </div>
