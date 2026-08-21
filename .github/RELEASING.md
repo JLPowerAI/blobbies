@@ -23,6 +23,28 @@ Retagging re-runs safely: the release step uploads with `--clobber` if a
 draft for the tag already exists. `workflow_dispatch` runs the bundles
 without creating a release (artifact-only smoke test).
 
+## Never change the bundle identifier
+
+`identifier` in `tauri.conf.json` is `com.blobbies.app` and has to stay that
+way. Tauri logs a warning that `.app` reads like the macOS bundle extension;
+that is cosmetic — a `log::warn!` with no behaviour attached.
+
+Renaming it is not cosmetic. macOS keys per-app state by bundle identifier, so
+a new one hands every existing user an empty slate:
+
+- **WebKit localStorage** moves to a fresh container, losing every `pref:*`:
+  onboarding completion (first-run replays), theme, timezone, model, reasoning,
+  sounds, plugin shortlist, section layout.
+- **Notification permission** re-prompts, being keyed the same way.
+
+Chats, Blobs and API keys survive — `~/.blobbies` and the keychain `SERVICE`
+are keyed independently, and `SERVICE` is frozen for the same reason.
+
+Caught by smoke-testing a signed 0.1.6 build against real data: it showed
+onboarding on a machine that had long since finished it. If a rename ever
+becomes genuinely necessary it needs a migration that reads the old
+container's `localstorage.sqlite3` once at startup, not just a config edit.
+
 ## In-app updates
 
 Every release ships `latest.json` (written by `scripts/update-manifest.mjs`)

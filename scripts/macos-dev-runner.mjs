@@ -33,7 +33,7 @@ const BIN = "Blobbies";
 /** Matches `identifier` in tauri.conf.json: the same app to macOS either way,
  *  so a permission granted in dev is the one production reads back. Keep the
  *  two in step — a mismatch silently splits the permission in half. */
-const IDENTIFIER = "com.blobbies.desktop";
+const IDENTIFIER = "com.blobbies.app";
 
 /** `run` becomes `build`; everything after the `--` separator is for the app,
  *  not for cargo, so it is dropped from the build invocation. */
