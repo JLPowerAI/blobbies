@@ -28,18 +28,31 @@
 // The one `unsafe` in this module dereferences the settings pointer that the
 // OS hands its completion block; the pointer is non-null by signature and
 // points at an OS-owned object alive for the call.
-#![expect(
-    unsafe_code,
-    reason = "deref of the OS-provided settings pointer in the completion block; unavoidable, audited"
+//
+// Conditional because the `unsafe` it excuses is itself macOS-only: an
+// unconditional `expect` goes unfulfilled everywhere else, and `-D warnings`
+// turns that into a build failure on Windows and Linux. Everything below is
+// gated for the same reason — each item is used only from a
+// `cfg(target_os = "macos")` block, so on the other platforms it is dead code
+// that fails CI rather than a warning anyone sees locally on a Mac.
+#![cfg_attr(
+    target_os = "macos",
+    expect(
+        unsafe_code,
+        reason = "deref of the OS-provided settings pointer in the completion block; unavoidable, audited"
+    )
 )]
 
+#[cfg(target_os = "macos")]
 use tauri::Manager;
 
 /// Resource name and install name of the notification chime.
+#[cfg(target_os = "macos")]
 const SOUND_NAME: &str = "blobbies-notif";
 /// What `soundNamed:` needs: custom sounds are looked up by filename, and
 /// Apple's contract is the name *with* its extension. Bare names match only
 /// system sounds, failing silently for bundled ones.
+#[cfg(target_os = "macos")]
 const SOUND_FILE: &str = "blobbies-notif.caf";
 
 /// The notification center, or `None` when this process has no app bundle.
