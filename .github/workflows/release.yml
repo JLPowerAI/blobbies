@@ -277,11 +277,12 @@ jobs:
           | Linux — Debian/Ubuntu | \`Blobbies_${VER}_amd64.deb\` |
           | Linux — any distro | \`Blobbies_${VER}_amd64.AppImage\` |
 
-          Everything else is machine food, not for humans: the **\`.app.tar.gz\` /
-          \`.sig\`** files are what the app's built-in updater downloads and
-          cryptographically verifies (you never touch them), **\`latest.json\`**
-          is the updater's index, and **\`SHA256SUMS.txt\`** lets you verify a
-          download (\`shasum -a 256 --check\`).
+          Optional: **\`SHA256SUMS.txt\`** checks your download arrived intact
+          (\`shasum -a 256 --check SHA256SUMS.txt\`).
+
+          Every other file here — **\`.app.tar.gz\`**, **\`.sig\`**,
+          **\`latest.json\`** — exists for automatic updates only. The app
+          fetches and verifies those itself; you never download them.
 
           First run: macOS builds are signed and notarized. The Windows build is
           unsigned for now, so SmartScreen asks — "More info → Run anyway".
