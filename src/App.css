@@ -3678,7 +3678,7 @@ a.modal-button {
 }
 
 /* First control of the right-hand cluster takes the pushing margin. */
-.composer-expanded .composer-mic-plain {
+.composer-expanded .composer-mic {
   margin-inline-start: auto;
 }
 
@@ -4179,32 +4179,11 @@ a.modal-button {
   opacity: 1;
 }
 
-/* Secondary dictate mic; fades in beside the circle once it becomes Send. */
-.composer-mic-plain {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  color: var(--text-secondary);
-  transition:
-    opacity var(--duration-compose) var(--ease-standard),
-    background-color var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard);
-}
-
-/* Ghost icon, so it takes the same overlay as every other .icon-button rather
-   than the filled circle's brightness trick. */
-.composer-mic-plain:hover {
-  background: var(--hover-overlay);
-  color: var(--text-primary);
-}
-
-.composer-mic-plain-hidden {
-  opacity: 0;
-  pointer-events: none;
+/* Nothing typed yet: the circle holds its place and recedes, so the composer
+   never reflows between empty and typing. */
+.composer-mic:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* ---------------------------------------------------------- detail panel */
@@ -5414,7 +5393,6 @@ a.modal-button {
   .composer-add,
   .composer-mic,
   .composer-mic-glyph,
-  .composer-mic-plain,
   .composer-input,
   /* Every hover-action rule: each sets its own transition, and killing the
      base one also drops the delayed visibility flip so the bar hides at once. */

@@ -50,8 +50,10 @@ describe("ChatPane", () => {
     const onStop = vi.fn();
     const { rerender } = render(pane(false, onStop));
 
-    // Idle: the circle sends or dictates, and nothing offers to stop.
+    // Idle: the circle is Send (disabled until something is typed), and
+    // nothing offers to stop.
     expect(screen.queryByRole("button", { name: "Stop replying" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 
     rerender(pane(true, onStop));
     // The thinking blob is a status only; the control lives in the composer,

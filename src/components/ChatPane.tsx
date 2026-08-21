@@ -434,16 +434,6 @@ function MessageRow({
   );
 }
 
-/** Solid microphone glyph; lucide only ships the outlined variant. */
-function MicFilled({ size }: { size: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-6a3.5 3.5 0 1 0-7 0v6A3.5 3.5 0 0 0 12 15z" />
-      <path d="M18.5 11.5a1 1 0 1 0-2 0 4.5 4.5 0 0 1-9 0 1 1 0 1 0-2 0 6.5 6.5 0 0 0 5.5 6.42V20H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-2.08a6.5 6.5 0 0 0 5.5-6.42z" />
-    </svg>
-  );
-}
-
 /** How many members the @-menu offers at once; the group cap is six. */
 const MAX_MENTION_OPTIONS = 6;
 
@@ -1634,34 +1624,21 @@ export function ChatPane({
               }}
             />
           </div>
-          {/* Plain dictate mic; fades in once the circle has become Send. */}
-          <button
-            type="button"
-            className={
-              hasDraft ? "composer-mic-plain" : "composer-mic-plain composer-mic-plain-hidden"
-            }
-            aria-label="Dictate message"
-            aria-hidden={!hasDraft}
-            tabIndex={hasDraft ? undefined : -1}
-            data-flip="mic-plain"
-          >
-            <MicFilled size={18} />
-          </button>
-          {/* One circle, fixed position: its glyph cross-fades mic↔arrow↔stop.
+          {/* One circle, fixed position: its glyph cross-fades arrow↔stop.
               With an empty composer mid-reply it is the Stop button (Escape
-              does the same), so the control that starts a turn also ends it. */}
+              does the same), so the control that starts a turn also ends it.
+              Idle with nothing typed it is a disabled Send — there is no
+              dictation to offer yet. */}
           <button
             type={hasDraft ? "submit" : "button"}
             className="composer-mic"
-            aria-label={showStop ? "Stop replying" : hasDraft ? "Send message" : "Dictate message"}
+            aria-label={showStop ? "Stop replying" : "Send message"}
             data-flip="mic"
             data-stop={showStop}
+            disabled={!hasDraft && !showStop}
             onClick={showStop ? onStop : undefined}
           >
-            <span className="composer-mic-glyph" data-visible={!hasDraft && !showStop}>
-              <MicFilled size={18} />
-            </span>
-            <span className="composer-mic-glyph" data-visible={hasDraft}>
+            <span className="composer-mic-glyph" data-visible={!showStop}>
               <ArrowUp size={17} strokeWidth={2.4} aria-hidden="true" />
             </span>
             <span className="composer-mic-glyph" data-visible={showStop}>
