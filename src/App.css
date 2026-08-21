@@ -4117,7 +4117,7 @@ a.modal-button {
   border-color: var(--border-strong);
 }
 
-/* One fixed circle; the mic and arrow glyphs cross-fade inside it. */
+/* One fixed circle; the arrow and stop glyphs cross-fade inside it. */
 .composer-mic {
   position: relative;
   width: 30px;
