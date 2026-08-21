@@ -22,103 +22,111 @@
 
 ---
 
-Blobbies gives you little AI teammates called Blobs. You make them, name them, and give them jobs. One for email. One for research. One that just hypes you up before big meetings.
+Little AI teammates called **Blobs**. You make them, name them, give them jobs — one for email, one for research, one that hypes you up before meetings.
 
-They remember everything you tell them. They do actual work in your apps. And none of it, not one word, gets handed to an AI company.
-
----
-
-## 🔒 The whole point
-
-Here's the uncomfortable truth about most AI apps: to be useful, they need everything. Your inbox. Your documents. Your calendar. Your notes. All of it shipped to a server you don't control, run by a company you can't audit, read for "quality", stored who knows how long, and one breach or one policy change away from not being yours anymore.
-
-Your AI assistant ends up knowing more about you than your bank does. It should be guarded like it.
-
-Blobbies is built around one rule: **your data never gets handed to an AI provider.** Exactly two ways to run the AI, and nothing else is allowed in:
-
-**1. On your own computer.** A local model (through Ollama) runs right on your machine. Your emails and documents never leave it. Works offline, no key needed.
-
-**2. In a box nobody can open.** Want more brain than your laptop has? Tinfoil runs big models inside end-to-end encrypted, hardware-verified enclaves. Your messages are locked on your device and only unlocked inside the enclave itself. Not even Tinfoil can read them. That's the only kind of cloud good enough, and it's optional.
-
-Whichever you pick, everything else is always local: memories, chats, files, settings. One folder on your machine you can back up or delete whenever. Zero telemetry, zero analytics, zero crash reports. Secrets live in your system keychain, never a plain file.
-
-No account. No cloud. No "we updated our privacy policy" emails.
+They remember you, they do real work in your apps, and they run on your machine.
 
 ---
 
-## ✨ What your Blobs can do
+## ✨ What Blobs do
 
-### They remember you
+- **Remember you** — per-Blob memories plus team-wide facts. Every entry viewable, editable, deletable.
+- **Do stuff in your apps** — Gmail, Calendar, Slack, Notion, Spotify. 942 apps in the catalog, connected through your own Composio account.
+- **Work while you're away** — routines that run every N minutes, daily, weekly, or once. Desktop notification when done.
+- **Team up** — up to 6 Blobs per group chat. @mention one, or ask the room and let them sort it out.
+- **Make more Blobs** — a Blob can spawn, edit, message, and retire other Blobs.
+- **Read your files** — PDFs, screenshots, photos. Text extraction and OCR run on your machine, in Rust, never uploaded.
+- **Search and read the web** — DuckDuckGo Lite, falling back to Bing. No setup.
+- **Run local commands** — allowlisted programs only, argv never a shell string, sandboxed to that Blob's folder.
+- **Learn skills and MCP servers** — drop a folder in `~/.blobbies/skills/`; connect loopback MCP servers for more tools.
 
-Every Blob keeps its own memories, plus facts you share with the whole team. Tell your email Blob you hate Monday meetings once and it remembers for good. You can see, edit, and delete every single memory. It's your brain, you're in charge of it.
+---
 
-### They actually do stuff
+## 🔒 Two AI paths. That's it.
 
-Blobs plug into your apps. Gmail, Google Calendar, Slack, Notion, Spotify — 900+ apps in the catalog — through a connector service on your own account. "Clear my inbox and flag anything urgent" is a real request, not a demo.
+Most AI apps need everything — inbox, docs, calendar — shipped to a server you can't audit, kept for as long as their policy says today. Blobbies allows exactly two model paths:
 
-### They work while you're away
+| | **Local (Ollama)** | **Tinfoil** |
+| --- | --- | --- |
+| Where it runs | Your CPU/GPU | Cloud, inside a secure enclave |
+| Cost | Free | Your own API key, usage-based |
+| Works offline | Yes | No |
+| Brains | Limited by your hardware | Frontier open-weight models |
+| Who can read your prompt | You | Only the enclave — verified, not promised |
 
-Give a Blob a routine, like "every morning at 8, summarize my calendar and the news I care about". It runs on schedule, on your computer, and sends you a notification when it's done.
+No OpenAI, no Anthropic, no OpenRouter — and it isn't a policy, it's the build. The Anthropic SDK is stubbed out (`src/lib/anthropic-stub.ts`) and the webview's `connect-src` allows four network origins and no others: `*.tinfoil.sh`, Sigstore's CDN, and Ollama on `localhost:11434` / `127.0.0.1:11434`. Adding a provider means editing `tauri.conf.json`, in public, in a fork.
 
-### They team up
+### Why Tinfoil and not a normal provider
 
-Put up to six Blobs in one group chat. @mention the one you want, or ask the room and let them sort out who answers. They hand work to each other. You just watch it happen.
+Every mainstream provider offers a **promise**: a privacy policy, a retention toggle, a "we don't train on API data" line. You cannot check any of it. Tinfoil replaces the promise with a check your machine performs before each connection:
 
-### They read your files
+1. **Runs in a hardware enclave (TEE).** Model and inference server sit in AMD SEV-SNP confidential compute. Memory is encrypted by the CPU, so the host operator — Tinfoil included — sees ciphertext, not your prompt.
+2. **Attested before the first byte leaves.** The `tinfoil` SDK pulls the enclave's hardware attestation and matches its measurement against the published open-source build, recorded in a Sigstore transparency log. Mismatch → the request never sends.
+3. **Encrypted to the enclave, not to a server.** Bodies are HPKE-encrypted on your device (EHBP) and decrypt only inside the enclave. A TLS terminator or proxy in front of it sees nothing useful.
+4. **Open models, OpenAI-compatible API.** No closed weights, no lock-in.
+5. **Your key, your bill.** Blobbies has no backend, no proxy, no account of yours to leak.
 
-Drop in PDFs, screenshots, photos, notes, whatever. Text gets pulled out right on your machine, even from scanned PDFs and images. Nothing gets uploaded anywhere.
+**Where the trust actually sits, honestly:** you're trusting AMD's hardware root of trust, and attestation proves the *published* code ran — it doesn't audit what that code does. A much smaller trust footprint than a policy page. Not zero. Check it yourself: [Tinfoil's verification docs](https://docs.tinfoil.sh/verification/verification-in-tinfoil), the [client SDK that does the attesting](https://github.com/tinfoilsh/tinfoil-js), and the [encrypted-body protocol](https://github.com/tinfoilsh/encrypted-http-body-protocol) — all open source.
 
-### They search the web
+### Where your data goes
 
-Blobs can search and read web pages when they need facts. Built in, no extra setup.
-
-### Talk, don't type
-
-Hit the mic and dictate. Way faster than typing, and the Blob never judges your spelling. It can't. That's the whole point of a Blob.
+| Data | Where it lives / goes |
+| --- | --- |
+| Chats, memories, Blob configs, files | `~/.blobbies` on your disk. Nothing else. |
+| API keys | OS keychain (Keychain / Credential Manager / Secret Service) — never a plain file |
+| Prompts, on a local model | Nowhere. Your machine. |
+| Prompts, on Tinfoil | Encrypted to an attested enclave, using your key |
+| Plugin actions (Gmail, Slack, …) | Through **Composio's cloud, on your own Composio account**. That's how the connector works — it's the one path where app content leaves your machine, and it's opt-in per app. |
+| Web search | Query goes to DuckDuckGo Lite, then Bing if that's blocked |
+| Update checks | App version → GitHub Releases. Signed with a minisign key; you click to install. |
+| Telemetry, analytics, crash reports | **None.** No account, no server of ours, nothing to opt out of. |
 
 ---
 
 ## ⚔️ Blobbies vs Grok Bot
 
-Grok Bot is xAI's take on AI teammates: named Bots with jobs that work on a cloud computer. It shipped in August 2026 and it's genuinely cool. Here's the honest difference:
+Grok Bot is xAI's take on AI teammates: named Bots with jobs, on a cloud computer. In beta since 11 Aug 2026, and genuinely cool. Two things separate us — **it's open source, and your data doesn't go to an AI company.** Everything else is detail:
 
 |  | 🫧 **Blobbies** | **Grok Bot** |
 | --- | --- | --- |
-| **Price** | Free, open source | SuperGrok Heavy ($300/mo), Cursor Ultra ($200/mo) |
-| **Runs on** | Your computer | xAI's cloud |
-| **Your data** | Never leaves your machine | Stored on xAI's cloud, required by the app |
-| **Private by default** | Yes. It's the architecture, not a setting | No Legacy Privacy Mode. Cloud storage is required |
-| **Works offline** | Yes, with a local model | No, it needs the cloud |
-| **The AI** | Your pick: free local models or Tinfoil's encrypted cloud | Grok models only |
-| **Memory** | Per-Blob plus team-wide, all viewable and editable | Bots keep memory, files, and logins across turns |
+| **Source code** | Open, AGPL-3.0 — read it, fork it, verify these claims | Closed |
+| **Price** | Free. Local models cost nothing; Tinfoil is your own key | No standalone plan. $300/mo SuperGrok Heavy, $200/mo Cursor Ultra, or $120/seat Premium Teams — plus metered usage past a weekly allowance |
+| **Runs on** | Your computer | xAI's cloud VM |
+| **Where your data sits** | `~/.blobbies` on your disk | xAI's cloud — required, not a setting |
+| **Private by default** | Yes, architecturally: no server exists to send it to | No — Privacy Mode (Legacy) blocks the product entirely |
+| **Works offline** | Yes, with a local model | No |
+| **The AI** | Local models, or open models in attested enclaves | Grok models only, no model picker |
+| **Memory** | Per-Blob plus team-wide, every entry viewable and editable | Bots keep memory, files, and logins across turns |
 | **Team chats** | Up to 6 Blobs per group, @mention who you want | Bots message each other and hand off tasks |
-| **Your apps** | 900+ in the built-in catalog. Connect from the Plugins tab — one browser sign-in per app — and every Blob can use it right away | Plugins for supported services, plus Bots signing into any website themselves on their cloud computer |
-| **Works while you're away** | Yes, on your machine | Yes, in the cloud |
-| **Platforms** | macOS, Windows, Linux | macOS, Windows, iOS (no Linux) |
-| **Source code** | Open, AGPL-3.0 | Closed |
+| **Your apps** | 942 in the catalog, one browser sign-in each | Plugins for supported services, plus Bots signing into websites themselves |
+| **Works while you're away** | Yes, on your machine — so your machine has to be on | Yes, in the cloud — genuinely always-on |
+| **Platforms** | macOS, Windows, Linux | macOS, Windows, iOS — no Linux |
 
-Grok Bot facts are from xAI's own docs and pricing, August 2026. It's a beta, so expect change.
+Grok Bot facts from [x.ai/bot](https://x.ai/bot) and xAI's docs, checked 22 Aug 2026. It's a beta; expect change.
 
-Fair is fair: Grok Bot's Bots each get a screen on a shared cloud computer and can use any website like a person would. If you want always-on cloud muscle and you're okay with your tools living on someone else's servers, it rocks. If you'd rather your emails, documents, and memories stayed yours, that's the whole reason Blobbies exists.
+**Fair is fair.** Grok Bots get a real screen on a cloud computer and drive any website like a person would, around the clock, whether your laptop is open or not. Blobbies can't do that and isn't trying to. What it does instead: costs nothing, runs where you can see it, and ships its whole source so "private" is something you check rather than something you're told.
 
 ---
 
 ## 🚀 Get it
 
-Grab the installer for your system from the [latest release](https://github.com/KenKaiii/blobbies/releases/latest) — macOS (Apple Silicon and Intel), Windows, and Linux (`.deb` + AppImage). Anyone comfortable with a terminal can also build it in a few minutes, setup steps at the bottom of this page.
+Installers on the [latest release](https://github.com/KenKaiii/blobbies/releases/latest) — macOS (Apple Silicon + Intel `.dmg`), Windows (`.exe`), Linux x86_64 (`.deb` + AppImage). The app checks GitHub for updates and installs them when you click. Windows builds are unsigned, so SmartScreen will warn.
+
+Then pick a brain in **Settings → Model**:
+
+- **Free, offline** — install [Ollama](https://ollama.com), pull a model, done. Blobbies finds it on `localhost:11434`.
+- **Bigger brain** — paste a [Tinfoil API key](https://tinfoil.sh). It goes to your OS keychain, not a file.
 
 ---
 
 ## 👥 Come hang out
 
-- [YouTube @kenkaidoesai](https://youtube.com/@kenkaidoesai), tutorials and demos
-- [Skool community](https://skool.com/kenkai), come hang out
+- [YouTube @kenkaidoesai](https://youtube.com/@kenkaidoesai) — tutorials and demos
+- [Skool community](https://skool.com/kenkai)
 
 ---
 
 ## 👨‍💻 For devs
-
-Setup steps, that's it:
 
 **Requirements:** Node ≥ 22.12, pnpm 10 (`corepack enable`), Rust 1.90 (auto-installed from `rust-toolchain.toml`), plus the per-OS [Tauri platform deps](https://tauri.app/start/prerequisites/):
 
@@ -145,9 +153,9 @@ pnpm check         # everything CI runs: lint, types, tests, clippy
 
 ## 📄 Licence and trademarks
 
-AGPL-3.0. Use it, change it, run it for yourself. If you run a modified version as a service other people use, share your changes. Third-party notices live in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+AGPL-3.0. Use it, change it, run it for yourself. Run a modified version as a service for others — share your changes. Third-party notices: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-App logos in `public/logos` are trademarks of their respective owners, shown only to identify the matching integration. Blobbies is not affiliated with any of them.
+App logos in `public/logos` are trademarks of their owners, shown only to identify the matching integration. Blobbies isn't affiliated with any of them.
 
 ---
 
