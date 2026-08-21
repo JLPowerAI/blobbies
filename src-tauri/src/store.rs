@@ -49,6 +49,28 @@ const BLOB_SLICES: [&str; 4] = ["config", "routines", "transcript", "runs"];
 /// Slices that live inside a group-chat directory.
 const GROUP_SLICES: [&str; 1] = ["transcript"];
 
+/// True for `transcript-1`, `transcript-2`, … — the sealed older halves of a
+/// long conversation.
+///
+/// A conversation is rewritten in full on every save, so one ever-growing
+/// slice makes each keystroke cost more than the last (measured: 14ms and 8MB
+/// of disk per save at 7,000 messages, 83ms and 64MB at 55,000) and finally
+/// trips `MAX_SLICE_BYTES`, at which point nothing saves at all. Rolling the
+/// old messages into numbered slices keeps the live one small and cheap;
+/// archives are written once and never touched again.
+///
+/// Deliberately not a general pattern: digits only, no separators, and a
+/// length bound, so this widens the allowlist by exactly one shape and cannot
+/// express a traversal.
+fn is_transcript_archive(slice: &str) -> bool {
+    slice.strip_prefix("transcript-").is_some_and(|number| {
+        !number.is_empty()
+            && number.len() <= 6
+            && number.bytes().all(|byte| byte.is_ascii_digit())
+            && !number.starts_with('0')
+    })
+}
+
 fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -79,7 +101,7 @@ fn resolve_slice_path(data_root: &Path, key: &str) -> Result<PathBuf> {
     if let Some(rest) = key.strip_prefix("blobs/")
         && let Some((id, slice)) = rest.split_once('/')
         && is_valid_blob_id(id)
-        && BLOB_SLICES.contains(&slice)
+        && (BLOB_SLICES.contains(&slice) || is_transcript_archive(slice))
     {
         return Ok(data_root
             .join("blobs")
@@ -89,7 +111,7 @@ fn resolve_slice_path(data_root: &Path, key: &str) -> Result<PathBuf> {
     if let Some(rest) = key.strip_prefix("groups/")
         && let Some((id, slice)) = rest.split_once('/')
         && is_valid_blob_id(id)
-        && GROUP_SLICES.contains(&slice)
+        && (GROUP_SLICES.contains(&slice) || is_transcript_archive(slice))
     {
         return Ok(data_root
             .join("groups")
@@ -390,7 +412,49 @@ fn build_export_bundle(root: &Path, id: &str) -> Result<serde_json::Value> {
             read_slice_file(&path)?.unwrap_or(serde_json::Value::Null),
         );
     }
+    // Sealed older halves of a long conversation. Enumerated from disk rather
+    // than from a fixed list because their count grows with the conversation;
+    // without this an export of a long chat would quietly contain only its
+    // most recent messages, which is the data loss this whole mechanism
+    // exists to prevent.
+    for (index, archive) in transcript_archives(root, id)?.into_iter().enumerate() {
+        bundle.insert(
+            format!("transcript-{}", index + 1),
+            read_slice_file(&archive)?.unwrap_or(serde_json::Value::Null),
+        );
+    }
     Ok(serde_json::Value::Object(bundle))
+}
+
+/// Every `transcript-<n>.json` a Blob owns, ordered oldest first.
+///
+/// Ordered by the number itself, not by filename: `transcript-10` sorts before
+/// `transcript-9` as text, which would interleave a conversation's history.
+fn transcript_archives(root: &Path, id: &str) -> Result<Vec<PathBuf>> {
+    let dir = root.join("blobs").join(id);
+    let mut found: Vec<(u32, PathBuf)> = Vec::new();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(Error::Io(error.to_string())),
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(stem) = name.to_str().and_then(|name| name.strip_suffix(".json")) else {
+            continue;
+        };
+        if !is_transcript_archive(stem) {
+            continue;
+        }
+        if let Some(number) = stem
+            .strip_prefix("transcript-")
+            .and_then(|number| number.parse::<u32>().ok())
+        {
+            found.push((number, entry.path()));
+        }
+    }
+    found.sort_by_key(|(number, _)| *number);
+    Ok(found.into_iter().map(|(_, path)| path).collect())
 }
 
 /// Where an export lands: a filtered stem plus a fixed suffix, inside
@@ -454,6 +518,14 @@ mod tests {
         assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/runs")).is_ok());
         assert!(resolve_slice_path(root, "groups").is_ok());
         assert!(resolve_slice_path(root, &format!("groups/{BLOB_ID}/transcript")).is_ok());
+        // Sealed halves of a long conversation, for Blobs and groups alike.
+        assert_eq!(
+            resolve_slice_path(root, &format!("blobs/{BLOB_ID}/transcript-1"))
+                .unwrap_or_else(|_| panic!("archive")),
+            root.join("blobs").join(BLOB_ID).join("transcript-1.json")
+        );
+        assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/transcript-42")).is_ok());
+        assert!(resolve_slice_path(root, &format!("groups/{BLOB_ID}/transcript-7")).is_ok());
     }
 
     #[test]
@@ -505,6 +577,16 @@ mod tests {
             "users",
             "user/x",
             "",
+            // The archive suffix widens the allowlist by one shape, and only
+            // that shape: anything else wearing the prefix stays out.
+            &format!("blobs/{BLOB_ID}/transcript-"),
+            &format!("blobs/{BLOB_ID}/transcript-0"),
+            &format!("blobs/{BLOB_ID}/transcript-01"),
+            &format!("blobs/{BLOB_ID}/transcript-1x"),
+            &format!("blobs/{BLOB_ID}/transcript-1.1"),
+            &format!("blobs/{BLOB_ID}/transcript-9999999"),
+            &format!("blobs/{BLOB_ID}/transcript-1/../../evil"),
+            &format!("blobs/{BLOB_ID}/routines-1"),
         ] {
             assert!(
                 matches!(resolve_slice_path(root, key), Err(Error::InvalidSliceKey)),
@@ -573,6 +655,33 @@ mod tests {
         // Secrets live in the keychain and settings are app-wide: neither is
         // a per-Blob slice, so neither can ride along in an exported file.
         assert!(bundle.get("settings").is_none());
+    }
+
+    #[test]
+    fn export_carries_the_archived_half_of_a_long_conversation() {
+        // The archives hold everything older than the last few hundred
+        // messages, so an export that skipped them would hand the user their
+        // most recent chat and call it their history.
+        let root = temp_root("export-archives");
+        let write = |slice: &str, value: serde_json::Value| {
+            let path = resolve_slice_path(&root, &format!("blobs/{BLOB_ID}/{slice}"))
+                .unwrap_or_else(|_| panic!("path"));
+            write_slice_file(&path, value).unwrap_or_else(|_| panic!("write"));
+        };
+        // Written out of order, and past ten, so text sorting would interleave
+        // them: `transcript-10` precedes `transcript-9` as a string.
+        write("transcript-10", serde_json::json!([{ "id": "tenth" }]));
+        write("transcript-1", serde_json::json!([{ "id": "first" }]));
+        write("transcript-9", serde_json::json!([{ "id": "ninth" }]));
+        write("transcript", serde_json::json!([{ "id": "live" }]));
+
+        let bundle = build_export_bundle(&root, BLOB_ID).unwrap_or_else(|_| panic!("bundle"));
+        let at = |pointer: &str| bundle.pointer(pointer).cloned().unwrap_or_default();
+        // Renumbered densely in age order, whatever the files were called.
+        assert_eq!(at("/transcript-1/0/id"), serde_json::json!("first"));
+        assert_eq!(at("/transcript-2/0/id"), serde_json::json!("ninth"));
+        assert_eq!(at("/transcript-3/0/id"), serde_json::json!("tenth"));
+        assert_eq!(at("/transcript/0/id"), serde_json::json!("live"));
     }
 
     #[test]

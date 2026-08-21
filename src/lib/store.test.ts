@@ -28,6 +28,61 @@ describe("store (browser fallback)", () => {
     expect(await store.loadRoster()).toEqual([ken]);
   });
 
+  it("rolls a long conversation into archives without dropping a message", async () => {
+    // The point of the whole mechanism: a conversation can outgrow the 8 MB
+    // slice cap, and when it did the app simply stopped saving. Every message
+    // has to survive the roll, in order, exactly once.
+    vi.useFakeTimers();
+    const message = (n: number): Message => ({
+      id: `m${n}`,
+      kind: "text",
+      author: n % 2 === 0 ? "user" : "agent",
+      segments: [{ text: `message ${n}` }],
+    });
+    const all = Array.from({ length: 2000 }, (_, n) => message(n));
+
+    // Saved the way the app does it: the entire conversation, every time.
+    for (let n = 1; n <= all.length; n += 1) {
+      store.saveBlobTranscript(BLOB_ID, all.slice(0, n));
+      await vi.runAllTimersAsync();
+    }
+
+    expect((await store.loadBlobTranscript(BLOB_ID))?.map((m) => m.id)).toEqual(
+      all.map((m) => m.id),
+    );
+
+    // The rewritten slice stays small however long the conversation runs —
+    // that is what keeps each save cheap and away from the cap. Read straight
+    // out of the fallback backend rather than widening the module's API to
+    // let a test look at one slice.
+    const slice = (key: string) =>
+      JSON.parse(window.localStorage.getItem(`slice:${key}`) ?? "null") as Message[] | null;
+    expect(slice(`blobs/${BLOB_ID}/transcript`)?.length ?? 0).toBeLessThanOrEqual(800);
+    expect(slice(`blobs/${BLOB_ID}/transcript-1`)).not.toBeNull();
+  });
+
+  it("drops the duplicated half when a rollover was interrupted before truncating", async () => {
+    // A roll seals the archive first and shrinks the live slice second, so a
+    // crash in between leaves the same messages in both files. Keeping them
+    // is the safe direction; the reader is what has to notice the overlap.
+    const message = (id: string): Message => ({
+      id,
+      kind: "text",
+      author: "user",
+      segments: [{ text: id }],
+    });
+    window.localStorage.setItem(
+      `slice:blobs/${BLOB_ID}/transcript-1`,
+      JSON.stringify([message("a"), message("b")]),
+    );
+    window.localStorage.setItem(
+      `slice:blobs/${BLOB_ID}/transcript`,
+      JSON.stringify([message("a"), message("b"), message("c")]),
+    );
+
+    expect((await store.loadBlobTranscript(BLOB_ID))?.map((m) => m.id)).toEqual(["a", "b", "c"]);
+  });
+
   it("announces a slice that stopped saving, and again when it recovers", async () => {
     // A transcript past the 8 MB cap is refused by Rust (`store.rs`), which is
     // correct — but the app keeps every message in memory and on screen, so

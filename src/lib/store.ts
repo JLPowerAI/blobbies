@@ -99,6 +99,11 @@ export function clearFallbackBackend(): void {
     }
   }
   writtenKeys.clear();
+  // Where the archive boundary sits is a fact about the files just deleted,
+  // so it has to go with them: a stale boundary would slice the next
+  // conversation from an offset its storage no longer has.
+  sealedTranscripts.clear();
+  rollovers.clear();
 }
 
 async function rawRead(key: string): Promise<unknown> {
@@ -278,6 +283,106 @@ export function saveUiLayout(layout: UiLayout): void {
   queueWrite("ui-layout", layout);
 }
 
+/**
+ * Messages kept in the rewritable `transcript` slice. Past this, the oldest
+ * are sealed into `transcript-1`, `transcript-2`, … and never rewritten.
+ *
+ * A conversation is written out in full on every save, so a single growing
+ * slice makes each message cost more than the last — measured at 8ms/2MB per
+ * save at 2,000 messages, 14ms/8MB at 7,000, 83ms/64MB at 55,000, all of it
+ * re-written every few seconds while someone is typing. It also ends at a
+ * wall: past `MAX_SLICE_BYTES` (8MB) Rust refuses the write, correctly, since
+ * a larger file could never be read back — and the conversation silently
+ * stops persisting. Rolling keeps the rewritten part flat and small, so
+ * neither happens however long a conversation runs.
+ */
+const LIVE_TRANSCRIPT_MAX = 800;
+
+/** How many of the oldest move into an archive when that limit is passed. */
+const TRANSCRIPT_ARCHIVE_CHUNK = 400;
+
+/** Per conversation: archives written, and how many messages they hold. */
+const sealedTranscripts = new Map<string, { archives: number; messages: number }>();
+
+/** One rollover at a time per conversation, so two cannot claim one number. */
+const rollovers = new Map<string, Promise<void>>();
+
+/**
+ * Read a conversation back: every archive oldest-first, then the live slice.
+ *
+ * Duplicates are dropped by message id because the crash window demands it.
+ * A rollover writes the archive first and truncates the live slice second, so
+ * a crash between the two leaves those messages in both places — the safe
+ * direction (nothing is lost), but the reader has to be the one that notices.
+ */
+async function loadTranscript(base: string): Promise<Message[] | null> {
+  let archived: Message[] = [];
+  let archives = 0;
+  for (;;) {
+    const value = await rawRead(`${base}/transcript-${archives + 1}`);
+    if (!Array.isArray(value)) {
+      break;
+    }
+    archived = archived.concat(value as Message[]);
+    archives += 1;
+  }
+  const live = await rawRead(`${base}/transcript`);
+  if (archives === 0) {
+    sealedTranscripts.delete(base);
+    return Array.isArray(live) ? (live as Message[]) : null;
+  }
+  sealedTranscripts.set(base, { archives, messages: archived.length });
+  if (!Array.isArray(live)) {
+    return archived;
+  }
+  const seen = new Set(archived.map((message) => message.id));
+  return archived.concat((live as Message[]).filter((message) => !seen.has(message.id)));
+}
+
+/**
+ * Persist a conversation, rolling its oldest messages away once it is long
+ * enough that rewriting all of them has become the expensive part.
+ *
+ * Callers always pass the whole conversation — archived prefix included — so
+ * the already-sealed count is what decides where the live slice starts.
+ */
+function saveTranscript(base: string, messages: Message[]): void {
+  const mark = sealedTranscripts.get(base) ?? { archives: 0, messages: 0 };
+  // Clamped: a caller holding fewer messages than we have sealed would
+  // otherwise slice from beyond the end and quietly persist nothing.
+  const alreadySealed = Math.min(mark.messages, messages.length);
+  const live = messages.slice(alreadySealed);
+  // Always queue the untruncated live slice first. If the archive below fails
+  // or the app dies mid-rollover, this is what is on disk, and it still holds
+  // every message.
+  queueWrite(`${base}/transcript`, live);
+  if (live.length <= LIVE_TRANSCRIPT_MAX) {
+    return;
+  }
+  const chunk = live.slice(0, TRANSCRIPT_ARCHIVE_CHUNK);
+  const rest = live.slice(TRANSCRIPT_ARCHIVE_CHUNK);
+  const next = (rollovers.get(base) ?? Promise.resolve())
+    .then(async () => {
+      const current = sealedTranscripts.get(base) ?? { archives: 0, messages: 0 };
+      // A rollover queued behind another one has already been superseded:
+      // its chunk was computed against a boundary that has since moved.
+      if (current.messages !== alreadySealed) {
+        return;
+      }
+      await rawWrite(`${base}/transcript-${current.archives + 1}`, chunk);
+      sealedTranscripts.set(base, {
+        archives: current.archives + 1,
+        messages: current.messages + chunk.length,
+      });
+      queueWrite(`${base}/transcript`, rest);
+    })
+    .catch(() => {
+      // Nothing was truncated, so the live slice still carries everything and
+      // the next save tries again. `startWrite` reports the failure itself.
+    });
+  rollovers.set(base, next);
+}
+
 export async function loadBlobRoutines(id: string): Promise<Routine[] | null> {
   const value = await rawRead(`blobs/${id}/routines`);
   return Array.isArray(value) ? (value as Routine[]) : null;
@@ -288,12 +393,11 @@ export function saveBlobRoutines(id: string, routines: Routine[]): void {
 }
 
 export async function loadBlobTranscript(id: string): Promise<Message[] | null> {
-  const value = await rawRead(`blobs/${id}/transcript`);
-  return Array.isArray(value) ? (value as Message[]) : null;
+  return await loadTranscript(`blobs/${id}`);
 }
 
 export function saveBlobTranscript(id: string, messages: Message[]): void {
-  queueWrite(`blobs/${id}/transcript`, messages);
+  saveTranscript(`blobs/${id}`, messages);
 }
 
 export function saveBlobConfig(id: string, config: Agent): void {
@@ -314,12 +418,11 @@ export function saveGroups(groups: Group[]): void {
 }
 
 export async function loadGroupTranscript(id: string): Promise<Message[] | null> {
-  const value = await rawRead(`groups/${id}/transcript`);
-  return Array.isArray(value) ? (value as Message[]) : null;
+  return await loadTranscript(`groups/${id}`);
 }
 
 export function saveGroupTranscript(id: string, messages: Message[]): void {
-  queueWrite(`groups/${id}/transcript`, messages);
+  saveTranscript(`groups/${id}`, messages);
 }
 
 /**
