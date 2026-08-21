@@ -277,17 +277,11 @@ jobs:
           | Linux — Debian/Ubuntu | \`Blobbies_${VER}_amd64.deb\` |
           | Linux — any distro | \`Blobbies_${VER}_amd64.AppImage\` |
 
-          Optional: **\`SHA256SUMS.txt\`** checks your download arrived intact
-          (\`shasum -a 256 --check SHA256SUMS.txt\`).
+          The Windows build is unsigned for now, so SmartScreen asks on first
+          run — "More info → Run anyway". macOS builds are signed and notarized.
 
-          Every other file here — **\`.app.tar.gz\`**, **\`.sig\`**,
-          **\`latest.json\`** — exists for automatic updates only. The app
-          fetches and verifies those itself; you never download them.
-
-          First run: macOS builds are signed and notarized. The Windows build is
-          unsigned for now, so SmartScreen asks — "More info → Run anyway".
-
-          After installing, the app updates itself.
+          After installing, the app updates itself. The remaining files are how
+          it does that.
           EOF
           sed 's/^[[:space:]]*//' preamble.md > release-notes.md
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
