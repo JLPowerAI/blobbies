@@ -23,6 +23,14 @@ src-tauri/gen
 *.p12
 *.keystore
 *.jks
+# Update signing keys. The real ones live in ~/.blobbies-keys, outside the
+# repo, so these are a backstop for the day one gets copied in "just to
+# check": a committed private key lets anyone sign an update that every
+# installed copy of Blobbies accepts as genuine, and a public repo means it
+# is scraped within minutes.
+*.key
+*.key.password
+.blobbies-keys/
 
 # Editor directories and files
 .vscode/
