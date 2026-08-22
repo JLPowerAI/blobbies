@@ -63,6 +63,20 @@ vi.mock("@/lib/intent", async (importOriginal) => ({
 }));
 
 const notify = vi.fn(async () => {});
+/**
+ * Composio's reachability, controllable per test.
+ *
+ * `composioSignedIn` is a network handshake in real life, and the whole point
+ * of the test below is that it can be true while the local plugin list is
+ * empty — the state a user is in the moment they sign in.
+ */
+const composio = vi.hoisted(() => ({ signedIn: false, apps: [] as string[] }));
+vi.mock("@/lib/composio", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/composio")>()),
+  composioSignedIn: async () => composio.signedIn,
+  connectedAppNames: async () => composio.apps,
+}));
+
 vi.mock("@/lib/notify", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/notify")>()),
   notify: (...args: unknown[]) => notify(...(args as [])),
@@ -219,6 +233,10 @@ describe("turn wiring", () => {
     calls = [];
     schedulerHost = null;
     responderPick = null;
+    // Signed out unless a test says otherwise: leaking a live account into
+    // the next test would hand it app tools it never asked for.
+    composio.signedIn = false;
+    composio.apps = [];
     notify.mockClear();
   });
 
@@ -806,6 +824,40 @@ describe("turn wiring", () => {
 
     // Only the genuinely local one survives to the turn.
     expect(calls[0]?.mcpServers?.map((server) => server.name)).toEqual(["Fine"]);
+  });
+
+  it("offers the app tools to a signed-in Blob with nothing added locally", async () => {
+    const user = userEvent.setup();
+    script = [() => "Done."];
+    // The exact shape of the bug. The tools used to be gated on
+    // `connectedApps.length > 0`, a list built from `settings.plugins` — the
+    // apps added inside this app. That was right for the CLI, where a
+    // connection could only be made here. Over MCP the account lives on
+    // Composio's side, so someone who signs in and connects Gmail there has
+    // an empty `plugins` and a live account. They got no app tools at all,
+    // and the Blob answered as though it had none.
+    composio.signedIn = true;
+    composio.apps = [];
+    mountWithModel({ plugins: [] });
+    await createFirstBlob(user, "Ken");
+    await say(user, "what can you reach?");
+
+    expect(calls[0]?.hasConnectedApps).toBe(true);
+  });
+
+  it("withholds the app tools when Composio cannot be reached", async () => {
+    const user = userEvent.setup();
+    script = [() => "Done."];
+    // The other half, and why the flag is not simply always true: with no
+    // account the model would spend rounds discovering there is nothing to
+    // call, and app_find_tool's own description promises the user's apps.
+    composio.signedIn = false;
+    composio.apps = [];
+    mountWithModel({ plugins: [] });
+    await createFirstBlob(user, "Ken");
+    await say(user, "what can you reach?");
+
+    expect(calls[0]?.hasConnectedApps).not.toBe(true);
   });
 
   it("a scheduled routine sees the same servers and shared facts as a chat turn", async () => {

@@ -511,22 +511,12 @@ export function App() {
         setSkills(installedSkills);
       }
 
-      // Named in the prompt so a Blob knows what the user has connected.
-      const apps = await connectedAppNames();
+      // Named in the prompt so a Blob knows what the user has connected, and
+      // whether the app tools exist at all.
+      const [apps, ready] = await Promise.all([connectedAppNames(), composioSignedIn()]);
       if (!cancelled) {
         setConnectedApps(apps);
-      }
-      // Whether the app tools exist at all. Separate from the list above,
-      // because the two answer different questions: that list is the apps
-      // this user has connected, while `app_find_tool` searches Composio's
-      // whole catalogue and is worth having the moment an account is
-      // reachable. Gating the tools on the list meant a signed-in user whose
-      // connections were made on Composio's own site — or who simply had not
-      // clicked Add yet — got no app tools at all, and the Blob answered as
-      // if it had none.
-      const composioReady = await composioSignedIn();
-      if (!cancelled) {
-        setComposioReady(composioReady);
+        setComposioReady(ready);
       }
 
       // Scheduler + recovery need every Blob's routines and last run — the
@@ -694,6 +684,24 @@ export function App() {
    * both land on a normal next launch. A persisted "keep replaying" switch
    * made every launch re-run the flow for whoever forgot it on.
    */
+  /**
+   * Re-read what Composio offers, after anything that could have changed it.
+   *
+   * Both halves matter and they answer different questions: `connectedApps`
+   * names the apps in the prompt, `composioReady` decides whether the app
+   * tools are built at all. The system prompt is rebuilt every turn, so a
+   * refresh here reaches the very next message — but only if something calls
+   * it. Signing in used to change neither until the app was restarted, which
+   * is the whole "the agent cannot see my apps" symptom: the account was
+   * live, and the turn was still being built as though it were not.
+   */
+  const refreshComposio = () => {
+    void Promise.all([connectedAppNames(), composioSignedIn()]).then(([apps, ready]) => {
+      setConnectedApps(apps);
+      setComposioReady(ready);
+    });
+  };
+
   const replayOnboarding = () => {
     setSettingsOpen(false);
     setOnboarding(true);
@@ -702,6 +710,9 @@ export function App() {
   const finishOnboarding = () => {
     writePreference("pref:onboarded", "true");
     setOnboarding(false);
+    // The flow carries a Composio sign-in step, so the first turn after it
+    // must already know about the account.
+    refreshComposio();
     // The flow ends *on* the app's own Blob creator rather than carrying a
     // second copy of it. With an empty roster this is what would render
     // anyway; on a replay (dev button) it is the screen the last step
@@ -2613,9 +2624,7 @@ export function App() {
           onSetInstalled={setPluginInstalled}
           onClose={() => {
             setPluginsOpen(false);
-            // This modal is the only place a connection can change, so it is
-            // the only place the prompt's app list needs re-reading.
-            void connectedAppNames().then(setConnectedApps);
+            refreshComposio();
           }}
         />
       ) : null}
@@ -2648,7 +2657,11 @@ export function App() {
           model={model}
           onModelChange={changeModel}
           onReplayOnboarding={replayOnboarding}
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => {
+            setSettingsOpen(false);
+            // Plugins lives in here, and so does the Composio Log in button.
+            refreshComposio();
+          }}
         />
       ) : null}
       {onboarding ? (
