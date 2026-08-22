@@ -42,7 +42,7 @@ import {
   saveAttachments,
 } from "@/lib/attachments";
 import type { BlobMemory, RosterAccess, RoutineAccess } from "@/lib/blob-tools";
-import { connectedAppNames, setComposioToolkits } from "@/lib/composio";
+import { composioSignedIn, connectedAppNames, setComposioToolkits } from "@/lib/composio";
 import { contextWindow } from "@/lib/context-window";
 import {
   addressedResponders,
@@ -360,6 +360,8 @@ export function App() {
    * read by a model that will repeat them back to the user.
    */
   const [connectedApps, setConnectedApps] = useState<string[]>([]);
+  /** Whether Composio answers at all, which is what the app tools need. */
+  const [composioReady, setComposioReady] = useState(false);
   const [userName, setUserName] = useState(() =>
     readPreference("pref:userName", "Ken Kai").slice(0, MAX_USER_NAME_LENGTH),
   );
@@ -509,11 +511,22 @@ export function App() {
         setSkills(installedSkills);
       }
 
-      // Named in the prompt so a Blob knows what the user has connected; the
-      // tools themselves are not built yet, which the prompt says outright.
+      // Named in the prompt so a Blob knows what the user has connected.
       const apps = await connectedAppNames();
       if (!cancelled) {
         setConnectedApps(apps);
+      }
+      // Whether the app tools exist at all. Separate from the list above,
+      // because the two answer different questions: that list is the apps
+      // this user has connected, while `app_find_tool` searches Composio's
+      // whole catalogue and is worth having the moment an account is
+      // reachable. Gating the tools on the list meant a signed-in user whose
+      // connections were made on Composio's own site — or who simply had not
+      // clicked Add yet — got no app tools at all, and the Blob answered as
+      // if it had none.
+      const composioReady = await composioSignedIn();
+      if (!cancelled) {
+        setComposioReady(composioReady);
       }
 
       // Scheduler + recovery need every Blob's routines and last run — the
@@ -1812,8 +1825,10 @@ export function App() {
           : {}),
         routines: routineAccess(target.id),
         mcpServers,
-        // Three meta-tools, gated on having something to reach.
-        hasConnectedApps: connectedApps.length > 0,
+        // Three meta-tools, gated on Composio being reachable rather than on
+        // the connected list: search spans the whole catalogue, so it is the
+        // way a Blob discovers an app the user has not added here yet.
+        hasConnectedApps: composioReady || connectedApps.length > 0,
         signal: abort.signal,
         getSteeringMessages: () => (steering.length === 0 ? null : steering.splice(0)),
         onAsk: (pending) => {

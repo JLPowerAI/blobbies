@@ -230,6 +230,10 @@ export function blobSystemPrompt(
           // rule here too would be bloat: app_run_tool already states it, and
           // it is read at the moment that matters.
           "Reach these with app_find_tool first — never guess a tool name.",
+          // The catalogue is far larger than the list above, and a Blob that
+          // reads the list as exhaustive tells the user an app is
+          // unavailable when it is one search away.
+          "app_find_tool also covers apps not listed here, so search before saying no.",
         ].join("\n"),
   );
 
