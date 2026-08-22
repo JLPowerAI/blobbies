@@ -238,12 +238,7 @@ pnpm tauri:build   # production bundle (dmg / deb+AppImage / NSIS exe)
 pnpm check         # everything CI runs: lint, types, tests, clippy
 ```
 
-**Platform notes:**
-
-- **File readers work everywhere.** `ls`, `cat`, `head`, `tail`, `wc`, `grep` and `rg` are implemented inside the app in Rust rather than spawned, so a Blob gets identical output on macOS, Windows and Linux with nothing installed.
-- **Images work on text-only models.** Attachments are OCR'd on your machine in Rust, and the model receives text, so a non-multimodal model (deepseek-v4-flash, most local ones) reads screenshots and scanned PDFs fine. A vision model still does better on diagrams and handwriting.
-- **Plugins work the same on all three.** Composio is reached over its hosted MCP endpoint, so there is nothing to install: paste a key in Settings and every app is one click away. This replaced their CLI, which ships for macOS and Linux only and would have left Windows with no plugins at all.
-- **CI builds and tests on all three** every push, and a [release workflow](.github/workflows/release.yml) ships installers for each.
+CI builds and tests on macOS, Windows and Linux every push, and a [release workflow](.github/workflows/release.yml) ships installers for each.
 
 ---
 
