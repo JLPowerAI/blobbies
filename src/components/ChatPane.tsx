@@ -453,28 +453,39 @@ const MAX_MENTION_OPTIONS = 6;
 const MENTION_TOKEN = /(?:^|\s)@([^@\n]*)$/u;
 
 /**
- * Pull `el` back onto content it actually has, and report the position it
- * ended at.
+ * Re-seat `el` on the geometry it actually has, and report where it landed.
  *
- * Forcing layout first is the whole point. WebKit can still report the
- * pre-transition `scrollHeight` right after a width animation, and a clamp
- * derived from that stale number is compared against a `scrollTop` the same
- * staleness produced — so `scrollTop > max` reads false, the correction
- * no-ops, and the pane keeps showing blank until a stray scroll makes the
- * engine re-clamp for us. Reading `offsetHeight` flushes pending layout, so
- * `max` is measured against the geometry the user is actually looking at.
+ * The previous version asked `scrollTop > max` and corrected only when that
+ * read true. It cannot work, because after a width transition WebKit hands
+ * back a *stale* scroll extent and a `scrollTop` produced by that same stale
+ * extent — the two agree with each other and disagree with the pixels, so the
+ * comparison reads false, the correction no-ops, and the pane keeps showing
+ * blank until a stray scroll makes the engine re-clamp for us. Flushing with
+ * `offsetHeight` does not help: it forces layout, not a recompute of the
+ * scrollable overflow the scroller caches.
  *
- * Only overscroll is corrected: a deliberately scrolled-up reader keeps their
- * place, because their `scrollTop` is already below `max`.
+ * So this stops asking and does what the user's rescuing flick does. A real
+ * 1px move is the one thing that makes WebKit rebuild the extent; after it,
+ * `scrollHeight` is trustworthy and the intended position can be written
+ * outright. Unconditional, because the anomaly is invisible to every test we
+ * can make from inside the page — and re-writing a position that was already
+ * correct costs nothing and moves nothing.
+ *
+ * `pinBottom` says which position was intended: the bottom for a reader who
+ * was following the conversation, otherwise wherever they had parked, capped
+ * at an extent that now exists.
  */
-function clampOverscroll(el: HTMLElement): number {
+function settleScroll(el: HTMLElement, pinBottom: boolean): number {
+  void el.offsetHeight;
+  const before = el.scrollTop;
+  // The nudge itself. 1px away from wherever we are, in whichever direction
+  // has room — at scrollTop 0 there is nothing below to borrow from.
+  el.scrollTo({ top: before < 1 ? before + 1 : before - 1, behavior: "instant" });
   void el.offsetHeight;
   const max = Math.max(0, el.scrollHeight - el.clientHeight);
-  if (el.scrollTop > max) {
-    el.scrollTo({ top: max, behavior: "instant" });
-    return max;
-  }
-  return el.scrollTop;
+  const target = pinBottom ? max : Math.min(before, max);
+  el.scrollTo({ top: target, behavior: "instant" });
+  return target;
 }
 
 /** Cap the composer's growth at five text lines (5 × 20px + block padding). */
@@ -823,17 +834,21 @@ export function ChatPane({
         // the last per-frame pin read `scrollHeight` mid-reflow, so scrollTop
         // can sit past the final, shorter content — a pane that shows blank
         // until the user scrolls and the engine re-clamps (seen live in the
-        // Tauri webview, 2026-08-19). `clampOverscroll` flushes layout before
-        // measuring, so the burst ends at a position that actually exists.
-        clampOverscroll(el);
+        // Tauri webview, 2026-08-19). `settleScroll` reproduces that rescuing
+        // scroll itself, so the burst ends on geometry that actually exists.
+        //
+        // `pinBottom` is the decision made at the start of the burst, not a
+        // fresh reading: every scroll event since then was fired by the reflow.
+        const pinBottom = resizingRef.current === true;
+        settleScroll(el, pinBottom);
         // Once more after the next paint. The 320ms timer clears the 260ms
         // width transition, but the compositor can still be mid-commit when it
         // fires; two frames put this after layout for the settled width, so a
         // reflow that lands late is corrected too. Cheap, and idempotent when
-        // the first clamp already got it right.
+        // the first pass already got it right.
         settleFrame.current = requestAnimationFrame(() => {
           settleFrame.current = requestAnimationFrame(() => {
-            const top = clampOverscroll(el);
+            const top = settleScroll(el, pinBottom);
             resizingRef.current = null;
             nearBottomRef.current = el.scrollHeight - top - el.clientHeight < 80;
           });

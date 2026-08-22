@@ -528,6 +528,86 @@ describe("ChatPane", () => {
     }
   });
 
+  it("settles on real geometry when flushing layout does not refresh the extent", () => {
+    // The shape the two tests above get wrong, and the reason the pane still
+    // went blank after they were both green.
+    //
+    // They model WebKit's staleness as something a layout flush cures, so
+    // reading offsetHeight is enough to see the settled scrollHeight. Live in
+    // the Tauri webview it is not: the scroller caches its scrollable overflow
+    // and a flush recomputes layout without rebuilding that cache. The extent
+    // stays stale, `scrollTop > max` compares two numbers that agree with each
+    // other and disagree with the pixels, the correction no-ops, and the
+    // transcript stays pushed up out of view — until the user's small scroll
+    // makes the engine rebuild it. That is why the symptom survived the flush.
+    //
+    // Modelled as an extent that ignores offsetHeight entirely and refreshes
+    // only once a scroll actually moves the element: stale 1600 before, the
+    // settled 900 after (viewport 700 → real max 200).
+    vi.useFakeTimers();
+    const callbacks: (() => void)[] = [];
+    class FakeObserver {
+      constructor(callback: () => void) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeObserver);
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    try {
+      render(pane(false, vi.fn()));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (el === null) return;
+
+      let top = 900;
+      let moved = false;
+      const tops: number[] = [];
+      const reportedHeight = () => (moved ? 900 : 1600);
+      el.scrollTo = ((options: ScrollToOptions) => {
+        if (options.top === undefined) return;
+        // Writes clamp against the extent the engine currently believes in —
+        // the stale one. This is what defeats the per-frame pin: asking for
+        // scrollHeight lands on the stale max, which is where we already are,
+        // so nothing moves and nothing is rebuilt.
+        const clamped = Math.min(Math.max(0, options.top), reportedHeight() - 700);
+        if (clamped !== top) {
+          // Only a position that actually changes rebuilds the extent — the
+          // engine's rescue is the movement itself, not the measuring near it.
+          moved = true;
+          top = clamped;
+        }
+        tops.push(top);
+      }) as unknown as typeof el.scrollTo;
+      // Deliberately does NOT clear staleness: that is the whole point.
+      Object.defineProperty(el, "offsetHeight", { get: () => 700, configurable: true });
+      Object.defineProperty(el, "scrollHeight", { get: reportedHeight, configurable: true });
+      Object.defineProperty(el, "clientHeight", { get: () => 700, configurable: true });
+      Object.defineProperty(el, "scrollTop", { get: () => top, configurable: true });
+
+      act(() => {
+        for (const callback of callbacks) callback();
+      });
+      act(() => {
+        vi.advanceTimersByTime(320);
+      });
+
+      // Lands on the only position that still has content under it. A settle
+      // that merely flushes and compares never calls scrollTo at all here, and
+      // leaves the pane sitting at 900 with nothing to show.
+      expect(top).toBe(200);
+      expect(tops.at(-1)).toBe(200);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("re-pins the instant scroll two frames later, so a stale extent self-heals", async () => {
     // Same WebKit family as the resize clamp: on a conversation switch the
     // instant pin can read scrollHeight mid-swap and land past the settled
