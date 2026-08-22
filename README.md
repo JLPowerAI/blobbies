@@ -184,14 +184,16 @@ xAI's take on AI teammates: named Bots with jobs, on a cloud computer. In beta s
 | **Memory** | Per-Blob plus team-wide, every entry viewable and editable | Bots keep memory, files, and logins across turns |
 | **Team chats** | Up to 6 Blobs per group, @mention who you want | Bots message each other and hand off tasks |
 | **Your apps** | 942 in the catalog, one browser sign-in each | Plugins for supported services, plus Bots signing into websites themselves |
-| **Works while you're away** | Yes, on your machine, so your machine has to be on | Yes, in the cloud, genuinely always-on |
+| **Works while you're away** | Yes, on your machine. Cloud runners are on the roadmap | Yes, on their cloud VM |
 | **Platforms** | macOS, Windows, Linux | macOS, Windows, iOS. No Linux |
 
 Grok Bot facts from [x.ai/bot](https://x.ai/bot) and xAI's docs, checked 22 Aug 2026. It's a beta; expect change.
 
-**Fair is fair.** Grok Bots get a real screen on a cloud computer and drive any website like a person would, all night, whether your laptop is open or not. Blobbies can't do that and isn't trying to.
+**Fair is fair.** Grok Bots have a cloud computer, so they keep working with your laptop shut. Handy. Blobbies runs on your machine today, which means routines fire while it is on.
 
-What it does instead: costs nothing, runs where you can see it, and ships its whole source. So "private" is something you check, not something you're told.
+That is a deliberate starting point, not a wall. Renting a box to run Blobs around the clock is a normal thing to add, and it is on the roadmap. The bit that is hard to bolt on later is the part we built first: no server of ours holding your data, and no AI provider reading it.
+
+Cheaper, open source, and private by construction. The always-on part is just scheduling.
 
 ---
 
