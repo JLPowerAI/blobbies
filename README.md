@@ -24,7 +24,91 @@
 
 Little AI teammates called **Blobs**. You make them, name them, give them jobs — one for email, one for research, one that hypes you up before meetings.
 
-They remember you, they do real work in your apps, and they run on your machine.
+They remember you, they do real work in your apps, and **your data never reaches an AI company.**
+
+---
+
+## 🚨 The mistake almost everyone is making right now
+
+People are connecting Gmail, Drive, Slack and Notion to AI agents at a furious pace. Almost nobody asks the only question that matters:
+
+> When the agent reads my email, **where does the text of that email go?**
+
+It goes to an AI provider. Not a summary of it, not metadata — **the actual words**, sitting in plaintext on someone else's servers, because that is the only way the model can read them.
+
+**Using an AI to write code is not the same bet.** A repo is bounded, usually replaceable, and you chose what's in it. Your inbox is not:
+
+- Every password reset and account recovery link you've ever been sent
+- Contracts, invoices, tax documents, bank mail
+- Medical results, legal threads, family arguments
+- Every private thing anyone assumed they were telling only you
+
+Hand an agent your inbox and you have handed a company **your identity's master key** — and you did it in one OAuth click, for a to-do list summary.
+
+### "But it has zero data retention"
+
+Zero retention is a promise about what happens *after* they receive it. The receiving already happened. Four things stay true:
+
+**1. It is decrypted on their machines.** ZDR means not persisted, never means not processed. Your email is plaintext in their RAM either way.
+
+**2. It is usually logged first.** OpenAI's documented default is abuse-monitoring logs for all API usage, kept up to 30 days, and exclusion requires their prior approval — an enterprise carve-out, not your default. ([data controls](https://developers.openai.com/api/docs/guides/your-data))
+
+**3. It can be reversed by someone who isn't you.** In the NYT copyright litigation a federal court ordered OpenAI to preserve output logs that would normally have been deleted — including conversations users had deleted themselves. Zero-retention endpoints were carved out for exactly one reason: **there was nothing to preserve.**
+
+**4. It can be revoked by policy.** In August 2026 Anthropic moved to 30-day retention on its most capable models — including for organizations that previously ran with Zero Data Retention. Yesterday's guarantee, gone by announcement.
+
+**Zero retention is a receipt. It is not a lock.** The only data that cannot be logged, subpoenaed, breached, or re-scoped by a policy update is data they never received.
+
+---
+
+## ✅ The two ways out
+
+So Blobbies allows exactly two model paths — and refuses everything else at the build level:
+
+| | **Local (Ollama)** | **Tinfoil** |
+| --- | --- | --- |
+| Where it runs | Your CPU/GPU | Cloud, inside a hardware enclave |
+| Cost | **Free** | Your own API key, usage-based |
+| Works offline | Yes | No |
+| Brains | Limited by your hardware | Frontier open-weight models |
+| Who can read your prompt | You | Nobody — **verified, not promised** |
+
+**Path 1 — local.** The model runs on your machine. Your email is read by software you own, on hardware you own. Nothing to trust, nothing to leak. Free forever, works on a plane. The ceiling is your GPU.
+
+**Path 2 — Tinfoil.** When you need a frontier model, this is the safest option I could find that still gives you real power. It's the one cloud that doesn't ask you to take its word.
+
+### Why Tinfoil specifically
+
+Every mainstream provider offers a **promise** — a policy page, a retention toggle, a "we don't train on API data" line. You cannot check a single one of them from outside. Tinfoil replaces the promise with a **check your own machine performs before each connection:**
+
+1. **Runs in a hardware enclave (TEE).** The model sits in AMD SEV-SNP confidential compute. Memory is encrypted by the CPU itself, so the host operator — Tinfoil included — sees ciphertext where your prompt should be. They cannot read it even if they want to, even if compelled.
+2. **Attested before the first byte leaves your machine.** The SDK fetches the enclave's hardware attestation and matches its measurement against the published open-source build, recorded in a Sigstore transparency log. Mismatch → **your request is never sent.**
+3. **Encrypted to the enclave, not to a company.** Bodies are HPKE-encrypted on your device and decrypt only inside the enclave. A proxy or TLS terminator in front of it sees nothing usable.
+4. **Open models, open protocol.** No closed weights, OpenAI-compatible API, no lock-in.
+5. **Your key, your bill.** Blobbies has no backend and no account — there's no server of ours to breach.
+
+The difference in one line: **other providers ask you to trust a policy; Tinfoil lets you verify a machine.** A subpoena to Tinfoil produces ciphertext. A subpoena to a normal provider produces your inbox.
+
+**Where the trust actually sits, honestly:** you're trusting AMD's hardware root of trust, and attestation proves the *published* code ran — it doesn't audit what that code does. A far smaller trust footprint than a policy page. Not zero. Check it yourself: [verification docs](https://docs.tinfoil.sh/verification/verification-in-tinfoil), [the client SDK that attests](https://github.com/tinfoilsh/tinfoil-js), [the encrypted-body protocol](https://github.com/tinfoilsh/encrypted-http-body-protocol).
+
+### It isn't a policy — it's the build
+
+No OpenAI, no Anthropic, no OpenRouter. The Anthropic SDK is stubbed out (`src/lib/anthropic-stub.ts`) and the webview's `connect-src` allows **four network origins and no others**: `*.tinfoil.sh`, Sigstore's CDN, and Ollama on `localhost:11434` / `127.0.0.1:11434`. Adding a provider means editing `tauri.conf.json` — in public, in a fork, where you'd see it.
+
+---
+
+## 💸 And it costs nothing
+
+The privacy argument shouldn't only be affordable to people with $200/month for software.
+
+| | Monthly |
+| --- | --- |
+| **Blobbies + a local model** | **$0** |
+| **Blobbies + Tinfoil** | Your own key, pay per use |
+| Grok Bot (cheapest route) | $120/seat Premium Teams |
+| Grok Bot (solo) | $200 Cursor Ultra, or $300 SuperGrok Heavy |
+
+Free and private are not supposed to be a trade. Here they're the same choice.
 
 ---
 
@@ -42,33 +126,7 @@ They remember you, they do real work in your apps, and they run on your machine.
 
 ---
 
-## 🔒 Two AI paths. That's it.
-
-Most AI apps need everything — inbox, docs, calendar — shipped to a server you can't audit, kept for as long as their policy says today. Blobbies allows exactly two model paths:
-
-| | **Local (Ollama)** | **Tinfoil** |
-| --- | --- | --- |
-| Where it runs | Your CPU/GPU | Cloud, inside a secure enclave |
-| Cost | Free | Your own API key, usage-based |
-| Works offline | Yes | No |
-| Brains | Limited by your hardware | Frontier open-weight models |
-| Who can read your prompt | You | Only the enclave — verified, not promised |
-
-No OpenAI, no Anthropic, no OpenRouter — and it isn't a policy, it's the build. The Anthropic SDK is stubbed out (`src/lib/anthropic-stub.ts`) and the webview's `connect-src` allows four network origins and no others: `*.tinfoil.sh`, Sigstore's CDN, and Ollama on `localhost:11434` / `127.0.0.1:11434`. Adding a provider means editing `tauri.conf.json`, in public, in a fork.
-
-### Why Tinfoil and not a normal provider
-
-Every mainstream provider offers a **promise**: a privacy policy, a retention toggle, a "we don't train on API data" line. You cannot check any of it. Tinfoil replaces the promise with a check your machine performs before each connection:
-
-1. **Runs in a hardware enclave (TEE).** Model and inference server sit in AMD SEV-SNP confidential compute. Memory is encrypted by the CPU, so the host operator — Tinfoil included — sees ciphertext, not your prompt.
-2. **Attested before the first byte leaves.** The `tinfoil` SDK pulls the enclave's hardware attestation and matches its measurement against the published open-source build, recorded in a Sigstore transparency log. Mismatch → the request never sends.
-3. **Encrypted to the enclave, not to a server.** Bodies are HPKE-encrypted on your device (EHBP) and decrypt only inside the enclave. A TLS terminator or proxy in front of it sees nothing useful.
-4. **Open models, OpenAI-compatible API.** No closed weights, no lock-in.
-5. **Your key, your bill.** Blobbies has no backend, no proxy, no account of yours to leak.
-
-**Where the trust actually sits, honestly:** you're trusting AMD's hardware root of trust, and attestation proves the *published* code ran — it doesn't audit what that code does. A much smaller trust footprint than a policy page. Not zero. Check it yourself: [Tinfoil's verification docs](https://docs.tinfoil.sh/verification/verification-in-tinfoil), the [client SDK that does the attesting](https://github.com/tinfoilsh/tinfoil-js), and the [encrypted-body protocol](https://github.com/tinfoilsh/encrypted-http-body-protocol) — all open source.
-
-### Where your data goes
+## 📍 Where your data goes
 
 | Data | Where it lives / goes |
 | --- | --- |
@@ -76,21 +134,23 @@ Every mainstream provider offers a **promise**: a privacy policy, a retention to
 | API keys | OS keychain (Keychain / Credential Manager / Secret Service) — never a plain file |
 | Prompts, on a local model | Nowhere. Your machine. |
 | Prompts, on Tinfoil | Encrypted to an attested enclave, using your key |
-| Plugin actions (Gmail, Slack, …) | Through **Composio's cloud, on your own Composio account**. That's how the connector works — it's the one path where app content leaves your machine, and it's opt-in per app. |
+| Plugin actions (Gmail, Slack, …) | Through **Composio's cloud, on your own Composio account** — see below |
 | Web search | Query goes to DuckDuckGo Lite, then Bing if that's blocked |
 | Update checks | App version → GitHub Releases. Signed with a minisign key; you click to install. |
 | Telemetry, analytics, crash reports | **None.** No account, no server of ours, nothing to opt out of. |
+
+**The honest caveat, stated plainly:** connecting Gmail or Slack routes those API calls through Composio's cloud on your own account. That's how the connector works, and it's the one path where app content leaves your machine. It is a **transit** hop, not a model host — the email body lands on your disk and is read by your local model or your enclave. It is never handed to an AI provider, which is the specific thing this app exists to prevent. Want zero third parties? Skip plugins and use files, web search and local commands; everything else still works.
 
 ---
 
 ## ⚔️ Blobbies vs Grok Bot
 
-Grok Bot is xAI's take on AI teammates: named Bots with jobs, on a cloud computer. In beta since 11 Aug 2026, and genuinely cool. Two things separate us — **it's open source, and your data doesn't go to an AI company.** Everything else is detail:
+Grok Bot is xAI's take on AI teammates: named Bots with jobs, on a cloud computer. In beta since 11 Aug 2026, and genuinely capable. It's also the clearest example of the trade this README is about — your tools, your logins and your data live on their machine, by design:
 
 |  | 🫧 **Blobbies** | **Grok Bot** |
 | --- | --- | --- |
 | **Source code** | Open, AGPL-3.0 — read it, fork it, verify these claims | Closed |
-| **Price** | Free. Local models cost nothing; Tinfoil is your own key | No standalone plan. $300/mo SuperGrok Heavy, $200/mo Cursor Ultra, or $120/seat Premium Teams — plus metered usage past a weekly allowance |
+| **Price** | Free, or your own Tinfoil key | $120/seat Premium Teams, $200 Cursor Ultra, $300 SuperGrok Heavy — plus metered usage past a weekly allowance |
 | **Runs on** | Your computer | xAI's cloud VM |
 | **Where your data sits** | `~/.blobbies` on your disk | xAI's cloud — required, not a setting |
 | **Private by default** | Yes, architecturally: no server exists to send it to | No — Privacy Mode (Legacy) blocks the product entirely |
@@ -104,7 +164,7 @@ Grok Bot is xAI's take on AI teammates: named Bots with jobs, on a cloud compute
 
 Grok Bot facts from [x.ai/bot](https://x.ai/bot) and xAI's docs, checked 22 Aug 2026. It's a beta; expect change.
 
-**Fair is fair.** Grok Bots get a real screen on a cloud computer and drive any website like a person would, around the clock, whether your laptop is open or not. Blobbies can't do that and isn't trying to. What it does instead: costs nothing, runs where you can see it, and ships its whole source so "private" is something you check rather than something you're told.
+**Fair is fair.** Grok Bots get a real screen on a cloud computer and drive any website like a person would, around the clock, whether your laptop is open or not. Blobbies can't do that and isn't trying to. What it does instead: costs nothing, runs where you can see it, and ships its whole source — so "private" is something you check rather than something you're told.
 
 ---
 
