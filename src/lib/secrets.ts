@@ -8,7 +8,7 @@ import { isTauri } from "@/lib/tauri";
  */
 
 /** Must match ALLOWED_NAMES in src-tauri/src/secrets.rs. */
-export type SecretName = "tinfoil-api-key" | "tinfoil-cache-secret";
+export type SecretName = "tinfoil-api-key" | "tinfoil-cache-secret" | "composio-api-key";
 
 export async function getSecret(name: SecretName): Promise<string | null> {
   if (isTauri()) {

@@ -242,7 +242,7 @@ pnpm check         # everything CI runs: lint, types, tests, clippy
 
 - **File readers work everywhere.** `ls`, `cat`, `head`, `tail`, `wc`, `grep` and `rg` are implemented inside the app in Rust rather than spawned, so a Blob gets identical output on macOS, Windows and Linux with nothing installed.
 - **Images work on text-only models.** Attachments are OCR'd on your machine in Rust, and the model receives text, so a non-multimodal model (deepseek-v4-flash, most local ones) reads screenshots and scanned PDFs fine. A vision model still does better on diagrams and handwriting.
-- **Plugins do not work on native Windows.** Composio ships its CLI for macOS and Linux only, no Windows build exists, and their installer stops with "Windows is not supported". Every plugin action runs through that CLI, so the whole 942-app surface needs macOS, Linux, or Blobbies running inside [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). Upstream's gap, not one we can patch. The in-app install button hides itself there and the Plugins tab says so. **Everything else on Windows is fine:** local models, Tinfoil, files, OCR, web search, routines, group chats.
+- **Plugins work the same on all three.** Composio is reached over its hosted MCP endpoint, so there is nothing to install: paste a key in Settings and every app is one click away. This replaced their CLI, which ships for macOS and Linux only and would have left Windows with no plugins at all.
 - **CI builds and tests on all three** every push, and a [release workflow](.github/workflows/release.yml) ships installers for each.
 
 ---

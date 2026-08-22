@@ -4,13 +4,7 @@ import { BlobAvatar } from "@/components/BlobAvatar";
 import { PillSelect } from "@/components/PillSelect";
 import { MAX_USER_NAME_LENGTH } from "@/components/SettingsModal";
 import type { AgentShape, AvatarTone } from "@/data/agents";
-import {
-  composioCliVersion,
-  composioSignedIn,
-  installComposioCli,
-  pollComposioLogin,
-  startComposioLogin,
-} from "@/lib/composio";
+import { COMPOSIO_DASHBOARD_URL, composioSignedIn, forgetComposioSession } from "@/lib/composio";
 import { requestNotificationPermission } from "@/lib/notify";
 import { getSecret, setSecret } from "@/lib/secrets";
 import { openExternal } from "@/lib/tauri";
@@ -120,18 +114,19 @@ type KeyState = "idle" | "saved" | "rejected";
  * one that matters most — the browser is open, this app is polling, and the
  * user needs a way out that is not force-quitting.
  */
+/**
+ * Composio is reached over its hosted MCP endpoint, so setup is one key
+ * rather than an installer plus a browser login. The CLI this replaced had no
+ * Windows build at all, which made the old install step impossible to finish
+ * on a supported platform.
+ */
 type ComposioState =
   | { kind: "idle" }
   | { kind: "checking" }
-  | { kind: "missing" }
-  | { kind: "installing" }
-  | { kind: "installed" }
-  | { kind: "opening" }
-  | { kind: "waiting" }
+  | { kind: "needsKey" }
+  | { kind: "verifying" }
   | { kind: "signedIn" }
-  // `retry` names which step failed, so "Try again" repeats *that* one. Without
-  // it a failed sign-in would offer a button wired to the installer.
-  | { kind: "failed"; message: string; retry: "install" | "signIn" };
+  | { kind: "failed"; message: string };
 
 /**
  * What a pasted key must look like: one run of key characters, nothing else.
@@ -174,6 +169,7 @@ export function Onboarding({
   const [key, setKey] = useState("");
   const [keyState, setKeyState] = useState<KeyState>("idle");
   const [composio, setComposio] = useState<ComposioState>({ kind: "idle" });
+  const [composioKey, setComposioKey] = useState("");
   // Local to the flow; committed through the parent only when the step is
   // left via Next, so Back and Skip leave the stored values untouched.
   const [nameInput, setNameInput] = useState(userName);
@@ -260,69 +256,48 @@ export function Onboarding({
     })();
   }, [step]);
 
-  // Probe when the Composio screen is reached, not on mount: it spawns a
-  // process, and most of a first run never needs the answer.
+  // Probe when the Composio screen is reached, not on mount: it is a network
+  // round trip, and most of a first run never needs the answer.
   useEffect(() => {
     if (step !== "composio" || composio.kind !== "idle") {
       return;
     }
     setComposio({ kind: "checking" });
     void (async () => {
-      const version = await composioCliVersion();
-      if (version === null) {
-        setComposio({ kind: "missing" });
-        return;
-      }
-      // Installed *and* already signed in is a real state on a replayed run;
-      // showing "Sign in" there would invite a pointless second login.
-      setComposio({ kind: (await composioSignedIn()) ? "signedIn" : "installed" });
+      // Already keyed is a real state on a replayed run; asking again there
+      // would invite a pointless second paste.
+      setComposio({ kind: (await composioSignedIn()) ? "signedIn" : "needsKey" });
     })();
   }, [step, composio.kind]);
 
-  const failure = (error: unknown, retry: "install" | "signIn") => ({
-    kind: "failed" as const,
-    retry,
-    // The Rust side returns a sentence written for this screen; anything else
-    // would be a bug, so it is shown rather than swallowed.
-    message: error instanceof Error ? error.message : String(error),
-  });
-
-  const installCli = async () => {
-    setComposio({ kind: "installing" });
-    try {
-      await installComposioCli();
-      // Back to `idle` so the probe above re-runs: a machine that was signed
-      // in before a reinstall should land on "Ready", not be asked to log in
-      // a second time.
-      setComposio({ kind: "idle" });
-    } catch (error) {
-      setComposio(failure(error, "install"));
-    }
-  };
-
   /**
-   * Start the login, hand the URL to the real browser, then wait for it.
+   * Store the key, then prove it works before calling it done.
    *
-   * Two calls rather than one because that is what makes this survivable from
-   * a GUI: `--no-wait` returns a URL immediately, and only the second call
-   * blocks. Doing it in one would mean holding a terminal open for ten
-   * minutes with nothing on screen.
+   * Saving alone would show "Ready" for a mistyped key and fail later inside
+   * a Blob's turn, where the person cannot see why. One handshake here moves
+   * that error to the screen that can fix it.
    */
-  const signIn = async () => {
-    setComposio({ kind: "opening" });
+  const saveComposioKey = async () => {
+    const key = composioKey.trim();
+    if (!KEY_PATTERN.test(key)) {
+      setComposio({ kind: "failed", message: "That does not look like a Composio key." });
+      return;
+    }
+    setComposio({ kind: "verifying" });
     try {
-      const url = await startComposioLogin();
-      await openExternal(url);
-      setComposio({ kind: "waiting" });
-      await pollComposioLogin();
-      // Ask the disk rather than trusting the poll's answer: the CLI can save
-      // credentials while the poll still reports false (it competes with any
-      // other `--poll` for the same session), so the file is the only honest
-      // source. Checked directly rather than by bouncing through `idle`, which
-      // would re-run the probe and flash "Checking\u2026" over a finished login.
-      setComposio((await composioSignedIn()) ? { kind: "signedIn" } : { kind: "installed" });
+      await setSecret("composio-api-key", key);
+      forgetComposioSession();
+      if (await composioSignedIn()) {
+        setComposioKey("");
+        setComposio({ kind: "signedIn" });
+      } else {
+        setComposio({ kind: "failed", message: "Composio did not accept that key." });
+      }
     } catch (error) {
-      setComposio(failure(error, "signIn"));
+      setComposio({
+        kind: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 
@@ -558,8 +533,8 @@ export function Onboarding({
           <div className="onboarding-step">
             <h1 className="onboarding-heading">Hooking up your apps</h1>
             <p className="onboarding-blurb">
-              Gmail, Calendar, Slack and the rest connect through Composio. One sign-in covers all
-              of them.
+              Gmail, Calendar, Slack and the rest connect through Composio. Paste a key once and
+              every app is one click away.
             </p>
             <div className="onboarding-card">
               <div className="onboarding-row">
@@ -568,19 +543,13 @@ export function Onboarding({
                   <span className="onboarding-row-blurb" role="status">
                     {composio.kind === "idle" || composio.kind === "checking"
                       ? "Checking\u2026"
-                      : composio.kind === "missing"
-                        ? "Not installed yet."
-                        : composio.kind === "installing"
-                          ? "Installing\u2026 this takes a moment."
-                          : composio.kind === "installed"
-                            ? "Installed. Sign in to connect your apps."
-                            : composio.kind === "opening"
-                              ? "Opening your browser\u2026"
-                              : composio.kind === "waiting"
-                                ? "Waiting for you in the browser\u2026 blank page? Open again."
-                                : composio.kind === "failed"
-                                  ? composio.message
-                                  : "Signed in. Your apps can connect now."}
+                      : composio.kind === "verifying"
+                        ? "Checking that key\u2026"
+                        : composio.kind === "failed"
+                          ? composio.message
+                          : composio.kind === "signedIn"
+                            ? "Connected. Your apps can connect now."
+                            : "Paste a key to connect your apps."}
                   </span>
                 </span>
                 {composio.kind === "signedIn" ? (
@@ -588,43 +557,43 @@ export function Onboarding({
                     <Check size={13} strokeWidth={2.2} aria-hidden="true" />
                     Ready
                   </span>
-                ) : composio.kind === "installed" ||
-                  composio.kind === "waiting" ||
-                  (composio.kind === "failed" && composio.retry === "signIn") ? (
-                  <button
-                    type="button"
-                    className="onboarding-allow"
-                    // Kept live while waiting: the poll runs for ten minutes,
-                    // and a browser tab closed by accident must not leave the
-                    // only way forward greyed out.
-                    onClick={() => void signIn()}
-                  >
-                    {composio.kind === "waiting"
-                      ? "Open again"
-                      : composio.kind === "failed"
-                        ? "Try again"
-                        : "Sign in"}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="onboarding-allow"
-                    disabled={
-                      composio.kind === "installing" ||
-                      composio.kind === "checking" ||
-                      composio.kind === "idle" ||
-                      composio.kind === "opening"
-                    }
-                    onClick={() => void installCli()}
-                  >
-                    {composio.kind === "installing"
-                      ? "Installing"
-                      : composio.kind === "failed"
-                        ? "Try again"
-                        : "Install"}
-                  </button>
-                )}
+                ) : null}
               </div>
+              {composio.kind === "signedIn" ? null : (
+                <div className="onboarding-key-row">
+                  <input
+                    className="onboarding-key-input"
+                    type="password"
+                    value={composioKey}
+                    placeholder="ck_\u2026"
+                    aria-label="Composio API key"
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => setComposioKey(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void saveComposioKey();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="onboarding-allow"
+                    disabled={composio.kind === "verifying" || composioKey.trim() === ""}
+                    onClick={() => void saveComposioKey()}
+                  >
+                    {composio.kind === "verifying" ? "Checking" : "Connect"}
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                className="onboarding-link"
+                onClick={() => void openExternal(COMPOSIO_DASHBOARD_URL)}
+              >
+                Get a key from Composio
+              </button>
             </div>
           </div>
         );

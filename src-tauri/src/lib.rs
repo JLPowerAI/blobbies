@@ -1,5 +1,4 @@
 mod commands;
-mod composio;
 mod error;
 mod home;
 mod notifications;
@@ -35,18 +34,6 @@ pub fn run() {
             commands::ollama_installed,
             commands::ollama_start,
             commands::host_is_public,
-            composio::composio_cli_version,
-            composio::composio_cli_installable,
-            composio::composio_cli_install,
-            composio::composio_signed_in,
-            composio::composio_login_start,
-            composio::composio_login_poll,
-            composio::composio_accounts,
-            composio::composio_account_identity,
-            composio::composio_link_start,
-            composio::composio_search,
-            composio::composio_schema,
-            composio::composio_execute,
             shell::shell_allowed,
             shell::shell_run,
             store::store_read,

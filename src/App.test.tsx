@@ -470,7 +470,7 @@ describe("App", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("shows the Composio CLI as missing in the Plugins tab and never asks for a key", async () => {
+  it("asks for a Composio key in the Plugins tab", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -479,14 +479,12 @@ describe("App", () => {
     const dialog = screen.getByRole("dialog", { name: "Settings" });
     await user.click(within(dialog).getByRole("button", { name: "Plugins" }));
 
-    // Outside Tauri the CLI probe reports absent, which must read as missing
-    // rather than as a silent success.
-    expect(await within(dialog).findByText(/Not installed/)).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Install" })).toBeInTheDocument();
-
-    // The credential belongs to Composio's own CLI. If a key field ever comes
-    // back here, it means the app started keeping a second copy.
-    expect(within(dialog).queryByLabelText(/API key/)).not.toBeInTheDocument();
+    // Composio is reached over its hosted MCP endpoint now: no binary to
+    // install, one key. The CLI this replaced had no Windows build at all,
+    // so the old "Install" button was unreachable on a supported platform.
+    expect(await within(dialog).findByText(/Paste a Composio key/)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/API key/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
 
     // Skills read from disk, which jsdom has none of — the empty state must
     // say where to put one rather than showing a blank card.
@@ -700,10 +698,10 @@ describe("App", () => {
     expect(marketplaceTab).toHaveTextContent(String(catalog.length));
 
     // A failed connect explains itself on the row that was clicked. Without
-    // this, a missing CLI and an abandoned browser tab are both just a button
-    // that appeared to do nothing.
+    // this, a missing key and an abandoned browser tab are both just a button
+    // that appeared to do nothing. With no key set, that is what it says.
     await user.click(within(dialog).getByRole("button", { name: "Connect" }));
-    expect(await within(dialog).findByText(/only works in the desktop app/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/No Composio key yet/)).toBeInTheDocument();
     expect(within(dialog).queryByText("Connected")).not.toBeInTheDocument();
 
     // The detail view lists real accounts. With none connected it says so
@@ -1212,10 +1210,10 @@ describe("onboarding", () => {
     await user.click(flow().getByRole("button", { name: /Skip, I'll use the local model/ }));
     expect(await getSecret("tinfoil-api-key")).toBeNull();
 
-    // Composio is optional in the same way. It asks for no key at all — the
-    // CLI owns that credential — so the only way past an unsigned-in state is
-    // Skip, and the primary button stays shut.
-    expect(flow().queryByLabelText(/API key/)).not.toBeInTheDocument();
+    // Composio is optional in the same way, and now asks for its own key: the
+    // hosted MCP endpoint replaced the CLI that used to own that credential.
+    // Skip is still the only way past, and the primary button stays shut.
+    expect(flow().getByLabelText("Composio API key")).toHaveValue("");
     expect(flow().getByRole("button", { name: "Make your first Blob" })).toBeDisabled();
     // And it is the last step: picking plugins is not part of setup, because
     // it asks which apps you want before you have a Blob to use them with.

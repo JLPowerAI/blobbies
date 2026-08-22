@@ -1,120 +1,49 @@
-import { invoke } from "@tauri-apps/api/core";
 import { loadPlugins } from "@/data/plugins";
-import { isTauri } from "@/lib/tauri";
+import { callComposioTool, composioReachable, forgetComposioSession } from "@/lib/composio-mcp";
 
 /**
  * Composio: the broker that owns the OAuth dance for every plugin.
  *
  * Connecting Gmail or Calendar means an OAuth app registered with Google — a
- * redirect URI, a client secret, a token refresh loop — per provider. Composio
- * runs those apps, so this app registers none of them.
+ * redirect URI, a client secret, a token refresh loop — per provider.
+ * Composio runs those apps, so this app registers none of them.
  *
- * **The CLI owns the credential, and this app stores nothing.** An earlier
- * draft asked the user to paste an API key from the dashboard and kept it in
- * the OS keychain. `composio login` is strictly better: `--no-wait` prints a
- * login URL and exits, the browser does the sign-in, and `--poll` waits for it
- * — so the user never visits a dashboard, never copies a key, and the
- * credential lands in `~/.composio/config.json` under the CLI's own care.
- * Even a pasted key would only have been forwarded to `login --user-api-key`,
- * so holding a second copy bought nothing.
+ * **This used to shell out to their CLI, and no longer does.** That binary
+ * ships for macOS and Linux only; no Windows build exists and their installer
+ * stops with "Windows is not supported". Since every plugin action ran
+ * `composio execute`, the whole 942-app surface was dead on Windows rather
+ * than merely awkward. Their hosted MCP endpoint needs no binary, so one code
+ * path now serves every platform — and there is no 80MB install step, no
+ * version drift between machines, and no WSL detour.
+ *
+ * The functions here keep the shapes their callers already expect; only the
+ * transport underneath changed. `composio-mcp.ts` holds the pinned endpoint,
+ * the credential and the tool allowlist.
  */
 
-/**
- * Whether the CLI is on this machine, as a version string.
- *
- * A plain browser cannot see the filesystem, so "not installed" is the only
- * honest answer there — same shape as `isOllamaInstalled`.
- */
-export async function composioCliVersion(): Promise<string | null> {
-  if (!isTauri()) {
-    return null;
-  }
-  try {
-    return await invoke<string | null>("composio_cli_version");
-  } catch {
-    return null;
-  }
-}
+export { COMPOSIO_DASHBOARD_URL, forgetComposioSession } from "@/lib/composio-mcp";
 
 /**
- * Whether this platform can run Composio's installer.
+ * Whether Composio is usable right now: a key that actually works.
  *
- * It is a POSIX shell script, so Windows is a WSL-only path. Outside Tauri
- * this answers `true`: saying otherwise would put "needs WSL" on screen in a
- * dev browser, which is the wrong reason — let the install itself explain.
- */
-export async function composioCliInstallable(): Promise<boolean> {
-  if (!isTauri()) {
-    return true;
-  }
-  try {
-    return await invoke<boolean>("composio_cli_installable");
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Download and run Composio's installer. Resolves to the installed version.
- *
- * Rejects rather than returning a sentinel: the caller shows the message, and
- * a failed install is exactly the case the user needs told about.
- */
-export function installComposioCli(): Promise<string> {
-  if (!isTauri()) {
-    return Promise.reject(new Error("The installer only runs in the desktop app."));
-  }
-  return invoke<string>("composio_cli_install");
-}
-
-/**
- * Whether the CLI holds a login.
- *
- * Not an exit-code probe: every authenticated CLI command exits **0 with
- * empty output** when logged out (measured), so running one would report
- * "connected" to someone who never signed in. The Rust side reads the
- * credential itself.
+ * A real handshake, not a "is a key present" check. A revoked or mistyped key
+ * looks identical to a good one until it is used, and "connected" is the one
+ * thing the Plugins tab must not get wrong.
  */
 export async function composioSignedIn(): Promise<boolean> {
-  if (!isTauri()) {
-    return false;
-  }
-  try {
-    return await invoke<boolean>("composio_signed_in");
-  } catch {
-    return false;
-  }
+  return composioReachable();
 }
 
 /**
- * Start a login and get the URL the user must open.
+ * Turn a thrown transport failure into text the model can act on.
  *
- * Rejects when the CLI is missing or prints no usable link; the caller shows
- * the message rather than opening something unexpected.
+ * Returned rather than rethrown: a failed tool call is information a Blob can
+ * use — it can tell the user to reconnect — while an exception aborts the
+ * whole turn and loses the rest of the work.
  */
-export function startComposioLogin(): Promise<string> {
-  if (!isTauri()) {
-    return Promise.reject(new Error("Signing in only works in the desktop app."));
-  }
-  return invoke<string>("composio_login_start");
+function asText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
-
-/**
- * How long to wait for an OAuth consent screen before giving up on it.
- *
- * Ninety seconds, not five minutes: most of the old window was spent holding a
- * row hostage after the user had already walked away, and Cancel is on screen
- * for the whole wait anyway.
- *
- * This does cap a slow consent — an SSO or 2FA detour can outrun it. That is
- * survivable because giving up only stops the watching: the connection still
- * completes on Composio's side and shows up next time the panel reads its
- * accounts. Callers must say that rather than calling it a failure.
- */
-const LINK_TIMEOUT_MS = 90_000;
-
-/** Gap between checks. Each one spawns a process, so it is not a tight loop. */
-const LINK_POLL_MS = 2_000;
 
 /**
  * Find tools for a task. Returns Composio's ranked plan as JSON text.
@@ -125,15 +54,10 @@ const LINK_POLL_MS = 2_000;
  * call time, and discovery scales to any app connected later with no code.
  */
 export async function composioSearch(query: string): Promise<string> {
-  if (!isTauri()) {
-    return "Connected apps are only available in the desktop app.";
-  }
   try {
-    return await invoke<string>("composio_search", { query });
+    return await callComposioTool("COMPOSIO_SEARCH_TOOLS", { use_case: query });
   } catch (error) {
-    // Returned, not thrown: a failed tool call is information the model can
-    // act on, while an exception would abort the whole turn.
-    return error instanceof Error ? error.message : String(error);
+    return asText(error);
   }
 }
 
@@ -145,52 +69,77 @@ export async function composioSearch(query: string): Promise<string> {
  * hardcoded, and why the text is passed through whole.
  */
 export async function composioSchema(tool: string): Promise<string> {
-  if (!isTauri()) {
-    return "Connected apps are only available in the desktop app.";
-  }
   try {
-    return await invoke<string>("composio_schema", { tool });
+    return await callComposioTool("COMPOSIO_GET_TOOL_SCHEMAS", { tool_slugs: [tool] });
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return asText(error);
   }
 }
 
 /** Run one tool. `args` is a JSON object matching its schema. */
 export async function composioExecute(tool: string, args: string): Promise<string> {
-  if (!isTauri()) {
-    return "Connected apps are only available in the desktop app.";
+  let parsed: unknown;
+  try {
+    parsed = args.trim() === "" ? {} : JSON.parse(args);
+  } catch {
+    // The model wrote this string, so a malformed one is its mistake to fix.
+    // Saying so beats forwarding invalid JSON and relaying a vaguer error.
+    return "The arguments were not valid JSON. Send a JSON object matching the tool schema.";
   }
   try {
-    return await invoke<string>("composio_execute", { tool, arguments: args });
+    return await callComposioTool("COMPOSIO_MULTI_EXECUTE_TOOL", {
+      tools: [{ tool_slug: tool, arguments: parsed }],
+      // Never true. Syncing pushes the result into Composio's remote workbench
+      // sandbox for further processing there — off-device handling of the
+      // user's own mail and files, which is the thing this app exists to
+      // avoid. Results come back here and stay here.
+      sync_response_to_workbench: false,
+    });
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return asText(error);
   }
 }
-
-/** Where a user manages accounts we cannot manage for them. */
-export const COMPOSIO_DASHBOARD_URL = "https://dashboard.composio.dev/";
 
 /** One connected account of one app. */
 export interface ComposioAccount {
   toolkit: string;
-  /** The CLI's handle for this account, used to name it in `--account`. */
+  /** Composio's handle for this account, used to name it in `account`. */
   id: string;
   /** User-chosen name for a second account on the same app, else empty. */
   alias: string;
   /** Address or username on the account, once resolved; "" until then. */
   identity?: string;
-  /** Raw CLI status: ACTIVE, EXPIRED, INITIALIZING, … */
+  /** Raw status: active, initiated, failed, … */
   status: string;
   active: boolean;
 }
 
 /**
+ * Apps to ask about, set by the app shell from saved settings.
+ *
+ * Composio's connection listing is per-toolkit — there is no "list
+ * everything" call, and a wildcard is taken as a literal toolkit name (tested:
+ * it starts connecting an app called `*`). Asking about all 942 in the
+ * catalog would be absurd, so this holds the ones the user has actually
+ * added.
+ */
+let watchedToolkits: string[] = [];
+
+/** Tell this module which apps the user has, from persisted settings. */
+export function setComposioToolkits(toolkits: readonly string[]): void {
+  const next = [...new Set(toolkits)].sort();
+  if (next.join(",") !== watchedToolkits.join(",")) {
+    watchedToolkits = next;
+    forgetComposioAccounts();
+  }
+}
+
+/**
  * The in-flight or finished account list, shared by every caller.
  *
- * `connections list` is a 1.7s CLI round trip (measured), and three things ask
- * for it: the prompt's app list at startup, the Plugins tiles, and the detail
- * panel. Without this they each pay the 1.7s, and opening Plugins right after
- * launch pays it twice concurrently. Cleared whenever a connection changes.
+ * Three things ask for it — the prompt's app list at startup, the Plugins
+ * tiles, and the detail panel — and without this each pays its own round
+ * trip, twice over when Plugins opens right after launch.
  */
 let accountsPromise: Promise<ComposioAccount[]> | null = null;
 
@@ -199,18 +148,75 @@ export function forgetComposioAccounts(): void {
   accountsPromise = null;
 }
 
+/** Shape Composio returns for a connections listing. */
+interface ConnectionsPayload {
+  data?: {
+    results?: Record<
+      string,
+      {
+        toolkit?: string;
+        status?: string;
+        accounts?: {
+          id?: string;
+          status?: string;
+          alias?: string;
+          user_info?: Record<string, unknown>;
+        }[];
+      }
+    >;
+  };
+}
+
 /**
- * Every connected account, across every app.
+ * Pull a human-recognisable identity out of an account's profile blob.
+ *
+ * Composio returns whatever the provider gave it, so the useful field is
+ * named differently per app — `emailAddress` on Gmail, `login` on GitHub. The
+ * old CLI needed a separate 3.1s call per account for this; the MCP listing
+ * carries it inline, so it now costs nothing.
+ */
+function identityOf(info: Record<string, unknown> | undefined): string {
+  for (const key of ["emailAddress", "email", "login", "username", "name", "displayName"]) {
+    const value = info?.[key];
+    if (typeof value === "string" && value !== "") {
+      return value;
+    }
+  }
+  return "";
+}
+
+/**
+ * Every connected account, across the apps the user has added.
  *
  * Includes broken ones on purpose — callers decide what an inactive one means.
  */
 export async function composioAccounts(): Promise<ComposioAccount[]> {
-  if (!isTauri()) {
+  if (watchedToolkits.length === 0) {
     return [];
   }
-  accountsPromise ??= invoke<ComposioAccount[]>("composio_accounts").catch(() => {
-    // A failure must not be remembered: the CLI may simply not be installed
-    // yet, and the next open should ask again.
+  accountsPromise ??= (async () => {
+    const raw = await callComposioTool("COMPOSIO_MANAGE_CONNECTIONS", {
+      toolkits: watchedToolkits.map((name) => ({ name, action: "list" })),
+    });
+    const parsed = JSON.parse(raw) as ConnectionsPayload;
+    const out: ComposioAccount[] = [];
+    for (const [slug, entry] of Object.entries(parsed.data?.results ?? {})) {
+      for (const account of entry.accounts ?? []) {
+        const status = account.status ?? entry.status ?? "unknown";
+        out.push({
+          toolkit: entry.toolkit ?? slug,
+          id: account.id ?? "",
+          alias: account.alias ?? "",
+          identity: identityOf(account.user_info),
+          status,
+          active: status.toLowerCase() === "active",
+        });
+      }
+    }
+    return out;
+  })().catch(() => {
+    // A failure must not be remembered: the key may not be set yet, and the
+    // next open should ask again.
     accountsPromise = null;
     return [] as ComposioAccount[];
   });
@@ -218,45 +224,14 @@ export async function composioAccounts(): Promise<ComposioAccount[]> {
 }
 
 /**
- * Identities, kept for the life of the app run.
- *
- * An address costs a 3.1s CLI round trip (measured) and never changes for a
- * given account handle — Composio mints a new handle rather than moving an
- * address between them. Re-fetching it every time the Plugins panel opens
- * spends three seconds to learn what it already knew.
- *
- * Deliberately not persisted: a run is long enough to matter, and a stale
- * address surviving a restart would outlive the account it named.
- */
-const identities = new Map<string, string>();
-
-/**
  * The address or username behind one account, or "" when unknown.
  *
- * `connections list` names accounts only by an internal handle
- * (`gmail_casava-tst`), which tells the person who connected them nothing and
- * cannot distinguish two Gmail accounts. This costs one CLI call per account,
- * so callers fetch it once per panel open and fall back to the handle.
+ * Now free: the listing carries it. Kept as a function so callers that ask
+ * per row do not have to change shape.
  */
-export async function composioAccountIdentity(toolkit: string, account: string): Promise<string> {
-  if (!isTauri()) {
-    return "";
-  }
-  const hit = identities.get(account);
-  if (hit !== undefined) {
-    return hit;
-  }
-  try {
-    const found = await invoke<string>("composio_account_identity", { toolkit, account });
-    // Only a real answer is cached: an empty one means the call failed or the
-    // toolkit has no profile tool, and both are worth retrying next open.
-    if (found !== "") {
-      identities.set(account, found);
-    }
-    return found;
-  } catch {
-    return "";
-  }
+export async function composioAccountIdentity(_toolkit: string, account: string): Promise<string> {
+  const accounts = await composioAccounts();
+  return accounts.find((row) => row.id === account)?.identity ?? "";
 }
 
 /** Apps with at least one usable account — what a Blob can actually reach. */
@@ -277,35 +252,52 @@ export async function connectedAppNames(): Promise<string[]> {
   return slugs.map((slug) => catalog.find((plugin) => plugin.id === slug)?.name ?? slug);
 }
 
+/** Anything that looks like the consent link Composio wants opened. */
+const URL_IN_TEXT = /https:\/\/[^\s"'\\]+/;
+
 /**
  * Start connecting one app, returning the URL to open.
  *
- * Rejects when the CLI is missing or answers with something unexpected — the
- * caller shows that rather than opening an unknown page.
+ * Rejects when Composio answers without a link — the caller shows that rather
+ * than opening something unexpected.
  */
-export function startComposioLink(toolkit: string, alias = ""): Promise<string> {
-  if (!isTauri()) {
-    return Promise.reject(new Error("Connecting apps only works in the desktop app."));
+export async function startComposioLink(toolkit: string, alias = ""): Promise<string> {
+  const raw = await callComposioTool("COMPOSIO_MANAGE_CONNECTIONS", {
+    toolkits: [{ name: toolkit, action: "add", ...(alias === "" ? {} : { alias }) }],
+  });
+  const found = URL_IN_TEXT.exec(raw)?.[0];
+  if (found === undefined) {
+    throw new Error("Composio did not return a link to open.");
   }
-  // An alias is required by the CLI for any *additional* account on an app
-  // already connected; empty means "the first one".
-  return invoke<string>("composio_link_start", { toolkit, alias });
+  // Trailing punctuation from surrounding JSON must not ride along into the
+  // browser.
+  return found.replace(/[",.)\]}]+$/, "");
 }
+
+/**
+ * How long to wait for an OAuth consent screen before giving up on it.
+ *
+ * Ninety seconds, not five minutes: most of a longer window is spent holding
+ * a row hostage after the user has walked away, and Cancel is on screen for
+ * the whole wait anyway.
+ */
+const LINK_TIMEOUT_MS = 90_000;
+
+/** Gap between checks. */
+const LINK_POLL_MS = 2_000;
 
 /**
  * Wait for a connect to finish in the browser.
  *
- * `composio link` has no `--poll` counterpart to login's, so completion is
- * read from `connections list` — which is the source of truth anyway, and the
- * same lesson as the login bug: trust the disk, not a command's own answer.
+ * Completion is read from the connection listing, which is the source of
+ * truth, rather than from the answer to the request that started it.
  *
  * Resolves false when the user abandons the tab. Callers must keep a way out
- * on screen for the whole window — a spinner with no exit is indistinguishable
- * from a hang, so `signal` lets the user end it themselves and the loop checks
- * it between passes as well as during the sleep.
+ * on screen for the whole window — a spinner with no exit is
+ * indistinguishable from a hang, so `signal` lets the user end it themselves.
  *
- * False means "not seen yet", not "failed": consent granted after the deadline
- * still lands on Composio's side, and the next `connections list` picks it up.
+ * False means "not seen yet", not "failed": consent granted after the
+ * deadline still lands on Composio's side and shows up on the next listing.
  * Callers must not word the timeout as a failure.
  */
 export async function waitForComposioLink(
@@ -313,18 +305,17 @@ export async function waitForComposioLink(
   before: ComposioAccount[],
   signal?: AbortSignal,
 ): Promise<boolean> {
-  // Compare against the accounts that were already usable, not just "is this
-  // app connected": adding a second Gmail to an account that already has one
-  // would otherwise report success the instant it started, before the user
-  // had touched the browser.
+  // Compare against accounts that were already usable, not just "is this app
+  // connected": adding a second Gmail to an account that has one would
+  // otherwise report success the instant it started.
   const known = new Set(before.filter((account) => account.active).map((account) => account.id));
   const deadline = Date.now() + LINK_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (signal?.aborted === true) {
       return false;
     }
-    // Each pass must ask the CLI again: polling a cached answer would wait out
-    // the whole window on a snapshot taken before the browser opened.
+    // Each pass must ask again: polling a cached answer would wait out the
+    // whole window on a snapshot taken before the browser opened.
     forgetComposioAccounts();
     const now = await composioAccounts();
     if (now.some((a) => a.toolkit === toolkit && a.active && !known.has(a.id))) {
@@ -332,8 +323,7 @@ export async function waitForComposioLink(
     }
     // Sleeping through an abort would leave the button dead for up to another
     // poll interval, so the wait ends the moment the signal fires. The
-    // listener is removed on every exit — `once` only fires it once, it does
-    // not detach the ones that never fire, and this loop runs ~45 times.
+    // listener is removed on every exit.
     await new Promise<void>((resolve) => {
       const stop = () => {
         clearTimeout(timer);
@@ -347,19 +337,11 @@ export async function waitForComposioLink(
   return false;
 }
 
-/**
- * Wait for the browser half of the login to finish.
- *
- * Resolves false when the user abandons it — a real outcome, not an error.
- * Can take minutes, so callers must keep a way out on screen.
- */
-export async function pollComposioLogin(): Promise<boolean> {
-  if (!isTauri()) {
-    return false;
-  }
-  try {
-    return await invoke<boolean>("composio_login_poll");
-  } catch {
-    return false;
-  }
+/** Drop a connected account. */
+export async function removeComposioAccount(toolkit: string, accountId: string): Promise<void> {
+  await callComposioTool("COMPOSIO_MANAGE_CONNECTIONS", {
+    toolkits: [{ name: toolkit, action: "remove", account_id: accountId }],
+  });
+  forgetComposioAccounts();
+  forgetComposioSession();
 }

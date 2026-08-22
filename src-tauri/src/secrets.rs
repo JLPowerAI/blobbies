@@ -16,7 +16,14 @@ use crate::error::{Error, Result};
 const SERVICE: &str = "com.blobbies.app";
 
 /// Every secret name the webview may read or write. Default-deny.
-const ALLOWED_NAMES: [&str; 2] = ["tinfoil-api-key", "tinfoil-cache-secret"];
+const ALLOWED_NAMES: [&str; 3] = [
+    "tinfoil-api-key",
+    "tinfoil-cache-secret",
+    // Composio's hosted MCP endpoint authenticates with this. It replaced the
+    // CLI, which kept its own credential in ~/.composio and shipped for macOS
+    // and Linux only.
+    "composio-api-key",
+];
 
 /// Upper bound on a stored secret (bytes). Keys and cache secrets are tiny;
 /// anything bigger is a bug or abuse.
@@ -166,9 +173,10 @@ mod tests {
             "TINFOIL-API-KEY",
             "../tinfoil-api-key",
             "openai-api-key",
-            // Composio's credential lives with its own CLI, not here: the
-            // keychain must not quietly accept a second copy.
-            "composio-api-key",
+            // Was rejected while the Composio CLI owned its own credential in
+            // ~/.composio. The CLI is gone (no Windows build exists), so the
+            // hosted MCP endpoint's key now lives here like any other.
+            "composio-api-key-2",
         ] {
             assert!(
                 matches!(entry_for(name), Err(Error::InvalidSliceKey)),

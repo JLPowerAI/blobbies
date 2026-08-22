@@ -42,7 +42,7 @@ import {
   saveAttachments,
 } from "@/lib/attachments";
 import type { BlobMemory, RosterAccess, RoutineAccess } from "@/lib/blob-tools";
-import { connectedAppNames } from "@/lib/composio";
+import { connectedAppNames, setComposioToolkits } from "@/lib/composio";
 import { contextWindow } from "@/lib/context-window";
 import {
   addressedResponders,
@@ -493,9 +493,12 @@ export function App() {
           );
         }
         if (Array.isArray(settings.plugins)) {
-          setInstalledPlugins(
-            settings.plugins.filter((id): id is string => typeof id === "string"),
-          );
+          const slugs = settings.plugins.filter((id): id is string => typeof id === "string");
+          setInstalledPlugins(slugs);
+          // Composio's connection listing is per-toolkit — there is no "list
+          // everything" call — so the transport needs to know which apps to
+          // ask about.
+          setComposioToolkits(slugs);
         }
       }
 

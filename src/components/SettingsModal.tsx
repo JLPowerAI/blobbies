@@ -2,14 +2,7 @@ import { CircleArrowDown, Cpu, Plug, Settings, X } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink } from "@/components/ExternalLink";
 import { PillSelect } from "@/components/PillSelect";
-import {
-  composioCliInstallable,
-  composioCliVersion,
-  composioSignedIn,
-  installComposioCli,
-  pollComposioLogin,
-  startComposioLogin,
-} from "@/lib/composio";
+import { COMPOSIO_DASHBOARD_URL, composioSignedIn, forgetComposioSession } from "@/lib/composio";
 import {
   getOllamaVersion,
   isOllamaInstalled,
@@ -172,16 +165,13 @@ function tinfoilBlurb(status: TinfoilStatus): string {
  * that cannot exist. `waiting` is the one that has to be visible — the
  * browser is open and this app is polling for up to ten minutes.
  */
+/**
+ * Composio is reached over its hosted MCP endpoint, so this is a key rather
+ * than an installed binary plus a browser login. The CLI it replaced shipped
+ * for macOS and Linux only, which left Windows with no way to finish setup.
+ */
 type ComposioStatus = {
-  stage:
-    | "idle"
-    | "checking"
-    | "missing"
-    | "installing"
-    | "installed"
-    | "opening"
-    | "waiting"
-    | "signedIn";
+  stage: "idle" | "checking" | "needsKey" | "verifying" | "signedIn";
   version: string;
   /** Empty unless something failed; shown verbatim. */
   error: string;
@@ -197,16 +187,25 @@ const COMPOSIO_IDLE: ComposioStatus = {
 
 /** Status-dot tone for the Composio row. */
 function composioTone(status: ComposioStatus): "wait" | "err" | "warn" | "ok" {
-  if (status.stage === "missing" || status.error !== "") {
+  if (status.stage === "needsKey" || status.error !== "") {
     return "err";
   }
   if (status.stage === "signedIn") {
     return "ok";
   }
-  // Installed but signed out is a warning, not success: the difference between
-  // "a binary exists" and "connecting an app will work".
-  return status.stage === "installed" ? "warn" : "wait";
+  // Everything left is a probe in flight; "needs a key" is handled above as a
+  // warning, since it is the state a person has to act on.
+  return "wait";
 }
+
+/**
+ * What a pasted key must look like: one run of key characters, nothing else.
+ *
+ * Catches the mistakes a paste actually makes — wrapping quotes, a trailing
+ * newline, `COMPOSIO_API_KEY=` copied along with the value, half a key. It
+ * does not claim the key works; the handshake after saving does that.
+ */
+const KEY_PATTERN = /^[A-Za-z0-9_-]{16,200}$/;
 
 function composioBlurb(status: ComposioStatus): string {
   if (status.error !== "") {
@@ -216,49 +215,31 @@ function composioBlurb(status: ComposioStatus): string {
     case "idle":
     case "checking":
       return "Checking\u2026";
-    case "installing":
-      return "Installing\u2026 this takes a moment.";
-    case "missing":
-      // The WSL line stays specific: it is the one case where the user has to
-      // do something elsewhere, so naming it saves a dead-end click.
-      return status.installable
-        ? "Not installed yet."
-        : "Needs a POSIX shell. On Windows, install it inside WSL.";
-    case "installed":
-      return `Installed \u00b7 ${status.version}. Sign in to connect your apps.`;
-    case "opening":
-      return "Opening your browser\u2026";
-    case "waiting":
-      // Naming the blank page is the difference between retrying and giving
-      // up: the link dies after ten minutes and an expired one renders empty
-      // rather than saying so. "Open again" mints a fresh key (verified), so
-      // it genuinely recovers rather than replaying a dead one.
-      return "Waiting for you in the browser\u2026 blank page? Open again.";
+    case "verifying":
+      return "Checking that key\u2026";
+    case "needsKey":
+      return "Paste a Composio key to connect your apps.";
     case "signedIn":
-      return `Connected \u00b7 ${status.version}`;
+      return "Connected. Your apps can connect now.";
   }
 }
 
 /**
- * Probe the CLI and whether it holds a login.
+ * Ask Composio whether the stored key works.
  *
- * The sign-in check is skipped when there is no binary to ask about, which is
- * the common case on a first open.
+ * A real handshake rather than a "is a key present" check: a revoked key is
+ * indistinguishable from a good one until it is used, and this panel is where
+ * someone comes to find out why their apps stopped working.
  */
 async function probeComposio(
   setStatus: (update: (current: ComposioStatus) => ComposioStatus) => void,
 ): Promise<void> {
   setStatus((current) => ({ ...current, stage: "checking", error: "" }));
-  const [version, installable] = await Promise.all([
-    composioCliVersion(),
-    composioCliInstallable(),
-  ]);
-  const signedIn = version !== null && (await composioSignedIn());
+  const signedIn = await composioSignedIn();
   setStatus((current) => ({
     ...current,
-    stage: version === null ? "missing" : signedIn ? "signedIn" : "installed",
-    version: version ?? "",
-    installable,
+    stage: signedIn ? "signedIn" : "needsKey",
+    installable: true,
   }));
 }
 
@@ -322,6 +303,7 @@ export function SettingsModal({
   const [ollama, setOllama] = useState<OllamaStatus>({ kind: "idle" });
   const [tinfoil, setTinfoil] = useState<TinfoilStatus>({ kind: "idle" });
   const [tinfoilKeyDraft, setTinfoilKeyDraft] = useState("");
+  const [composioKeyDraft, setComposioKeyDraft] = useState("");
   const [composio, setComposio] = useState<ComposioStatus>(COMPOSIO_IDLE);
   const [skills, setSkills] = useState<Skill[]>([]);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -358,46 +340,33 @@ export function SettingsModal({
     await probeTinfoil(setTinfoil, true);
   };
 
-  const installCli = async () => {
-    setComposio((current) => ({ ...current, stage: "installing", error: "" }));
-    try {
-      await installComposioCli();
-      // Re-probe rather than assume: a machine that was signed in before a
-      // reinstall should land straight on "Connected".
-      await probeComposio(setComposio);
-    } catch (error) {
-      setComposio((current) => ({
-        ...current,
-        stage: "missing",
-        error: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  };
-
   /**
-   * Start the login, open the URL, then wait for the browser half.
+   * Store the key, then prove it works before showing "Connected".
    *
-   * Split in two because `--no-wait` returns a URL immediately and only the
-   * poll blocks; one blocking call would leave the tab frozen with nothing to
-   * show for it.
+   * Saving alone would report success for a mistyped key and fail later
+   * inside a Blob's turn, where the person cannot see the cause. One
+   * handshake here puts the error on the screen that can fix it.
    */
-  const signIn = async () => {
-    setComposio((current) => ({ ...current, stage: "opening", error: "" }));
+  const saveComposioKey = async () => {
+    const key = composioKeyDraft.trim();
+    if (!KEY_PATTERN.test(key)) {
+      setComposio((current) => ({
+        ...current,
+        error: "That does not look like a Composio key.",
+      }));
+      return;
+    }
+    setComposio((current) => ({ ...current, stage: "verifying", error: "" }));
     try {
-      const url = await startComposioLogin();
-      await openExternal(url);
-      setComposio((current) => ({ ...current, stage: "waiting" }));
-      await pollComposioLogin();
-      // Re-probe instead of trusting the poll's own answer. The CLI can save
-      // credentials while our poll returns false — it competes with any other
-      // `--poll` for the same session — and disk is the source of truth the
-      // rest of this tab already reads. Abandoning the browser tab is not an
-      // error either; it just leaves the user on the button that starts again.
+      await setSecret("composio-api-key", key);
+      // The transport caches a session bound to the old credential.
+      forgetComposioSession();
+      setComposioKeyDraft("");
       await probeComposio(setComposio);
     } catch (error) {
       setComposio((current) => ({
         ...current,
-        stage: "installed",
+        stage: "needsKey",
         error: error instanceof Error ? error.message : String(error),
       }));
     }
@@ -658,25 +627,13 @@ export function SettingsModal({
                         className={`ollama-dot ollama-dot-${composioTone(composio)}`}
                         aria-hidden="true"
                       />
-                      Composio CLI
+                      Composio
                     </span>
                     <span className="modal-row-blurb" aria-live="polite">
                       {composioBlurb(composio)}
                     </span>
                   </span>
-                  {composio.stage === "missing" && composio.installable ? (
-                    <button
-                      type="button"
-                      className="modal-button"
-                      onClick={() => void installCli()}
-                    >
-                      {composio.error === "" ? "Install" : "Try again"}
-                    </button>
-                  ) : composio.stage === "installed" || composio.stage === "waiting" ? (
-                    <button type="button" className="modal-button" onClick={() => void signIn()}>
-                      {composio.stage === "waiting" ? "Open again" : "Sign in"}
-                    </button>
-                  ) : composio.stage === "signedIn" ? (
+                  {composio.stage === "signedIn" ? (
                     <button
                       type="button"
                       className="modal-button"
@@ -684,16 +641,55 @@ export function SettingsModal({
                     >
                       Re-check
                     </button>
-                  ) : (
+                  ) : composio.stage === "needsKey" ? null : (
                     <button type="button" className="modal-button" disabled>
-                      {composio.stage === "installing"
-                        ? "Installing\u2026"
-                        : composio.stage === "opening"
-                          ? "Opening\u2026"
-                          : "Checking\u2026"}
+                      {composio.stage === "verifying" ? "Checking\u2026" : "Checking\u2026"}
                     </button>
                   )}
                 </div>
+                {composio.stage === "needsKey" ? (
+                  <div className="modal-row modal-row-multiline">
+                    <span className="modal-row-text">
+                      <span className="modal-row-title" id="composio-key-label">
+                        API key
+                      </span>
+                      <span className="modal-row-blurb">
+                        Stored in your OS keychain, never in a file.{" "}
+                        <button
+                          type="button"
+                          className="modal-inline-link"
+                          onClick={() => void openExternal(COMPOSIO_DASHBOARD_URL)}
+                        >
+                          Get one from Composio
+                        </button>
+                      </span>
+                    </span>
+                    <span className="modal-row-actions">
+                      <input
+                        type="password"
+                        className="modal-name-input"
+                        autoComplete="off"
+                        aria-labelledby="composio-key-label"
+                        placeholder="ck_\u2026"
+                        value={composioKeyDraft}
+                        onChange={(event) => setComposioKeyDraft(event.currentTarget.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            void saveComposioKey();
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="modal-button"
+                        disabled={composioKeyDraft.trim() === ""}
+                        onClick={() => void saveComposioKey()}
+                      >
+                        Save
+                      </button>
+                    </span>
+                  </div>
+                ) : null}
               </div>
 
               <p className="modal-section-label">Skills</p>

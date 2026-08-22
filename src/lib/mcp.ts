@@ -1,9 +1,8 @@
 import type { AgentTool } from "@kenkaiiii/gg-agent";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { z } from "zod";
+import { httpFetch } from "@/lib/http";
 import type { McpServerConfig, McpTool } from "@/lib/mcp-config";
 import { parseLoopbackUrl } from "@/lib/mcp-config";
-import { isTauri } from "@/lib/tauri";
 import { wrapUntrusted } from "@/lib/untrusted";
 
 /**
@@ -143,20 +142,6 @@ async function readCapped(response: Response): Promise<string> {
 
 export type { McpServerConfig, McpTool } from "@/lib/mcp-config";
 export { parseLoopbackUrl } from "@/lib/mcp-config";
-
-/**
- * In a plain browser (dev/tests) the plugin IPC is absent; fall back.
- *
- * `maxRedirections: 0` is load-bearing, not tidiness. The Rust plugin checks
- * the capability scope against the *initial* URL only and then lets reqwest
- * follow redirects, so a local server answering 302 with a public Location
- * would carry this POST — tool arguments and all — straight off the machine.
- * `redirect: "error"` covers the browser fallback, which ignores the other.
- */
-function httpFetch(url: string, init: RequestInit): Promise<Response> {
-  const bounded = { ...init, redirect: "error" as const, maxRedirections: 0 };
-  return isTauri() ? tauriFetch(url, bounded) : fetch(url, bounded);
-}
 
 /**
  * Turn a server-supplied tool name into one this app is willing to expose.
