@@ -3,9 +3,16 @@ import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach } from "vitest";
 import { clearFallbackBackend } from "@/lib/store";
 
+// The DOM shims below are jsdom-only. A test file may opt into the node
+// environment (`@vitest-environment node`) when a dependency needs a single
+// consistent realm — Tinfoil's hpke transport does, since it checks
+// `instanceof Uint8Array` and jsdom's TextEncoder returns a foreign-realm
+// one. This setup still runs there, where `Element` does not exist.
+const hasDom = typeof Element !== "undefined";
+
 // jsdom implements scrollTop but not Element.scrollTo; map one to the other
 // so scroll-follow logic runs (jsdom heights are 0, so it lands instantly).
-if (typeof Element.prototype.scrollTo !== "function") {
+if (hasDom && typeof Element.prototype.scrollTo !== "function") {
   Element.prototype.scrollTo = function scrollTo(
     this: Element,
     options?: ScrollToOptions | number,
@@ -18,7 +25,7 @@ if (typeof Element.prototype.scrollTo !== "function") {
 
 // Same gap: jsdom has no scrollIntoView, and keeping a highlighted row in
 // view is a no-op in a zero-height layout anyway.
-if (typeof Element.prototype.scrollIntoView !== "function") {
+if (hasDom && typeof Element.prototype.scrollIntoView !== "function") {
   Element.prototype.scrollIntoView = function scrollIntoView() {};
 }
 

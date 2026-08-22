@@ -238,11 +238,12 @@ pnpm tauri:build   # production bundle (dmg / deb+AppImage / NSIS exe)
 pnpm check         # everything CI runs: lint, types, tests, clippy
 ```
 
-**Platform quirks, so nothing surprises you:**
+**Platform notes:**
 
-- The connector CLI's installer is a POSIX shell script, so Windows needs [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). The in-app install button hides itself there, and the Plugins tab explains why.
-- A Blob's file readers (`ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`) are implemented inside the app in Rust, not spawned, so they behave the same on all three platforms and need nothing installed.
-- CI compiles and tests the Rust side on macOS, Linux and Windows every push. A [release workflow](.github/workflows/release.yml) builds installers for all three.
+- **File readers work everywhere.** `ls`, `cat`, `head`, `tail`, `wc`, `grep` and `rg` are implemented inside the app in Rust rather than spawned, so a Blob gets identical output on macOS, Windows and Linux with nothing installed.
+- **Images work on text-only models.** Attachments are OCR'd on your machine in Rust, and the model receives text, so a non-multimodal model (deepseek-v4-flash, most local ones) reads screenshots and scanned PDFs fine. A vision model still does better on diagrams and handwriting.
+- **Plugins do not work on native Windows.** Composio ships its CLI for macOS and Linux only, no Windows build exists, and their installer stops with "Windows is not supported". Every plugin action runs through that CLI, so the whole 942-app surface needs macOS, Linux, or Blobbies running inside [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). Upstream's gap, not one we can patch. The in-app install button hides itself there and the Plugins tab says so. **Everything else on Windows is fine:** local models, Tinfoil, files, OCR, web search, routines, group chats.
+- **CI builds and tests on all three** every push, and a [release workflow](.github/workflows/release.yml) ships installers for each.
 
 ---
 
