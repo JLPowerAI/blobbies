@@ -703,7 +703,12 @@ export async function streamBlobTurn(options: {
     /** Everything shown for this turn: earlier segments plus the live one. */
     const full = () => [...said, text].filter((segment) => segment.trim() !== "").join("\n\n");
     const memoryTools = new Set(["remember", "update_memory", "forget"]);
-    const webTools = makeBlobTools(options.memory).filter((tool) => !memoryTools.has(tool.name));
+    // Pass the model so web_fetch sizes its page budget to the real context
+    // window: a Tinfoil enclave model can take a whole article, a 16k local
+    // one cannot.
+    const webTools = makeBlobTools(options.memory, options.model).filter(
+      (tool) => !memoryTools.has(tool.name),
+    );
     // The connected-apps surface is three tools no matter how many apps are
     // connected, so it costs a chat turn the same as a routine — and "read my
     // email" is a chat request far more often than a scheduled one. Offered

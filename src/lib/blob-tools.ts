@@ -9,6 +9,7 @@ import {
   type Routine,
 } from "@/data/agents";
 import { composioExecute, composioSchema, composioSearch } from "@/lib/composio";
+import { contextWindow, OLLAMA_NUM_CTX } from "@/lib/context-window";
 import type { HomeBackend } from "@/lib/home";
 import { applyMemoryWrite, type BlobMemory, knownFact, normaliseFact } from "@/lib/memory";
 import { coerceSchedule, describeSchedule, type RoutineSchedule } from "@/lib/schedule";
@@ -29,14 +30,34 @@ import { wrapUntrusted } from "@/lib/untrusted";
  */
 
 /**
- * Cap page text handed to a small local model.
+ * How much page text one fetch may return, for a given model.
  *
- * Measured (Ollama 0.32.9 / qwen3.5:0.8b): prose costs ~1 token per 5.3
- * chars, so 8k chars was ~1,500 tokens — most of a default 2k local context,
- * for a single tool result. At 3k chars a fetch costs ~570 tokens and still
- * carries the top of an article, which is what a small model can use.
+ * This used to be a flat 3,000 characters, sized for the worst case: a
+ * qwen3.5:0.8b on a 2k window, where prose costs ~1 token per 5.3 chars and a
+ * single fetch could eat most of the context. That is the right budget for
+ * that model and badly wrong for the rest.
+ *
+ * Tinfoil serves frontier models with enormous windows (deepseek-v4-flash
+ * advertises 1M tokens), and Ollama here runs at a 16k `num_ctx`, so the old
+ * cap spent **0.06%** of a Tinfoil window on a page and then truncated the
+ * article mid-sentence. The model had room for the whole page and was handed
+ * a paragraph.
+ *
+ * So: 3% of the window, converted at 5.3 chars per token, clamped to a floor
+ * that keeps small local models working and a ceiling that keeps one greedy
+ * page from crowding out the conversation.
+ *
+ * | window | budget |
+ * | --- | --- |
+ * | 16k local | 3,000 chars (floor, unchanged) |
+ * | 131k Tinfoil fallback | ~20,800 chars |
+ * | 1M deepseek-v4-flash | 60,000 chars (ceiling) |
  */
-const FETCH_TEXT_LIMIT = 3_000;
+export function fetchTextLimit(window: number): number {
+  const chars = Math.round(window * 0.03 * 5.3);
+  return Math.min(Math.max(chars, 3_000), 60_000);
+}
+
 const SEARCH_RESULT_LIMIT = 5;
 
 export type { BlobMemory } from "@/lib/memory";
@@ -69,16 +90,88 @@ function httpFetch(url: string, init?: RequestInit): Promise<Response> {
  */
 export { wrapUntrusted } from "@/lib/untrusted";
 
-/** Strip HTML to readable text with the platform parser (webview + jsdom). */
+/**
+ * Chrome that appears on nearly every page and answers nothing.
+ *
+ * Dropping these is what makes a small budget usable. Measured on the
+ * Wikipedia article for the Tenerife disaster: whole-body extraction spent
+ * its first ~300 characters on "Jump to content / Main menu / Random article
+ * / Contribute / Upload file", so the 3k window could be spent before the
+ * article even began.
+ */
+const BOILERPLATE = [
+  "script",
+  "style",
+  "noscript",
+  "svg",
+  "iframe",
+  "nav",
+  "header",
+  "footer",
+  "aside",
+  "form",
+  "button",
+  "select",
+  "textarea",
+  "[role='navigation']",
+  "[role='banner']",
+  "[role='contentinfo']",
+  "[role='complementary']",
+  "[role='search']",
+  "[aria-hidden='true']",
+].join(", ");
+
+/** Where a page's content actually lives, best first. */
+const MAIN_CONTENT = ["main", "article", "[role='main']", "#content", ".entry-content"];
+
+/**
+ * Strip HTML to readable text with the platform parser (webview + jsdom).
+ *
+ * Two things beyond removing scripts, both of which decide whether a fetch
+ * answers the question or wastes a turn:
+ *
+ * **Boilerplate goes first, then the main region wins.** `body.textContent`
+ * is mostly navigation on a modern page, and because the result is capped
+ * for small local models, that navigation was crowding out the article.
+ * A `<main>`/`<article>` is preferred when it holds real text, which is what
+ * every serious extractor does.
+ *
+ * **Block structure survives.** Collapsing all whitespace to single spaces
+ * ran headings, list items and paragraphs into one wall of text that is
+ * markedly harder to quote from. Newlines between blocks are kept; runs of
+ * blank lines are not.
+ */
 export function htmlToText(html: string): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
-  for (const junk of doc.querySelectorAll("script, style, noscript, svg, iframe")) {
+  for (const junk of doc.querySelectorAll(BOILERPLATE)) {
     junk.remove();
   }
-  return (doc.body?.textContent ?? "").replace(/\s+/g, " ").trim();
+  // A newline after each block, so `textContent` cannot glue a heading to the
+  // sentence beneath it. jsdom has no layout, so `innerText` is unavailable.
+  for (const block of doc.querySelectorAll("p, div, li, tr, br, h1, h2, h3, h4, h5, h6")) {
+    block.append(doc.createTextNode("\n"));
+  }
+
+  let root: Element | null = null;
+  for (const selector of MAIN_CONTENT) {
+    const candidate = doc.querySelector(selector);
+    // A shell page can carry an empty `<main>`; only take one with real text
+    // in it, and otherwise fall through to the body.
+    if (candidate !== null && (candidate.textContent ?? "").trim().length > 200) {
+      root = candidate;
+      break;
+    }
+  }
+
+  const text = (root ?? doc.body)?.textContent ?? "";
+  return text
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ ?\n ?/g, "\n")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
 }
 
-function makeWebFetchTool() {
+function makeWebFetchTool(limit: number) {
   const parameters = z.object({
     url: z.string().describe("The full https:// URL to fetch"),
   });
@@ -117,7 +210,23 @@ function makeWebFetchTool() {
       if (!response.ok) {
         return `Fetch failed: HTTP ${response.status}`;
       }
-      const text = htmlToText(await response.text()).slice(0, FETCH_TEXT_LIMIT);
+      const full = htmlToText(await response.text());
+      const text = full.slice(0, limit);
+      // A client-rendered page returns a near-empty shell over HTTP: the real
+      // content only exists after its JavaScript runs, and there is no browser
+      // here to run it. Say so, so the model reports "this site needs a
+      // browser" rather than retrying the same fetch or, worse, filling the
+      // gap from memory. Threshold is generous: a genuinely short page (a
+      // status page, a redirect notice) reads fine and is not worth a warning.
+      if (full.length < 200) {
+        return wrapUntrusted(
+          `${full}\n\n[Only ${full.length} characters of text were served. This ` +
+            "is usually a page that builds itself with JavaScript, which cannot " +
+            "run here. Do not guess at what it would have shown: try another " +
+            "source, or tell the user this site needs a real browser.]",
+          url.hostname,
+        );
+      }
       if (text === "") {
         return "The page had no readable text.";
       }
@@ -507,9 +616,16 @@ function makeMemoryTools(access: MemoryAccess) {
   return [remember, update, forget];
 }
 
-/** The full tool catalog for one Blob's chat turn. */
-export function makeBlobTools(memory: MemoryAccess): AgentTool[] {
-  return [makeWebFetchTool(), makeWebSearchTool(), ...makeMemoryTools(memory)];
+/**
+ * The full tool catalog for one Blob's chat turn.
+ *
+ * `model` sizes how much page text a fetch may return: a 1M-token enclave
+ * model can read a whole article, a 16k local one cannot. Optional so the
+ * many existing callers keep the conservative local budget.
+ */
+export function makeBlobTools(memory: MemoryAccess, model?: string): AgentTool[] {
+  const limit = fetchTextLimit(model === undefined ? OLLAMA_NUM_CTX : contextWindow(model));
+  return [makeWebFetchTool(limit), makeWebSearchTool(), ...makeMemoryTools(memory)];
 }
 
 /** Cap file content echoed into the prompt, same budget logic as web_fetch. */
