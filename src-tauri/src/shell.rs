@@ -54,14 +54,12 @@ use serde::Serialize;
 use std::process::Command;
 
 /// How a program's arguments are read, and therefore how they are checked.
+///
+/// There used to be an `Opaque` variant that skipped flag and path checking
+/// entirely, held open for the `composio` CLI. That CLI is gone — apps are
+/// reached over MCP now — and the variant went with it, so nothing can be
+/// added back without a shape that actually validates its arguments.
 enum Shape {
-    /// Arguments carry no filesystem meaning, so there is nothing to contain.
-    ///
-    /// Only `composio`, whose arguments are tool names and JSON payloads. Its
-    /// own surface is gated in `composio.rs`; forcing the reader rules onto it
-    /// would break every `--account`/`-d` call without closing anything, since
-    /// it names no paths. The credential-directory check below still applies.
-    Opaque,
     /// A program that reads files: flags allowlisted, positionals contained.
     Reader {
         /// Leading positionals that are *not* paths — `grep`/`rg` take a
@@ -100,11 +98,7 @@ struct Program {
 /// "Cannot execute anything else" is a claim about a program *and its argv*,
 /// which is why each reader carries its own flag list. `rg` was on this list
 /// with `--pre` reachable: a program allowlist alone did not hold.
-const ALLOWED: [Program; 8] = [
-    Program {
-        name: "composio",
-        shape: Shape::Opaque,
-    },
+const ALLOWED: [Program; 7] = [
     Program {
         name: "ls",
         shape: Shape::Reader {
@@ -240,8 +234,10 @@ const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Any argument naming the Composio CLI's credential directory is refused.
 ///
-/// `~/.composio/config.json` holds the connected-apps credential, written by
-/// `composio login`. Commands reach connected apps through the `composio`
+/// `~/.composio/config.json` held the connected-apps credential of the old
+/// CLI. That CLI is gone, but the directory survives on any machine that ran
+/// it, so the block stays: a stale credential is still a credential. Commands
+/// reach connected apps through the `app_run_tool`
 /// program itself, so no other program has legitimate business naming this
 /// directory — and one direct hit would put the credential in the model's
 /// context, one `web_fetch` from leaving the machine.
@@ -349,14 +345,15 @@ fn check_call(program: &str, args: &[String], home: Option<&Path>) -> Result<()>
         ));
     }
 
+    // Every allowlisted program is a Reader now that the CLI is gone, so this
+    // destructure cannot fail; it stays as a binding rather than an `if let`
+    // so adding a non-reader shape later is a compile error here, not a
+    // silently skipped check.
     let Shape::Reader {
         patterns,
         short,
         long,
-    } = entry.shape
-    else {
-        return Ok(());
-    };
+    } = entry.shape;
     let Some(home) = home else {
         return Err(Error::Io(format!(
             "`{program}` reads files, and this Blob has no home folder to read \
@@ -754,7 +751,11 @@ mod tests {
                 "`{program}` must be refused"
             );
         }
-        assert!(check_call("composio", &args(&["connections"]), Some(&home)).is_ok());
+        // The CLI was allowlisted with a shape that skipped argument checking
+        // entirely. It is gone, and must stay gone: it could reach connected
+        // apps directly, which would step around app_run_tool's rule that
+        // anything leaving a trace needs the user's word first.
+        assert!(check_call("composio", &args(&["connections"]), Some(&home)).is_err());
     }
 
     #[test]
@@ -901,8 +902,9 @@ mod tests {
                 "`{program}` must be refused without a home"
             );
         }
-        // `composio` names no paths, so it is unaffected either way.
-        assert!(check_call("composio", &args(&["connections"]), None).is_ok());
+        // The CLI used to be exempt here, since it named no paths. Nothing is
+        // exempt now: every allowlisted program reads files.
+        assert!(check_call("composio", &args(&["connections"]), None).is_err());
     }
 
     #[test]
@@ -947,6 +949,10 @@ mod tests {
         // narrow enough that a false refusal on a real command would be a bug.
         assert!(check_call("cat", &args(&["notes/.compositor.md"]), Some(&home)).is_ok());
         assert!(check_call("ls", &args(&[".compositorc-example"]), Some(&home)).is_ok());
-        assert!(check_call("composio", &args(&["connections"]), Some(&home)).is_ok());
+        // The CLI was allowlisted with a shape that skipped argument checking
+        // entirely. It is gone, and must stay gone: it could reach connected
+        // apps directly, which would step around app_run_tool's rule that
+        // anything leaving a trace needs the user's word first.
+        assert!(check_call("composio", &args(&["connections"]), Some(&home)).is_err());
     }
 }

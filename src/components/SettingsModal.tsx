@@ -686,48 +686,48 @@ export function SettingsModal({
                   )}
                 </div>
                 {composio.stage === "needsKey" ? (
-                  <div className="modal-row modal-row-multiline">
-                    <span className="modal-row-text">
+                  <>
+                    {/* Same shape as the Tinfoil key below: a divider, a
+                        labelled stack, then the input and its button on one
+                        `modal-field-row`. The hand-rolled row this replaced
+                        used a class with no CSS behind it, so the button sat
+                        flush against the input. */}
+                    <div className="modal-divider" />
+                    <div className="modal-stack">
                       <span className="modal-row-title" id="composio-key-label">
                         Or paste an API key
                       </span>
                       <span className="modal-row-blurb">
-                        Only needed if the browser sign-in cannot finish. Stored in your OS
-                        keychain, never in a file.{" "}
+                        Only if the browser sign-in cannot finish.{" "}
+                        <ExternalLink href={COMPOSIO_DASHBOARD_URL}>Get a key</ExternalLink>
+                      </span>
+                      <div className="modal-field-row">
+                        <input
+                          id="composio-key"
+                          type="password"
+                          className="modal-name-input"
+                          autoComplete="off"
+                          aria-labelledby="composio-key-label"
+                          placeholder="Paste your API key"
+                          value={composioKeyDraft}
+                          onChange={(event) => setComposioKeyDraft(event.currentTarget.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              void saveComposioKey();
+                            }
+                          }}
+                        />
                         <button
                           type="button"
-                          className="modal-inline-link"
-                          onClick={() => void openExternal(COMPOSIO_DASHBOARD_URL)}
+                          className="modal-button"
+                          disabled={composioKeyDraft.trim() === ""}
+                          onClick={() => void saveComposioKey()}
                         >
-                          Get one from Composio
+                          Save
                         </button>
-                      </span>
-                    </span>
-                    <span className="modal-row-actions">
-                      <input
-                        type="password"
-                        className="modal-name-input"
-                        autoComplete="off"
-                        aria-labelledby="composio-key-label"
-                        placeholder="ck_…"
-                        value={composioKeyDraft}
-                        onChange={(event) => setComposioKeyDraft(event.currentTarget.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            void saveComposioKey();
-                          }
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="modal-button"
-                        disabled={composioKeyDraft.trim() === ""}
-                        onClick={() => void saveComposioKey()}
-                      >
-                        Save
-                      </button>
-                    </span>
-                  </div>
+                      </div>
+                    </div>
+                  </>
                 ) : null}
               </div>
 

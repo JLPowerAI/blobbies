@@ -1360,7 +1360,7 @@ export function makeComposioTools(): AgentTool[] {
  */
 export function makeShellTool(blobId?: string): AgentTool {
   const parameters = z.object({
-    program: z.string().describe("Program name only, e.g. ls, rg, cat, composio"),
+    program: z.string().describe("Program name only, e.g. ls, rg, cat, grep"),
     args: z.array(z.string()).describe("Arguments as separate strings, never one joined string"),
   });
   const tool: AgentTool<typeof parameters> = {
