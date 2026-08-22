@@ -22,42 +22,41 @@
 
 ---
 
-Little AI teammates called **Blobs**. You make them, name them, give them jobs: one for email, one for research, one that hypes you up before meetings.
+Little AI teammates called **Blobs**. Make one, name it, give it a job. One for email, one for research, one that hypes you up before meetings.
 
-They remember you, they do real work in your apps, and **your data never reaches an AI company.**
+They remember you. They work in your apps. And **your data never touches an AI company.**
 
 ---
 
-## 🚨 The mistake almost everyone is making
+## 🚨 The mistake everyone is making
 
-People are connecting Gmail, Drive, Slack and Notion to AI agents at speed. Almost nobody asks the one question that matters:
+Everyone is plugging Gmail, Drive and Slack into AI agents right now. Nobody asks the one question that matters:
 
-> When the agent reads my email, **where does the text of that email go?**
+> Your agent reads your email. **Where does that email go?**
 
-To an AI provider. Not a summary, not metadata. **The actual words**, in plaintext, on someone else's servers, because that is the only way a model can read anything.
+To an AI provider. Not a summary. The actual words, in plaintext, on their servers. That is the only way a model reads anything.
 
-**Using an AI to write code is a different bet.** A repo is bounded, usually replaceable, and you chose what went in it. Your inbox is not:
+**Code is a different bet.** A repo is bounded and replaceable. Your inbox is not:
 
-- Every password reset and account recovery link you have ever been sent
-- Contracts, invoices, tax documents, bank mail
+- Every password reset link you have ever been sent
+- Contracts, invoices, tax docs, bank mail
 - Medical results, legal threads, family arguments
-- Every private thing someone told you and only you
 
-Connect an agent to that and you have handed a company **your identity's master key**, in one OAuth click, for a to-do list summary.
+That is your identity's master key. People hand it over in one OAuth click, for a to-do list summary.
 
 ### "But it has zero data retention"
 
-ZDR is a promise about what happens *after* they receive it. The receiving already happened. Four things stay true:
+ZDR describes what happens **after** they get your email. They still got it.
 
-**1. It gets decrypted on their machines.** Not persisted never meant not processed. Your email is plaintext in their RAM either way.
+**It gets decrypted on their machines.** Not stored never meant not read.
 
-**2. It usually gets logged first.** OpenAI's documented default: abuse-monitoring logs on all API usage, kept up to 30 days. Exclusion needs their prior approval, so it is an enterprise carve-out, not your default. ([data controls](https://developers.openai.com/api/docs/guides/your-data))
+**It usually gets logged first.** OpenAI's default is abuse-monitoring logs on all API usage, kept 30 days. Opting out needs their approval. ([docs](https://developers.openai.com/api/docs/guides/your-data))
 
-**3. Someone who isn't you can reverse it.** In the NYT copyright case a federal court ordered OpenAI to preserve output logs that would normally have been deleted, including conversations users had deleted themselves. True zero-retention endpoints were exempt for one reason: **there was nothing to preserve.**
+**A judge can undo it.** In the NYT case a court ordered OpenAI to preserve logs it would normally have deleted, including chats users deleted themselves. True ZDR endpoints were exempt, because there was nothing to preserve.
 
-**4. Policy can revoke it.** On 9 June 2026 Anthropic began retaining prompts and outputs for 30 days on covered models, including for organizations that had ZDR configured. Yesterday's guarantee, gone by announcement. ([their notice](https://support.claude.com/en/articles/15425996-data-retention-practices-for-covered-models))
+**A policy update can kill it.** On 9 June 2026 Anthropic started keeping 30 days on covered models, including orgs that had ZDR switched on. ([their notice](https://support.claude.com/en/articles/15425996-data-retention-practices-for-covered-models))
 
-**ZDR is a receipt, not a lock.** The only data that cannot be logged, subpoenaed, breached, or re-scoped by a policy update is data they never received.
+**ZDR is a receipt, not a lock.** Data they never received cannot be logged, subpoenaed, breached, or re-scoped later.
 
 ---
 
@@ -73,23 +72,25 @@ Blobbies allows exactly two model paths and refuses everything else at the build
 | Brains | Capped by your hardware | Frontier open-weight models |
 | Who can read your prompt | You | Nobody. **Verified, not promised** |
 
-**Path 1, local.** The model runs on your machine. Your email is read by software you own, on hardware you own. Nothing to trust, nothing to leak. Free forever, works on a plane. Your GPU is the ceiling.
+**Path 1, local.** Runs on your machine. Your email gets read by software you own, on hardware you own. Nothing to trust, nothing to leak. Free forever, works on a plane. Your GPU is the ceiling.
 
-**Path 2, Tinfoil.** When you need a frontier model, this is the safest option I could find that still gives real power. The one cloud that doesn't ask you to take its word.
+**Path 2, Tinfoil.** Need a bigger brain? This is the safest option I could find that still gives real power. The one cloud that doesn't ask you to take its word.
 
 ### Why Tinfoil specifically
 
-Every mainstream provider offers a **promise**: a policy page, a retention toggle, a "we don't train on API data" line. You cannot check any of it from outside. Tinfoil replaces the promise with a **check your machine runs before each connection:**
+Everyone else offers a **promise**: a policy page, a retention toggle, a "we don't train on API data" line. You cannot check any of it from outside.
 
-1. **Hardware enclave (TEE).** The model sits in AMD SEV-SNP confidential compute. The CPU encrypts memory itself, so the host operator, Tinfoil included, sees ciphertext where your prompt should be. They cannot read it if they want to, or if compelled.
-2. **Attested before the first byte leaves.** The SDK fetches the enclave's hardware attestation and matches its measurement against the published open-source build, recorded in a Sigstore transparency log. Mismatch means **your request is never sent.**
-3. **Encrypted to the enclave, not to a company.** Bodies are HPKE-encrypted on your device and decrypt only inside the enclave. A proxy or TLS terminator in front sees nothing usable.
-4. **Open models, open protocol.** No closed weights, OpenAI-compatible API, no lock-in.
+Tinfoil swaps the promise for a **check your own machine runs, before every connection:**
+
+1. **Hardware enclave.** The model sits in AMD SEV-SNP confidential compute. The CPU encrypts memory itself, so the host operator, Tinfoil included, sees ciphertext where your prompt should be. They cannot read it if they want to, or if a court tells them to.
+2. **Attested before a single byte leaves you.** Your machine fetches the enclave's hardware attestation and checks it against the published open-source build, logged in Sigstore. Mismatch means **the request never sends.**
+3. **Encrypted to the enclave, not to a company.** Bodies are HPKE-encrypted on your device and only open inside the enclave. Anything sitting in front of it sees noise.
+4. **Open models, open protocol.** No closed weights, no lock-in.
 5. **Your key, your bill.** Blobbies has no backend and no account, so there is no server of ours to breach.
 
-In one line: **other providers ask you to trust a policy. Tinfoil lets you verify a machine.** Subpoena Tinfoil, you get ciphertext. Subpoena a normal provider, you get your inbox.
+One line version: **everyone else asks you to trust a policy. Tinfoil lets you verify a machine.** Subpoena Tinfoil, you get ciphertext. Subpoena a normal provider, you get your inbox.
 
-**Where the trust sits, honestly:** you are trusting AMD's hardware root of trust, and attestation proves the *published* code ran, not that the code is harmless. Far smaller than a policy page. Not zero. Check it yourself: [verification docs](https://docs.tinfoil.sh/verification/verification-in-tinfoil), [the client SDK that attests](https://github.com/tinfoilsh/tinfoil-js), [the encrypted-body protocol](https://github.com/tinfoilsh/encrypted-http-body-protocol).
+**Honest bit:** you are trusting AMD's hardware root of trust, and attestation proves the *published* code ran, not that the code is harmless. Way smaller than a policy page. Not zero. Check it yourself: [verification docs](https://docs.tinfoil.sh/verification/verification-in-tinfoil), [the SDK that attests](https://github.com/tinfoilsh/tinfoil-js), [the encrypted-body protocol](https://github.com/tinfoilsh/encrypted-http-body-protocol).
 
 ### Not a policy. The build.
 
@@ -97,16 +98,36 @@ No OpenAI, no Anthropic, no OpenRouter. The Anthropic SDK is stubbed out (`src/l
 
 ---
 
-## 💸 And it costs nothing
+## 🧠 Pick the right brain (this is where people burn money)
 
-Privacy shouldn't be a thing only people with $200/month can buy.
+Biggest myth going: you need the smartest model on earth to read your email.
+
+You don't. Sorting an inbox is not a maths olympiad.
+
+Tinfoil serves **DeepSeek V4 Flash**, **Kimi K3**, **GLM 5.2**, **gpt-oss-120b** and friends. Any of them handle "check my calendar, flag anything urgent, draft a reply" without breaking a sweat.
+
+| The job | The brain |
+| --- | --- |
+| Email, calendar, Slack, notes, reminders | A local model, or a small Tinfoil one |
+| Research, long documents, proper writing | Mid-size Tinfoil model |
+| Full coding agent going all night | Sure, go big. That is not this app |
+
+This is not "use the weakest thing you can find". It is: **match the model to the task.** Today's mid-size open models are genuinely good.
+
+Point a frontier model at labelling emails and you are renting a Ferrari for the school run. Works fine. Still daft. And your credit burns in a week.
+
+---
+
+## 💸 What it actually costs
 
 | | Monthly |
 | --- | --- |
-| **Blobbies + a local model** | **$0** |
-| **Blobbies + Tinfoil** | Your own key, pay per use |
+| **Blobbies + local model** | **$0.** Forever. |
+| **Blobbies + Tinfoil** | Roughly **$10 to $20** for normal use, on your own key |
 | Grok Bot (cheapest) | $120/seat Premium Teams |
 | Grok Bot (solo) | $200 Cursor Ultra, or $300 SuperGrok Heavy |
+
+Privacy shouldn't be a thing only people with $200/month can buy.
 
 Free and private are not supposed to be a trade. Here they are the same choice.
 
@@ -139,13 +160,17 @@ Free and private are not supposed to be a trade. Here they are the same choice.
 | Update checks | App version → GitHub Releases. Signed with a minisign key; you click to install. |
 | Telemetry, analytics, crash reports | **None.** No account, no server of ours, nothing to opt out of. |
 
-**The honest caveat, stated plainly:** connecting Gmail or Slack routes those API calls through Composio's cloud on your own account. That's how the connector works, and it's the one path where app content leaves your machine. It is a **transit** hop, not a model host: the email body lands on your disk and is read by your local model or your enclave. It is never handed to an AI provider, which is the specific thing this app exists to prevent. Want zero third parties? Skip plugins and use files, web search and local commands; everything else still works.
+**One honest caveat.** Connecting Gmail or Slack routes those API calls through Composio's cloud, on your own account. That is how the connector works, and it is the single path where app content leaves your machine.
+
+It is a **transit** hop, not a model host. The email body lands on your disk and gets read by your local model or your enclave. It never goes to an AI provider, which is the exact thing this app exists to stop.
+
+Want zero third parties? Skip plugins. Files, web search and local commands all still work.
 
 ---
 
 ## ⚔️ Blobbies vs Grok Bot
 
-Grok Bot is xAI's take on AI teammates: named Bots with jobs, on a cloud computer. In beta since 11 Aug 2026, and genuinely capable. It is also the clearest example of the trade this README is about, because your tools, logins and data live on their machine by design:
+xAI's take on AI teammates: named Bots with jobs, on a cloud computer. In beta since 11 Aug 2026, and genuinely capable. It is also the clearest example of the trade this README is about, because your tools, logins and data live on their machine by design.
 
 |  | 🫧 **Blobbies** | **Grok Bot** |
 | --- | --- | --- |
@@ -164,13 +189,17 @@ Grok Bot is xAI's take on AI teammates: named Bots with jobs, on a cloud compute
 
 Grok Bot facts from [x.ai/bot](https://x.ai/bot) and xAI's docs, checked 22 Aug 2026. It's a beta; expect change.
 
-**Fair is fair.** Grok Bots get a real screen on a cloud computer and drive any website like a person would, around the clock, whether your laptop is open or not. Blobbies can't do that and isn't trying to. What it does instead: costs nothing, runs where you can see it, and ships its whole source, so "private" is something you check rather than something you're told.
+**Fair is fair.** Grok Bots get a real screen on a cloud computer and drive any website like a person would, all night, whether your laptop is open or not. Blobbies can't do that and isn't trying to.
+
+What it does instead: costs nothing, runs where you can see it, and ships its whole source. So "private" is something you check, not something you're told.
 
 ---
 
 ## 🚀 Get it
 
-Installers on the [latest release](https://github.com/KenKaiii/blobbies/releases/latest): macOS (Apple Silicon + Intel `.dmg`), Windows (`.exe`), Linux x86_64 (`.deb` + AppImage). The app checks GitHub for updates and installs them when you click. Windows builds are unsigned, so SmartScreen will warn.
+Grab it from the [latest release](https://github.com/KenKaiii/blobbies/releases/latest): macOS (Apple Silicon + Intel `.dmg`), Windows (`.exe`), Linux x86_64 (`.deb` + AppImage). It updates itself after that.
+
+Windows builds are unsigned, so SmartScreen will grumble at you.
 
 Then pick a brain in **Settings → Model**:
 
@@ -207,7 +236,11 @@ pnpm tauri:build   # production bundle (dmg / deb+AppImage / NSIS exe)
 pnpm check         # everything CI runs: lint, types, tests, clippy
 ```
 
-**Platform quirks, so nothing surprises you:** The connector CLI's installer is a POSIX shell script, so on Windows it needs [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). The in-app install button hides itself there, and the Plugins tab explains. A Blob's shell tools (`ls`, `cat`, `grep`, …) are POSIX binaries that mostly don't exist on Windows, so those commands fail with "not found" there. CI compiles and tests the Rust side on macOS, Linux, and Windows on every push, and a [release workflow](.github/workflows/release.yml) builds the installers for all three.
+**Platform quirks, so nothing surprises you:**
+
+- The connector CLI's installer is a POSIX shell script, so Windows needs [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). The in-app install button hides itself there, and the Plugins tab explains why.
+- A Blob's shell tools (`ls`, `cat`, `grep`) are POSIX binaries that mostly don't exist on Windows, so those commands fail with "not found".
+- CI compiles and tests the Rust side on macOS, Linux and Windows every push. A [release workflow](.github/workflows/release.yml) builds installers for all three.
 
 ---
 
