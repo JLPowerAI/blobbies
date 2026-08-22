@@ -53,9 +53,19 @@ src-tauri/icons/ios
 CLAUDE.md
 docs/
 
-# Local-only dev harness: model tuning that never gates CI (runs via vitest.sim.config.ts)
-sim/
-vitest.sim.config.ts
+# Model-tuning harness (runs via vitest.sim.config.ts, never gates CI).
+#
+# The source is tracked: these sims are how a prompt or tool-description change
+# gets measured against a real model, and losing them on a clone means the next
+# person tunes blind. Not running in CI is a workflow decision, not a reason to
+# leave the harness out of the repo.
+#
+# Anything a *run* produces stays ignored, by default-deny: only `.ts` is
+# tracked, so a report, a cache or a scratch directory added later needs no new
+# rule here. Sim runs need TINFOIL_API_KEY or a local Ollama from the
+# environment, so no file in here ever holds a credential.
+sim/*
+!sim/*.ts
 
 # Stale tsc incremental state (the live one lives in node_modules/.tmp)
 *.tsbuildinfo
