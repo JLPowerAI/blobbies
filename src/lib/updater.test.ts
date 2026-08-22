@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkForUpdates,
   downloadUpdate,
+  getUpdateState,
   installAndRestart,
   resetUpdateState,
   simulateUpdate,
+  updateActionLabel,
+  updateClickAction,
   updaterTransport,
 } from "@/lib/updater";
 
@@ -180,5 +183,39 @@ describe("simulateUpdate (dev visuals)", () => {
     await flow;
     expect(getUpdateState()).toEqual({ phase: "ready", version: "9.9.9" });
     vi.useRealTimers();
+  });
+});
+
+describe("updateClickAction (shared by the sidebar card and Settings)", () => {
+  it("checks from idle, so the Settings button is not a dead end", async () => {
+    // Regression: the Settings button used to call checkForUpdates directly and
+    // then stop, leaving the only way to actually download an update in the
+    // sidebar. Both controls now run this one action.
+    const check = vi.spyOn(updaterTransport, "check").mockResolvedValue(null);
+    updateClickAction();
+    await vi.waitFor(() => expect(check).toHaveBeenCalledOnce());
+  });
+
+  it("downloads when an update is already available", async () => {
+    const { handle } = fakeHandle();
+    vi.spyOn(updaterTransport, "check").mockResolvedValue(
+      handle as unknown as Awaited<ReturnType<typeof updaterTransport.check>>,
+    );
+    await checkForUpdates();
+    expect(getUpdateState().phase).toBe("available");
+
+    // Second press is Download, not another check.
+    updateClickAction();
+    await vi.waitFor(() => expect(handle.downloadAndInstall).toHaveBeenCalledOnce());
+  });
+});
+
+describe("updateActionLabel", () => {
+  it("names the next action at every phase", () => {
+    expect(updateActionLabel("idle", 0)).toBe("Check for Updates");
+    expect(updateActionLabel("up-to-date", 0)).toBe("Check for Updates");
+    expect(updateActionLabel("available", 0)).toBe("Download now");
+    expect(updateActionLabel("downloading", 42)).toBe("Downloading… 42%");
+    expect(updateActionLabel("ready", 0)).toBe("Install and Restart now");
   });
 });

@@ -184,8 +184,10 @@ export async function installAndRestart(): Promise<void> {
 }
 
 /**
- * Click handler for the sidebar entry: whatever the current phase needs next.
- * The badge stays one control from green pill to restart.
+ * Click handler for both update controls: whatever the current phase needs
+ * next. The sidebar badge and the Settings button are one control each, from
+ * check through green pill to restart, and they share this state, so starting
+ * a download in one shows progress in the other.
  */
 export function updateClickAction(): void {
   const s = state;
@@ -201,6 +203,29 @@ export function updateClickAction(): void {
     }
   } else if (s.phase === "ready") {
     void installAndRestart();
+  } else if (s.phase === "idle" || s.phase === "up-to-date") {
+    void checkForUpdates();
+  }
+}
+
+/** Label for an update control at each phase. Shared, so the sidebar card and
+ *  the Settings button can never drift apart on wording. */
+export function updateActionLabel(phase: UpdateState["phase"], percent: number): string {
+  switch (phase) {
+    case "checking":
+      return "Checking…";
+    case "available":
+      return "Download now";
+    case "downloading":
+      return `Downloading… ${percent}%`;
+    case "ready":
+      return "Install and Restart now";
+    case "installing":
+      return "Installing…";
+    case "failed":
+      return "Retry";
+    default:
+      return "Check for Updates";
   }
 }
 

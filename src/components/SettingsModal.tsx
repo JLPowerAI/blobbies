@@ -24,7 +24,13 @@ import { isTauri, openExternal } from "@/lib/tauri";
 // id helpers are imported statically; handlers `import()` the rest on use.
 import type { TinfoilModel } from "@/lib/tinfoil";
 import { isTinfoilModel, TINFOIL_MODEL_PREFIX } from "@/lib/tinfoil-model";
-import { checkForUpdates, simulateUpdate, type UpdateState, useUpdateState } from "@/lib/updater";
+import {
+  simulateUpdate,
+  type UpdateState,
+  updateActionLabel,
+  updateClickAction,
+  useUpdateState,
+} from "@/lib/updater";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 export const MAX_USER_NAME_LENGTH = 32;
@@ -32,7 +38,7 @@ export const MAX_USER_NAME_LENGTH = 32;
 export type ThemePreference = "system" | "light" | "dark";
 
 /** The Updates tab status line under the version. One sentence per phase; the
- *  sidebar card carries the interactive part, this is the quiet summary. */
+ *  button beside it carries the action. */
 function updateBlurb(update: UpdateState): string {
   switch (update.phase) {
     case "checking":
@@ -42,9 +48,9 @@ function updateBlurb(update: UpdateState): string {
     case "available":
       return `Blobbies ${update.version} is ready to download.`;
     case "downloading":
-      return `Downloading ${update.version} — ${update.percent}%`;
+      return `Downloading ${update.version}, ${update.percent}%`;
     case "ready":
-      return `${update.version} downloaded — see the sidebar to install and restart.`;
+      return `${update.version} downloaded. Install and restart when you are ready.`;
     case "installing":
       return `Installing ${update.version}…`;
     case "failed":
@@ -913,6 +919,10 @@ export function SettingsModal({
                       Simulate Update
                     </button>
                   ) : null}
+                  {/* One control through the whole flow, same as the sidebar
+                      card and driven by the same state: check, download,
+                      install and restart. Nobody should have to go hunting in
+                      the sidebar to finish an update they started here. */}
                   <button
                     type="button"
                     className="modal-button"
@@ -921,9 +931,12 @@ export function SettingsModal({
                       update.phase === "downloading" ||
                       update.phase === "installing"
                     }
-                    onClick={() => void checkForUpdates()}
+                    onClick={updateClickAction}
                   >
-                    {update.phase === "checking" ? "Checking…" : "Check for Updates"}
+                    {updateActionLabel(
+                      update.phase,
+                      update.phase === "downloading" ? update.percent : 0,
+                    )}
                   </button>
                 </div>
               </div>

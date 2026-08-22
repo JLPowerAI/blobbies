@@ -142,12 +142,14 @@ function initialsOf(name: string): string {
   return letters.length > 0 ? letters : "?";
 }
 
-/** Label for the sidebar update control at each phase, collapsed or not. */
+/** Label for the sidebar update control at each phase, collapsed or not. This
+ *  one announces ("New Update Available") where Settings' button names the
+ *  action; both drive the same state through updateClickAction. */
 function updateLabel(phase: string, percent: number): string {
   if (phase === "downloading") return `Downloading… ${percent}%`;
   if (phase === "ready") return "Install and Restart now";
   if (phase === "installing") return "Installing…";
-  if (phase === "failed") return "Update failed — retry";
+  if (phase === "failed") return "Update failed, retry";
   return "New Update Available";
 }
 
@@ -193,7 +195,11 @@ function SidebarUpdateCard({ collapsed }: { collapsed: boolean }) {
         </>
       ) : (
         <>
-          <ArrowUpCircle size={15} strokeWidth={1.8} aria-hidden="true" />
+          {/* Same 26px glyph slot as Plugins and the account row, so all
+              three footer icons and their labels share one vertical line. */}
+          <span className="footer-glyph">
+            <ArrowUpCircle size={16} strokeWidth={1.8} aria-hidden="true" />
+          </span>
           <span className="update-card-body">
             <span className="update-card-label">{label}</span>
             {phase === "downloading" ? (

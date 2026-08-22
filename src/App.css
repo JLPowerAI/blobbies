@@ -681,7 +681,10 @@ select:focus:not(:focus-visible) {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 8px 10px;
+  /* One less than .footer-row's 6px/10px on each side, because the 1px border
+     below is what makes up the difference. Without that subtraction the card's
+     glyph sits a pixel right of Plugins and the account row. */
+  padding: 7px 9px;
   margin-bottom: 4px;
   border-radius: 10px;
   border: 1px solid transparent;
@@ -754,7 +757,14 @@ select:focus:not(:focus-visible) {
   justify-content: center;
   width: 26px;
   height: 26px;
+  flex-shrink: 0;
   color: var(--text-primary);
+}
+
+/* The update card colours its own glyph (green when there is news), so it opts
+   out of .footer-glyph's fixed colour while keeping the alignment box. */
+.update-card .footer-glyph {
+  color: inherit;
 }
 
 .footer-avatar {
