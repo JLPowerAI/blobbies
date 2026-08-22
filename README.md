@@ -241,7 +241,7 @@ pnpm check         # everything CI runs: lint, types, tests, clippy
 **Platform quirks, so nothing surprises you:**
 
 - The connector CLI's installer is a POSIX shell script, so Windows needs [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). The in-app install button hides itself there, and the Plugins tab explains why.
-- A Blob's shell tools (`ls`, `cat`, `grep`) are POSIX binaries that mostly don't exist on Windows, so those commands fail with "not found".
+- A Blob's file readers (`ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`) are implemented inside the app in Rust, not spawned, so they behave the same on all three platforms and need nothing installed.
 - CI compiles and tests the Rust side on macOS, Linux and Windows every push. A [release workflow](.github/workflows/release.yml) builds installers for all three.
 
 ---

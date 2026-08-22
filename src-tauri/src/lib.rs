@@ -8,6 +8,7 @@ mod secrets;
 mod shell;
 mod skills;
 mod store;
+mod textutil;
 
 pub use error::Error;
 

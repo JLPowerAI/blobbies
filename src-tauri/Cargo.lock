@@ -275,6 +275,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-user-notifications",
  "ocrs",
+ "regex",
  "rten",
  "serde",
  "serde_json",
@@ -287,6 +288,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "thiserror 2.0.20",
+ "walkdir",
 ]
 
 [[package]]

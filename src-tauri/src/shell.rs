@@ -46,9 +46,10 @@
 //! This is deliberately not a terminal. Integrations do not need one: the
 //! Composio meta-tools reach every connected app without it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::textutil;
 use serde::Serialize;
 use std::process::Command;
 
@@ -406,7 +407,11 @@ pub(crate) fn shell_allowed() -> Vec<String> {
 ///
 /// `program` is matched exactly against the allowlist — not a path, not a
 /// prefix — so `./composio` or `/tmp/git` cannot stand in for the real one.
-/// Resolution is left to `PATH`, the same lookup a user gets.
+///
+/// The readers do not spawn anything. `run_reader` implements them in-process,
+/// so they behave identically on Windows (which ships none of these programs)
+/// and on macOS (whose BSD builds reject the GNU long flags this allowlist
+/// accepts). Only `composio`, a real external CLI, still reaches `PATH`.
 #[tauri::command]
 pub(crate) async fn shell_run(
     app: tauri::AppHandle,
@@ -422,6 +427,16 @@ pub(crate) async fn shell_run(
         None => None,
     };
     check_call(&program, &args, home.as_deref())?;
+
+    // `check_call` has already refused a reader without a home, so the pairing
+    // below is the only way a reader reaches this point.
+    let is_reader =
+        find_program(&program).is_some_and(|entry| matches!(entry.shape, Shape::Reader { .. }));
+    if let Some(home) = home.clone().filter(|_| is_reader) {
+        return tauri::async_runtime::spawn_blocking(move || run_reader(&home, &program, &args))
+            .await
+            .map_err(|error| Error::Io(error.to_string()))?;
+    }
 
     tauri::async_runtime::spawn_blocking(move || {
         let mut command = Command::new(&program);
@@ -486,6 +501,134 @@ pub(crate) async fn shell_run(
     .map_err(|error| Error::Io(error.to_string()))?
 }
 
+/// Split a vetted argv into flags and paths, and run the matching reader.
+///
+/// Every flag here already passed `check_flag`, and every positional already
+/// passed `check_path`, so this function's job is translation rather than
+/// validation. Paths are re-resolved through `home::resolve_in_home` anyway:
+/// the check happened on the string, and this turns it into the absolute path
+/// actually opened, so the two can never disagree.
+fn run_reader(home: &Path, program: &str, args: &[String]) -> Result<CommandOutput> {
+    /// Whether a short letter or long name was given.
+    fn has(flags: &[&str], short: char, long: &str) -> bool {
+        flags.iter().any(|flag| {
+            if let Some(name) = flag.strip_prefix("--") {
+                name.split('=').next().unwrap_or(name) == long
+            } else {
+                flag.strip_prefix('-')
+                    .is_some_and(|body| body.contains(short))
+            }
+        })
+    }
+
+    /// A numeric flag value, attached (`-n50`) or long (`--lines=50`).
+    ///
+    /// Detached values never appear: `check_flag` requires the attached form
+    /// precisely so a count cannot be mistaken for a path.
+    fn number(flags: &[&str], short: char, long: &str) -> Option<usize> {
+        flags.iter().find_map(|flag| {
+            if let Some(name) = flag.strip_prefix("--") {
+                let (key, value) = name.split_once('=')?;
+                (key == long).then(|| value.parse().ok())?
+            } else {
+                let body = flag.strip_prefix('-')?;
+                let index = body.find(short)?;
+                let digits = &body[index + short.len_utf8()..];
+                (!digits.is_empty()).then(|| digits.parse().ok())?
+            }
+        })
+    }
+
+    let mut flags: Vec<&str> = Vec::new();
+    let mut positionals: Vec<&str> = Vec::new();
+    let mut end_of_flags = false;
+    for arg in args {
+        if !end_of_flags && arg.len() > 1 && arg.starts_with('-') {
+            if arg == "--" {
+                end_of_flags = true;
+                continue;
+            }
+            flags.push(arg);
+            continue;
+        }
+        positionals.push(arg);
+    }
+
+    // The pattern of a grep/rg call is positional but is not a path.
+    let pattern_count = match find_program(program).map(|entry| &entry.shape) {
+        Some(Shape::Reader { patterns, .. }) => *patterns,
+        _ => 0,
+    };
+    let pattern = positionals.first().copied().unwrap_or_default();
+    let path_args = positionals.get(pattern_count..).unwrap_or_default();
+
+    // No path given means the Blob's own home, the same default a shell gives
+    // by running in the working directory.
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for arg in path_args {
+        let trimmed = arg.trim_start_matches("./");
+        if trimmed.is_empty() || trimmed == "." {
+            paths.push(home.to_path_buf());
+        } else {
+            paths.push(crate::home::resolve_in_home(home, trimmed)?);
+        }
+    }
+    if paths.is_empty() {
+        paths.push(home.to_path_buf());
+    }
+
+    let stdout = match program {
+        "ls" => textutil::ls(
+            paths.first().map_or(home, PathBuf::as_path),
+            has(&flags, 'a', "all") || has(&flags, 'A', "almost-all"),
+            has(&flags, 'l', "long"),
+            has(&flags, 'r', "reverse"),
+        )?,
+        "cat" => textutil::cat(&paths, has(&flags, 'n', "number"))?,
+        "head" => textutil::head_tail(&paths, number(&flags, 'n', "lines").unwrap_or(10), false)?,
+        "tail" => textutil::head_tail(&paths, number(&flags, 'n', "lines").unwrap_or(10), true)?,
+        "wc" => textutil::wc(
+            &paths,
+            has(&flags, 'l', "lines"),
+            has(&flags, 'w', "words"),
+            has(&flags, 'c', "bytes"),
+        )?,
+        "grep" | "rg" => textutil::grep(
+            home,
+            pattern,
+            &paths,
+            &textutil::GrepOptions {
+                ignore_case: has(&flags, 'i', "ignore-case"),
+                invert: has(&flags, 'v', "invert-match"),
+                line_numbers: has(&flags, 'n', "line-number")
+                    // ripgrep numbers lines unless told not to; grep does not.
+                    || (program == "rg" && !has(&flags, '\0', "no-line-number")),
+                // ripgrep walks directories without being asked.
+                recursive: has(&flags, 'r', "recursive")
+                    || has(&flags, 'R', "dereference-recursive")
+                    || (program == "rg" && paths.iter().any(|path| path.is_dir())),
+                fixed: has(&flags, 'F', "fixed-strings"),
+                word: has(&flags, 'w', "word-regexp"),
+                count_only: has(&flags, 'c', "count"),
+                files_with_matches: has(&flags, 'l', "files-with-matches"),
+                max_count: number(&flags, 'm', "max-count"),
+                hidden: has(&flags, '\0', "hidden"),
+            },
+        )?,
+        other => {
+            return Err(Error::Io(format!("`{other}` has no built-in reader.")));
+        }
+    };
+
+    Ok(CommandOutput {
+        stdout: stdout.chars().take(OUTPUT_LIMIT).collect(),
+        stderr: String::new(),
+        // Nothing forked, so there is no wait status; report success, and let
+        // an Err above carry a failure the way every other command does.
+        code: Some(0),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,6 +648,53 @@ mod tests {
             ));
         std::fs::create_dir_all(&dir).unwrap_or_else(|_| panic!("temp home"));
         dir
+    }
+
+    /// The readers run in-process, so a call that the gate allows must also
+    /// produce output on every platform. These would have failed before:
+    /// `--all` and `--lines` are GNU spellings that BSD `ls`/`wc` reject, and
+    /// none of these programs exist on a default Windows install.
+    #[test]
+    fn built_in_readers_run_without_a_shell() {
+        let home = temp_home("builtin");
+        std::fs::write(home.join("notes.txt"), "alpha\nbeta\n").expect("write");
+
+        let out = run_reader(&home, "ls", &args(&["--all"])).expect("ls --all");
+        assert!(out.stdout.contains("notes.txt"), "{}", out.stdout);
+        assert_eq!(out.code, Some(0));
+
+        let out = run_reader(&home, "wc", &args(&["--lines", "notes.txt"])).expect("wc --lines");
+        assert!(out.stdout.contains('2'), "{}", out.stdout);
+
+        let out = run_reader(&home, "cat", &args(&["-n", "notes.txt"])).expect("cat -n");
+        assert!(out.stdout.contains("1\talpha"), "{}", out.stdout);
+
+        let out = run_reader(&home, "head", &args(&["-n1", "notes.txt"])).expect("head -n1");
+        assert_eq!(out.stdout, "alpha\n");
+
+        let out = run_reader(&home, "grep", &args(&["beta", "notes.txt"])).expect("grep");
+        assert_eq!(out.stdout, "beta\n");
+    }
+
+    /// A reader with no path argument works on the Blob's own home, the way a
+    /// shell would use its working directory.
+    #[test]
+    fn a_bare_reader_uses_the_home_folder() {
+        let home = temp_home("bare");
+        std::fs::write(home.join("a.txt"), "x\n").expect("write");
+        let out = run_reader(&home, "ls", &[]).expect("ls");
+        assert!(out.stdout.contains("a.txt"), "{}", out.stdout);
+    }
+
+    /// Containment still holds at the point of execution, not just at the gate.
+    #[test]
+    fn a_reader_cannot_escape_the_home_folder() {
+        let home = temp_home("escape");
+        let result = run_reader(&home, "cat", &args(&["../../etc/hosts"]));
+        assert!(
+            matches!(result, Err(Error::PathOutsideHome)),
+            "traversal must fail"
+        );
     }
 
     fn args(list: &[&str]) -> Vec<String> {
