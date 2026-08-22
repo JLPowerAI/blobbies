@@ -3,6 +3,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink } from "@/components/ExternalLink";
 import { PillSelect } from "@/components/PillSelect";
 import { COMPOSIO_DASHBOARD_URL, composioSignedIn, forgetComposioSession } from "@/lib/composio";
+import { composioLogIn, composioSignOut } from "@/lib/composio-oauth";
 import {
   getOllamaVersion,
   isOllamaInstalled,
@@ -347,6 +348,34 @@ export function SettingsModal({
    * inside a Blob's turn, where the person cannot see the cause. One
    * handshake here puts the error on the screen that can fix it.
    */
+  /**
+   * Browser sign-in: the path most people should take.
+   *
+   * Preferred over the key because it asks nothing of the user beyond a
+   * click, and because the token it stores expires and refreshes rather than
+   * sitting in a dashboard forever.
+   */
+  const logIn = async () => {
+    setComposio((current) => ({ ...current, stage: "verifying", error: "" }));
+    try {
+      await composioLogIn(openExternal);
+      forgetComposioSession();
+      await probeComposio(setComposio);
+    } catch (error) {
+      setComposio((current) => ({
+        ...current,
+        stage: "needsKey",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  };
+
+  const signOutComposio = async () => {
+    await composioSignOut();
+    forgetComposioSession();
+    await probeComposio(setComposio);
+  };
+
   const saveComposioKey = async () => {
     const key = composioKeyDraft.trim();
     if (!KEY_PATTERN.test(key)) {
@@ -637,11 +666,15 @@ export function SettingsModal({
                     <button
                       type="button"
                       className="modal-button"
-                      onClick={() => void probeComposio(setComposio)}
+                      onClick={() => void signOutComposio()}
                     >
-                      Re-check
+                      Sign out
                     </button>
-                  ) : composio.stage === "needsKey" ? null : (
+                  ) : composio.stage === "needsKey" ? (
+                    <button type="button" className="modal-button" onClick={() => void logIn()}>
+                      Log in
+                    </button>
+                  ) : (
                     <button type="button" className="modal-button" disabled>
                       {composio.stage === "verifying" ? "Checking\u2026" : "Checking\u2026"}
                     </button>
@@ -651,10 +684,11 @@ export function SettingsModal({
                   <div className="modal-row modal-row-multiline">
                     <span className="modal-row-text">
                       <span className="modal-row-title" id="composio-key-label">
-                        API key
+                        Or paste an API key
                       </span>
                       <span className="modal-row-blurb">
-                        Stored in your OS keychain, never in a file.{" "}
+                        Only needed if the browser sign-in cannot finish. Stored in your OS
+                        keychain, never in a file.{" "}
                         <button
                           type="button"
                           className="modal-inline-link"

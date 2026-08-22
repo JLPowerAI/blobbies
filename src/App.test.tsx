@@ -698,10 +698,10 @@ describe("App", () => {
     expect(marketplaceTab).toHaveTextContent(String(catalog.length));
 
     // A failed connect explains itself on the row that was clicked. Without
-    // this, a missing key and an abandoned browser tab are both just a button
-    // that appeared to do nothing. With no key set, that is what it says.
+    // this, a missing account and an abandoned browser tab are both just a
+    // button that appeared to do nothing. Signed out, that is what it says.
     await user.click(within(dialog).getByRole("button", { name: "Connect" }));
-    expect(await within(dialog).findByText(/No Composio key yet/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/No Composio account yet/)).toBeInTheDocument();
     expect(within(dialog).queryByText("Connected")).not.toBeInTheDocument();
 
     // The detail view lists real accounts. With none connected it says so

@@ -5,6 +5,7 @@ import { PillSelect } from "@/components/PillSelect";
 import { MAX_USER_NAME_LENGTH } from "@/components/SettingsModal";
 import type { AgentShape, AvatarTone } from "@/data/agents";
 import { COMPOSIO_DASHBOARD_URL, composioSignedIn, forgetComposioSession } from "@/lib/composio";
+import { composioLogIn } from "@/lib/composio-oauth";
 import { requestNotificationPermission } from "@/lib/notify";
 import { getSecret, setSecret } from "@/lib/secrets";
 import { openExternal } from "@/lib/tauri";
@@ -277,6 +278,21 @@ export function Onboarding({
    * a Blob's turn, where the person cannot see why. One handshake here moves
    * that error to the screen that can fix it.
    */
+  /** Browser sign-in, which is the path most people should take. */
+  const logInComposio = async () => {
+    setComposio({ kind: "verifying" });
+    try {
+      await composioLogIn(openExternal);
+      forgetComposioSession();
+      setComposio((await composioSignedIn()) ? { kind: "signedIn" } : { kind: "needsKey" });
+    } catch (error) {
+      setComposio({
+        kind: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   const saveComposioKey = async () => {
     const key = composioKey.trim();
     if (!KEY_PATTERN.test(key)) {
@@ -549,7 +565,7 @@ export function Onboarding({
                           ? composio.message
                           : composio.kind === "signedIn"
                             ? "Connected. Your apps can connect now."
-                            : "Paste a key to connect your apps."}
+                            : "Log in to connect your apps."}
                   </span>
                 </span>
                 {composio.kind === "signedIn" ? (
@@ -559,6 +575,18 @@ export function Onboarding({
                   </span>
                 ) : null}
               </div>
+              {composio.kind === "signedIn" ? null : (
+                <div className="onboarding-key-row">
+                  <button
+                    type="button"
+                    className="onboarding-allow"
+                    disabled={composio.kind === "verifying"}
+                    onClick={() => void logInComposio()}
+                  >
+                    {composio.kind === "verifying" ? "Working\u2026" : "Log in with Composio"}
+                  </button>
+                </div>
+              )}
               {composio.kind === "signedIn" ? null : (
                 <div className="onboarding-key-row">
                   <input

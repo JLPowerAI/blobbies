@@ -31,7 +31,7 @@
     "security": {
       "csp": {
         "default-src": "'self'",
-        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:11434 http://localhost:11434 https://*.tinfoil.sh https://tuf-repo-cdn.sigstore.dev https://connect.composio.dev",
+        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:11434 http://localhost:11434 https://*.tinfoil.sh https://tuf-repo-cdn.sigstore.dev https://connect.composio.dev https://login.composio.dev",
         "img-src": "'self' asset: http://asset.localhost blob: data:",
         "style-src": "'self' 'unsafe-inline'",
         "script-src": "'self'",

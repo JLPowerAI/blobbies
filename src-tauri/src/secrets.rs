@@ -16,9 +16,12 @@ use crate::error::{Error, Result};
 const SERVICE: &str = "com.blobbies.app";
 
 /// Every secret name the webview may read or write. Default-deny.
-const ALLOWED_NAMES: [&str; 3] = [
+const ALLOWED_NAMES: [&str; 4] = [
     "tinfoil-api-key",
     "tinfoil-cache-secret",
+    // OAuth session for Composio (access + refresh token, as JSON). Preferred
+    // over the pasted key, which stays as a fallback.
+    "composio-oauth",
     // Composio's hosted MCP endpoint authenticates with this. It replaced the
     // CLI, which kept its own credential in ~/.composio and shipped for macOS
     // and Linux only.

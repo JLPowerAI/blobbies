@@ -2,6 +2,7 @@ mod commands;
 mod error;
 mod home;
 mod notifications;
+mod oauth;
 mod ocr;
 mod secrets;
 mod shell;
@@ -48,6 +49,8 @@ pub fn run() {
             ocr::ocr_image,
             notifications::request_notification_permission,
             notifications::send_notification,
+            oauth::oauth_listen_port,
+            oauth::oauth_await_redirect,
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,

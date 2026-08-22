@@ -24,6 +24,7 @@
  * allowlist below is what any of them may reach.
  */
 
+import { composioAccessToken } from "@/lib/composio-oauth";
 import { httpFetch } from "@/lib/http";
 import { getSecret } from "@/lib/secrets";
 
@@ -78,21 +79,37 @@ export function forgetComposioSession(): void {
   handshake = null;
 }
 
+/** How this request proves who it is. */
+interface Credential {
+  header: string;
+  value: string;
+}
+
 /**
  * The credential, from the OS keychain.
  *
- * Returned per call rather than cached in a module variable: a key changed in
- * Settings must take effect on the next request, and holding a second copy in
- * memory earns nothing the keychain does not already do.
+ * OAuth first, pasted key second. Both work; the difference is what the user
+ * had to do to get one, and an expiring bearer token beats a long-lived key
+ * sitting in a dashboard forever. The key path stays because it is the escape
+ * hatch when a browser sign-in cannot complete — a locked-down machine, a
+ * headless run, an account whose SSO refuses the loopback redirect.
+ *
+ * Read per call rather than cached: a credential changed in Settings must
+ * take effect on the next request, and `composioAccessToken` already handles
+ * its own refresh.
  */
-async function apiKey(): Promise<string> {
+async function credential(): Promise<Credential> {
+  const token = await composioAccessToken();
+  if (token !== null) {
+    return { header: "authorization", value: `Bearer ${token}` };
+  }
   const key = (await getSecret("composio-api-key")) ?? "";
   if (key.trim() === "") {
     throw new ComposioError(
-      "No Composio key yet. Open Settings \u2192 Plugins and connect your account.",
+      "No Composio account yet. Open Settings \u2192 Plugins and connect one.",
     );
   }
-  return key.trim();
+  return { header: "x-consumer-api-key", value: key.trim() };
 }
 
 /**
@@ -154,7 +171,7 @@ async function rpc(
   params: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const key = await apiKey();
+  const auth = await credential();
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   let response: Response;
   try {
@@ -164,7 +181,7 @@ async function rpc(
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
         "mcp-protocol-version": PROTOCOL_VERSION,
-        "x-consumer-api-key": key,
+        [auth.header]: auth.value,
         ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: nextRequestId++, method, params }),
@@ -182,7 +199,7 @@ async function rpc(
 
   if (response.status === 401 || response.status === 403) {
     throw new ComposioError(
-      "Composio rejected the key. Open Settings \u2192 Plugins and reconnect.",
+      "Composio rejected that account. Open Settings \u2192 Plugins and reconnect.",
     );
   }
   if (!response.ok) {
