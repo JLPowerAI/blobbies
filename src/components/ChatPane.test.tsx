@@ -453,6 +453,81 @@ describe("ChatPane", () => {
     }
   });
 
+  it("clamps against fresh geometry, not the stale extent it is meant to detect", () => {
+    // The bug the clamp above was written for, in its actual shape. WebKit
+    // keeps reporting the pre-transition scrollHeight for a beat after the
+    // panel's width animation, so a clamp computed from that number is
+    // compared against a scrollTop the same staleness produced: `scrollTop >
+    // max` reads false, the correction no-ops, and the pane stays blank until
+    // a stray scroll makes the engine re-clamp. Reading offsetHeight flushes
+    // layout, which is what makes the guard see real geometry.
+    //
+    // Modelled here as a scrollHeight that reports the stale 1600 until
+    // offsetHeight is read, then the settled 900 (viewport 700 → real max
+    // 200). A clamp that never flushes computes max 900, finds 900 > 900
+    // false, and calls nothing at all.
+    vi.useFakeTimers();
+    const callbacks: (() => void)[] = [];
+    class FakeObserver {
+      constructor(callback: () => void) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeObserver);
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    try {
+      render(pane(false, vi.fn()));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (el === null) return;
+      const scrollTo = vi.fn();
+      el.scrollTo = scrollTo as unknown as typeof el.scrollTo;
+
+      let flushed = false;
+      let reads = 0;
+      Object.defineProperty(el, "offsetHeight", {
+        get: () => {
+          flushed = true;
+          return 700;
+        },
+        configurable: true,
+      });
+      Object.defineProperty(el, "scrollHeight", {
+        get: () => {
+          reads += 1;
+          return flushed ? 900 : 1600;
+        },
+        configurable: true,
+      });
+      Object.defineProperty(el, "clientHeight", { get: () => 700, configurable: true });
+      Object.defineProperty(el, "scrollTop", { get: () => 900, configurable: true });
+
+      act(() => {
+        for (const callback of callbacks) callback();
+      });
+      act(() => {
+        vi.advanceTimersByTime(320);
+      });
+
+      // Layout was flushed before the extent was trusted...
+      expect(flushed).toBe(true);
+      expect(reads).toBeGreaterThan(0);
+      // ...so the pane lands on the only position that still has content.
+      // Without the flush this assertion fails: max reads 900, 900 > 900 is
+      // false, and scrollTo is never called with the real max.
+      expect(scrollTo).toHaveBeenCalledWith({ top: 200, behavior: "instant" });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("re-pins the instant scroll two frames later, so a stale extent self-heals", async () => {
     // Same WebKit family as the resize clamp: on a conversation switch the
     // instant pin can read scrollHeight mid-swap and land past the settled

@@ -452,6 +452,31 @@ const MAX_MENTION_OPTIONS = 6;
  */
 const MENTION_TOKEN = /(?:^|\s)@([^@\n]*)$/u;
 
+/**
+ * Pull `el` back onto content it actually has, and report the position it
+ * ended at.
+ *
+ * Forcing layout first is the whole point. WebKit can still report the
+ * pre-transition `scrollHeight` right after a width animation, and a clamp
+ * derived from that stale number is compared against a `scrollTop` the same
+ * staleness produced — so `scrollTop > max` reads false, the correction
+ * no-ops, and the pane keeps showing blank until a stray scroll makes the
+ * engine re-clamp for us. Reading `offsetHeight` flushes pending layout, so
+ * `max` is measured against the geometry the user is actually looking at.
+ *
+ * Only overscroll is corrected: a deliberately scrolled-up reader keeps their
+ * place, because their `scrollTop` is already below `max`.
+ */
+function clampOverscroll(el: HTMLElement): number {
+  void el.offsetHeight;
+  const max = Math.max(0, el.scrollHeight - el.clientHeight);
+  if (el.scrollTop > max) {
+    el.scrollTo({ top: max, behavior: "instant" });
+    return max;
+  }
+  return el.scrollTop;
+}
+
 /** Cap the composer's growth at five text lines (5 × 20px + block padding). */
 const COMPOSER_MAX_HEIGHT = 112;
 
@@ -628,6 +653,8 @@ export function ChatPane({
    * rewrite the answer halfway through.
    */
   const resizingRef = useRef<boolean | null>(null);
+  /** Pending double-rAF from the resize settle, so unmount can cancel it. */
+  const settleFrame = useRef<number | undefined>(undefined);
   const flipRects = useRef(new Map<string, DOMRect>());
 
   /** What "this conversation" means here: one Blob, or one group. */
@@ -724,11 +751,15 @@ export function ChatPane({
     // belongs to the old conversation, and a stale anchor blocks paging.
     loadAnchorRef.current = null;
     nearBottomRef.current = true;
-    // Same for a resize still in flight. Its settle timer would otherwise fire
-    // against the new conversation and overwrite the line above with the old
-    // one's geometry, leaving a chat that opens at the bottom convinced the
-    // user had scrolled up.
+    // Same for a resize still in flight, timer and pending frames alike. Its
+    // settle would otherwise fire against the new conversation and overwrite
+    // the line above with the old one's geometry, leaving a chat that opens at
+    // the bottom convinced the user had scrolled up.
     resizingRef.current = null;
+    if (settleFrame.current !== undefined) {
+      cancelAnimationFrame(settleFrame.current);
+      settleFrame.current = undefined;
+    }
   }, [conversationKey]);
 
   // Older page mounted above the viewport: keep what the user was looking at
@@ -792,20 +823,30 @@ export function ChatPane({
         // the last per-frame pin read `scrollHeight` mid-reflow, so scrollTop
         // can sit past the final, shorter content — a pane that shows blank
         // until the user scrolls and the engine re-clamps (seen live in the
-        // Tauri webview, 2026-08-19). One clamp at settle ends the burst at a
-        // position that actually exists, without stealing a scrolled-up
-        // user's position (it only corrects overscroll).
-        const max = el.scrollHeight - el.clientHeight;
-        if (el.scrollTop > max) {
-          el.scrollTo({ top: max, behavior: "instant" });
-        }
-        resizingRef.current = null;
-        nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        // Tauri webview, 2026-08-19). `clampOverscroll` flushes layout before
+        // measuring, so the burst ends at a position that actually exists.
+        clampOverscroll(el);
+        // Once more after the next paint. The 320ms timer clears the 260ms
+        // width transition, but the compositor can still be mid-commit when it
+        // fires; two frames put this after layout for the settled width, so a
+        // reflow that lands late is corrected too. Cheap, and idempotent when
+        // the first clamp already got it right.
+        settleFrame.current = requestAnimationFrame(() => {
+          settleFrame.current = requestAnimationFrame(() => {
+            const top = clampOverscroll(el);
+            resizingRef.current = null;
+            nearBottomRef.current = el.scrollHeight - top - el.clientHeight < 80;
+          });
+        });
       }, 320);
     });
     observer.observe(el);
     return () => {
       clearTimeout(settle);
+      if (settleFrame.current !== undefined) {
+        cancelAnimationFrame(settleFrame.current);
+        settleFrame.current = undefined;
+      }
       observer.disconnect();
     };
   }, []);
