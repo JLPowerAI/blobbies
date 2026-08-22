@@ -88,7 +88,7 @@
       }
     },
     {
-      "includes": ["**/*.test.ts", "**/*.test.tsx", "src/test/**"],
+      "includes": ["**/*.test.ts", "**/*.test.tsx", "src/test/**", "sim/**"],
       "linter": {
         "rules": {
           "suspicious": {
