@@ -217,9 +217,14 @@ function composioBlurb(status: ComposioStatus): string {
     case "checking":
       return "Checking\u2026";
     case "verifying":
-      return "Checking that key\u2026";
+      // Covers both routes in: a browser sign-in in flight and a pasted key
+      // being checked. Naming only one would read as a stall for the other.
+      return "Waiting for Composio\u2026";
     case "needsKey":
-      return "Paste a Composio key to connect your apps.";
+      // Names the primary action, which is the button beside it. Telling
+      // people to paste a key while a Log in button sits next to the sentence
+      // sends them to the fallback first.
+      return "Log in to connect your apps.";
     case "signedIn":
       return "Connected. Your apps can connect now.";
   }
@@ -676,7 +681,7 @@ export function SettingsModal({
                     </button>
                   ) : (
                     <button type="button" className="modal-button" disabled>
-                      {composio.stage === "verifying" ? "Checking\u2026" : "Checking\u2026"}
+                      {"Checking\u2026"}
                     </button>
                   )}
                 </div>
@@ -704,7 +709,7 @@ export function SettingsModal({
                         className="modal-name-input"
                         autoComplete="off"
                         aria-labelledby="composio-key-label"
-                        placeholder="ck_\u2026"
+                        placeholder="ck_…"
                         value={composioKeyDraft}
                         onChange={(event) => setComposioKeyDraft(event.currentTarget.value)}
                         onKeyDown={(event) => {

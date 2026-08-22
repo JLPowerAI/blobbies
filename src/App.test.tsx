@@ -480,11 +480,20 @@ describe("App", () => {
     await user.click(within(dialog).getByRole("button", { name: "Plugins" }));
 
     // Composio is reached over its hosted MCP endpoint now: no binary to
-    // install, one key. The CLI this replaced had no Windows build at all,
-    // so the old "Install" button was unreachable on a supported platform.
-    expect(await within(dialog).findByText(/Paste a Composio key/)).toBeInTheDocument();
-    expect(within(dialog).getByLabelText(/API key/)).toBeInTheDocument();
+    // install, a browser sign-in. The CLI this replaced had no Windows build
+    // at all, so the old "Install" button was unreachable on a supported
+    // platform.
+    expect(await within(dialog).findByText(/Log in to connect your apps/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Log in" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
+
+    // The pasted key stays as the fallback, and says so: leading with it sends
+    // people to the harder path first.
+    const keyField = within(dialog).getByLabelText(/API key/);
+    expect(keyField).toBeInTheDocument();
+    // JSX attributes are raw text, not JS strings, so a \u2026 escape here
+    // renders as those six characters. It shipped that way once.
+    expect(keyField.getAttribute("placeholder")).not.toContain("\\u");
 
     // Skills read from disk, which jsdom has none of — the empty state must
     // say where to put one rather than showing a blank card.

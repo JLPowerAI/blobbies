@@ -549,8 +549,8 @@ export function Onboarding({
           <div className="onboarding-step">
             <h1 className="onboarding-heading">Hooking up your apps</h1>
             <p className="onboarding-blurb">
-              Gmail, Calendar, Slack and the rest connect through Composio. Paste a key once and
-              every app is one click away.
+              Gmail, Calendar, Slack and the rest connect through Composio. Log in once and every
+              app is one click away.
             </p>
             <div className="onboarding-card">
               <div className="onboarding-row">
@@ -560,7 +560,7 @@ export function Onboarding({
                     {composio.kind === "idle" || composio.kind === "checking"
                       ? "Checking\u2026"
                       : composio.kind === "verifying"
-                        ? "Checking that key\u2026"
+                        ? "Waiting for Composio\u2026"
                         : composio.kind === "failed"
                           ? composio.message
                           : composio.kind === "signedIn"
@@ -593,7 +593,7 @@ export function Onboarding({
                     className="onboarding-key-input"
                     type="password"
                     value={composioKey}
-                    placeholder="ck_\u2026"
+                    placeholder="ck_…"
                     aria-label="Composio API key"
                     autoComplete="off"
                     spellCheck={false}
