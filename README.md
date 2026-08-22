@@ -28,6 +28,20 @@ They remember you. They work in your apps. And **your data never touches an AI c
 
 ---
 
+## ✨ What Blobs do
+
+- **Remember you.** Per-Blob memories plus team-wide facts. Every entry viewable, editable, deletable.
+- **Do stuff in your apps.** Gmail, Calendar, Slack, Notion, Spotify. 942 apps in the catalog, through your own Composio account.
+- **Work while you're away.** Routines every N minutes, daily, weekly, or once. Desktop notification when done.
+- **Team up.** Up to 6 Blobs per group chat. @mention one, or ask the room and let them sort it out.
+- **Make more Blobs.** A Blob can spawn, edit, message and retire other Blobs.
+- **Read your files.** PDFs, screenshots, photos. Text extraction and OCR run on your machine, in Rust, never uploaded.
+- **Search and read the web.** DuckDuckGo Lite, falling back to Bing. No setup.
+- **Run local commands.** Allowlisted programs only, argv never a shell string, sandboxed to that Blob's folder.
+- **Learn skills and MCP servers.** Drop a folder in `~/.blobbies/skills/`, or connect loopback MCP servers for more tools.
+
+---
+
 ## 🚨 The mistake everyone is making
 
 Everyone is plugging Gmail, Drive and Slack into AI agents. Nobody asks the one question that matters:
@@ -80,9 +94,16 @@ Everyone else offers a **promise**: a policy page, a retention toggle, a "we don
 
 ---
 
-## 🧠 Pick the right brain
+## 💸 What it costs, and which brain to use
 
-Biggest myth going: you need the smartest model on earth to read your email. You don't. Sorting an inbox is not a maths olympiad.
+| | Monthly |
+| --- | --- |
+| **Blobbies + local model** | **$0.** Forever. |
+| **Blobbies + Tinfoil** | Roughly **$10 to $20**, on your own key |
+| Grok Bot (cheapest) | $120/seat Premium Teams |
+| Grok Bot (solo) | $200 Cursor Ultra, or $300 SuperGrok Heavy |
+
+Tinfoil is that cheap because of the next bit. Biggest myth going: you need the smartest model on earth to read your email. You don't. Sorting an inbox is not a maths olympiad.
 
 | The job | The brain |
 | --- | --- |
@@ -94,51 +115,7 @@ Tinfoil serves **DeepSeek V4 Flash**, **Kimi K3**, **GLM 5.2**, **gpt-oss-120b**
 
 Point a frontier model at labelling emails and you are renting a Ferrari for the school run. Works fine. Still daft. Your credit burns in a week.
 
----
-
-## 💸 What it actually costs
-
-| | Monthly |
-| --- | --- |
-| **Blobbies + local model** | **$0.** Forever. |
-| **Blobbies + Tinfoil** | Roughly **$10 to $20**, on your own key |
-| Grok Bot (cheapest) | $120/seat Premium Teams |
-| Grok Bot (solo) | $200 Cursor Ultra, or $300 SuperGrok Heavy |
-
 Free and private are not supposed to be a trade. Here they are the same choice.
-
----
-
-## ✨ What Blobs do
-
-- **Remember you.** Per-Blob memories plus team-wide facts. Every entry viewable, editable, deletable.
-- **Do stuff in your apps.** Gmail, Calendar, Slack, Notion, Spotify. 942 apps in the catalog, through your own Composio account.
-- **Work while you're away.** Routines every N minutes, daily, weekly, or once. Desktop notification when done.
-- **Team up.** Up to 6 Blobs per group chat. @mention one, or ask the room and let them sort it out.
-- **Make more Blobs.** A Blob can spawn, edit, message and retire other Blobs.
-- **Read your files.** PDFs, screenshots, photos. Text extraction and OCR run on your machine, in Rust, never uploaded.
-- **Search and read the web.** DuckDuckGo Lite, falling back to Bing. No setup.
-- **Run local commands.** Allowlisted programs only, argv never a shell string, sandboxed to that Blob's folder.
-- **Learn skills and MCP servers.** Drop a folder in `~/.blobbies/skills/`, or connect loopback MCP servers for more tools.
-
----
-
-## 📍 Where your data goes
-
-| Data | Where it goes |
-| --- | --- |
-| Chats, memories, Blobs, files | `~/.blobbies` on your disk. Nothing else. |
-| API keys | OS keychain, never a plain file |
-| Prompts, local model | Nowhere. Your machine. |
-| Prompts, Tinfoil | Encrypted to an attested enclave, using your key |
-| Plugin actions | Composio's cloud, on your own account. See below. |
-| Web search | DuckDuckGo Lite, then Bing if blocked |
-| Update checks | Version → GitHub Releases, minisign-signed |
-| Telemetry, analytics, crash reports | **None.** Nothing to opt out of. |
-
-**One honest caveat.** Plugin calls route through Composio's cloud, on your own account. That is a **transit** hop, not a model host: the email body lands on your disk and is read by your local model or your enclave, never by an AI provider.
-
-Want zero third parties? Skip plugins. Files, web search and local commands still work.
 
 ---
 
@@ -162,6 +139,25 @@ Facts from [x.ai/bot](https://x.ai/bot) and xAI's docs, checked 22 Aug 2026. It'
 **Fair is fair.** Grok Bots have a cloud computer, so they keep working with your laptop shut. Blobbies runs on your machine, so routines fire while it is on.
 
 That is a starting point, not a wall. Cloud runners are on the roadmap, and scheduling is the easy half to add later. The hard half is the one built first: no server of ours holds your data.
+
+---
+
+## 📍 Where your data goes
+
+| Data | Where it goes |
+| --- | --- |
+| Chats, memories, Blobs, files | `~/.blobbies` on your disk. Nothing else. |
+| API keys | OS keychain, never a plain file |
+| Prompts, local model | Nowhere. Your machine. |
+| Prompts, Tinfoil | Encrypted to an attested enclave, using your key |
+| Plugin actions | Composio's cloud, on your own account. See below. |
+| Web search | DuckDuckGo Lite, then Bing if blocked |
+| Update checks | Version → GitHub Releases, minisign-signed |
+| Telemetry, analytics, crash reports | **None.** Nothing to opt out of. |
+
+**One honest caveat.** Plugin calls route through Composio's cloud, on your own account. That is a **transit** hop, not a model host: the email body lands on your disk and is read by your local model or your enclave, never by an AI provider.
+
+Want zero third parties? Skip plugins. Files, web search and local commands still work.
 
 ---
 
