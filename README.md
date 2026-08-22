@@ -105,13 +105,13 @@ Everyone else offers a **promise**: a policy page, a retention toggle, a "we don
 
 Tinfoil is that cheap because of the next bit. Biggest myth going: you need the smartest model on earth to read your email. You don't. Sorting an inbox is not a maths olympiad.
 
-| The job | The brain |
+| The job | How much brain it needs |
 | --- | --- |
-| Email, calendar, Slack, notes | A local model, or a small Tinfoil one |
-| Research, long docs, proper writing | Mid-size Tinfoil model |
-| Coding agent running all night | Go big. That is not this app |
+| Email, calendar, Slack, notes | Small. A few billion parameters does it |
+| Research, long docs, proper writing | Mid-size |
+| Coding agent running all night | Big — and that is not this app |
 
-Tinfoil serves **DeepSeek V4 Flash**, **Kimi K3**, **GLM 5.2**, **gpt-oss-120b**. Any of them handle "check my calendar, flag anything urgent, draft a reply" without breaking a sweat.
+**Where that brain runs is a separate question.** Small and mid-size both run locally *or* on Tinfoil; pick on privacy, hardware and whether you need it offline, not on the task. Tinfoil serves **DeepSeek V4 Flash**, **Kimi K3**, **GLM 5.2**, **gpt-oss-120b** — any of them handle "check my calendar, flag anything urgent, draft a reply" without breaking a sweat, and so does a small model on your own machine.
 
 Point a frontier model at labelling emails and you are renting a Ferrari for the school run. Works fine. Still daft. Your credit burns in a week.
 
