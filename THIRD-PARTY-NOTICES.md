@@ -34,8 +34,8 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | @freedomofpress/crypto-browser | 0.1.7 | Apache-2.0 — Giulio B. and Sacha Servan-Schreiber | https://github.com/freedomofpress/crypto-browser |
 | @freedomofpress/sigstore-browser | 0.1.14 | MIT — Giulio B | https://github.com/freedomofpress/sigstore-browser |
 | @freedomofpress/tuf-browser | 0.1.11 | MIT — Giulio B | https://github.com/freedomofpress/tuf-browser |
-| @kenkaiiii/gg-agent | 5.44.0 | MIT | git+https://github.com/kenkaiiii/gg-framework.git |
-| @kenkaiiii/gg-ai | 5.44.0 | MIT | git+https://github.com/kenkaiiii/gg-framework.git |
+| @kenkaiiii/gg-agent | 5.49.3 | MIT | git+https://github.com/kenkaiiii/gg-framework.git |
+| @kenkaiiii/gg-ai | 5.49.3 | MIT | git+https://github.com/kenkaiiii/gg-framework.git |
 | @napi-rs/canvas | 1.0.6 | MIT | git+https://github.com/Brooooooklyn/canvas.git |
 | @noble/ciphers | 2.3.0 | MIT — Paul Miller (https://paulmillr.com) | git+https://github.com/paulmillr/noble-ciphers.git |
 | @noble/curves | 2.3.0 | MIT — Paul Miller (https://paulmillr.com) | git+https://github.com/paulmillr/noble-curves.git |
@@ -92,7 +92,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | json-schema | 0.4.0 | (AFL-2.1 OR BSD-3-Clause) — Kris Zyp | http://github.com/kriszyp/json-schema |
 | json-schema-to-ts | 3.1.1 | MIT — Thomas Aribart | git+https://github.com/ThomasAribart/json-schema-to-ts.git |
 | longest-streak | 3.1.0 | MIT — Titus Wormer <tituswormer@gmail.com> (https://wooorm.com) | wooorm/longest-streak |
-| lucide-react | 1.31.0 | ISC — Eric Fennis | https://github.com/lucide-icons/lucide.git |
+| lucide-react | 1.33.0 | ISC — Eric Fennis | https://github.com/lucide-icons/lucide.git |
 | markdown-table | 3.0.4 | MIT — Titus Wormer <tituswormer@gmail.com> (https://wooorm.com) | wooorm/markdown-table |
 | mdast-util-find-and-replace | 3.0.2 | MIT — Titus Wormer <tituswormer@gmail.com> (https://wooorm.com) | syntax-tree/mdast-util-find-and-replace |
 | mdast-util-from-markdown | 2.0.3 | MIT — Titus Wormer <tituswormer@gmail.com> (https://wooorm.com) | syntax-tree/mdast-util-from-markdown |
