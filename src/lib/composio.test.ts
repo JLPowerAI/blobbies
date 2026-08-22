@@ -12,10 +12,14 @@ import {
  * the network. The shapes below are real captures from
  * connect.composio.dev, trimmed — inventing them would test a fiction.
  */
-const reply = vi.hoisted(() => ({ text: "" }));
+const reply = vi.hoisted(() => ({ text: "", asked: [] as string[] }));
 vi.mock("@/lib/composio-mcp", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/composio-mcp")>()),
-  callComposioTool: async () => reply.text,
+  callComposioTool: async (_name: string, args: Record<string, unknown>) => {
+    const toolkits = (args.toolkits ?? []) as { name: string }[];
+    reply.asked = toolkits.map((entry) => entry.name);
+    return reply.text;
+  },
 }));
 
 describe("composioAccounts", () => {
@@ -24,11 +28,28 @@ describe("composioAccounts", () => {
     setComposioToolkits([]);
   });
 
-  it("asks for nothing when the user has added no apps", async () => {
-    // Composio's listing is per-toolkit and takes no wildcard: asking about
-    // all 942 catalog entries to learn the user has none would be absurd.
+  it("asks about the whole catalog, not just the apps added in this app", async () => {
+    // The bug this covers: the ask-list came from settings.plugins, so an app
+    // connected on Composio's own site — or by a Blob calling
+    // MANAGE_CONNECTIONS itself — was never asked about. Observed live with
+    // four accounts active and two named: the Plugins tab showed two, the
+    // prompt named two, and a Blob denied having Reddit while holding a
+    // working Reddit tool.
     reply.text = "{}";
-    await expect(composioAccounts()).resolves.toEqual([]);
+    setComposioToolkits([]);
+    await composioAccounts();
+    expect(reply.asked.length).toBeGreaterThan(100);
+    expect(reply.asked).toContain("reddit");
+    expect(reply.asked).toContain("gmail");
+  });
+
+  it("still asks about an app that settings knows and the catalog does not", async () => {
+    // A slug can outlive its catalog entry, and dropping it would make a live
+    // connection vanish from the tab that manages it.
+    reply.text = "{}";
+    setComposioToolkits(["some-private-toolkit"]);
+    await composioAccounts();
+    expect(reply.asked).toContain("some-private-toolkit");
   });
 
   it("reads accounts, and the identity that used to cost a call each", async () => {

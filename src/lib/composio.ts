@@ -115,23 +115,46 @@ export interface ComposioAccount {
 }
 
 /**
- * Apps to ask about, set by the app shell from saved settings.
+ * Apps to ask about, seeded from saved settings.
  *
- * Composio's connection listing is per-toolkit — there is no "list
- * everything" call, and a wildcard is taken as a literal toolkit name (tested:
- * it starts connecting an app called `*`). Asking about all 942 in the
- * catalog would be absurd, so this holds the ones the user has actually
- * added.
+ * Composio's listing takes an explicit toolkit list — there is no "list
+ * everything" call, and a wildcard is read as a literal toolkit name (tested:
+ * it starts connecting an app called `*`). So the question is which names to
+ * put in the request.
+ *
+ * Settings alone was the wrong answer. `settings.plugins` records what was
+ * added *in this app*, but a connection can also be made on Composio's own
+ * site, or through a Blob calling COMPOSIO_MANAGE_CONNECTIONS itself. Those
+ * were invisible: the Plugins tab showed two apps while four were live, and
+ * the system prompt named the same two, so a Blob told the user it had no
+ * Reddit access while holding a working Reddit tool.
+ *
+ * The whole catalog is asked instead. Measured against the live endpoint:
+ * 942 toolkits in one call, 1.2s, a 72KB reply that never reaches a model —
+ * only the handful of active names do. That is one request per refresh, not
+ * per app, so it costs about what asking for two used to.
  */
 let watchedToolkits: string[] = [];
 
-/** Tell this module which apps the user has, from persisted settings. */
+/**
+ * Seed the ask-list with the user's own apps, so a first refresh names them
+ * even if the catalog has not loaded yet.
+ */
 export function setComposioToolkits(toolkits: readonly string[]): void {
   const next = [...new Set(toolkits)].sort();
   if (next.join(",") !== watchedToolkits.join(",")) {
     watchedToolkits = next;
     forgetComposioAccounts();
   }
+}
+
+/**
+ * Every toolkit worth asking about: the catalog, plus anything settings knows
+ * that the catalog does not.
+ */
+async function toolkitsToQuery(): Promise<string[]> {
+  const catalog = await loadPlugins();
+  return [...new Set([...catalog.map((plugin) => plugin.id), ...watchedToolkits])];
 }
 
 /**
@@ -191,12 +214,13 @@ function identityOf(info: Record<string, unknown> | undefined): string {
  * Includes broken ones on purpose — callers decide what an inactive one means.
  */
 export async function composioAccounts(): Promise<ComposioAccount[]> {
-  if (watchedToolkits.length === 0) {
-    return [];
-  }
   accountsPromise ??= (async () => {
+    const toolkits = await toolkitsToQuery();
+    if (toolkits.length === 0) {
+      return [];
+    }
     const raw = await callComposioTool("COMPOSIO_MANAGE_CONNECTIONS", {
-      toolkits: watchedToolkits.map((name) => ({ name, action: "list" })),
+      toolkits: toolkits.map((name) => ({ name, action: "list" })),
     });
     const parsed = JSON.parse(raw) as ConnectionsPayload;
     const out: ComposioAccount[] = [];
