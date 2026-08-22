@@ -1299,9 +1299,10 @@ export function makeComposioTools(): AgentTool[] {
     name: "app_find_tool",
     description:
       "Start here for anything in the user's own apps — their email, calendar, " +
-      "files, chat, CRM. Describe the task; you get back exact tool names and " +
-      "a plan. You cannot know these names in advance, so never guess one: " +
-      "look it up, check it with app_tool_schema, then run it.",
+      "files, chat, CRM. Runs over Composio's hosted MCP endpoint, so this is " +
+      "your MCP access to those apps. Describe the task; you get back exact " +
+      "tool names and a plan. You cannot know these names in advance, so never " +
+      "guess one: look it up, check it with app_tool_schema, then run it.",
     parameters: searchParams,
     execute: async (args) => wrapUntrusted(await composioSearch(args.query), "composio"),
   };

@@ -1568,6 +1568,9 @@ export function App() {
             // the cached prompt prefix stays byte-identical between turns.
             skills: skills.map(skillLine),
             connectedApps,
+            // The tools can exist with nothing connected yet; the prompt says
+            // so rather than reading as "no apps at all".
+            appsReachable: composioReady,
             ...(group === undefined
               ? {}
               : {

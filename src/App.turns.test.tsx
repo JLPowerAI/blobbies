@@ -845,6 +845,38 @@ describe("turn wiring", () => {
     expect(calls[0]?.hasConnectedApps).toBe(true);
   });
 
+  it("names MCP in the prompt, so a Blob asked about it does not deny having it", async () => {
+    const user = userEvent.setup();
+    script = [() => "Done."];
+    // Observed: a Blob read its Discord servers over MCP in one message and
+    // answered "I don't actually run MCPs" in the next. The word appeared
+    // nowhere in its prompt or tool descriptions, so it took the question to
+    // be about the user-added MCP servers section, which was empty.
+    composio.signedIn = true;
+    composio.apps = ["Discord"];
+    mountWithModel({ plugins: [] });
+    await createFirstBlob(user, "Ken");
+    await say(user, "what mcps do you have?");
+
+    const prompt = calls[0]?.messages?.[0]?.content ?? "";
+    expect(prompt).toContain("MCP");
+    expect(prompt).toContain("Discord");
+  });
+
+  it("still names the app tools when an account is reachable but nothing is connected", async () => {
+    const user = userEvent.setup();
+    script = [() => "Done."];
+    // The section used to render only when something was connected, so this
+    // user's prompt said nothing about apps at all while holding the tools.
+    composio.signedIn = true;
+    composio.apps = [];
+    mountWithModel({ plugins: [] });
+    await createFirstBlob(user, "Ken");
+    await say(user, "what can you reach?");
+
+    expect(calls[0]?.messages?.[0]?.content ?? "").toContain("Connected apps");
+  });
+
   it("withholds the app tools when Composio cannot be reached", async () => {
     const user = userEvent.setup();
     script = [() => "Done."];

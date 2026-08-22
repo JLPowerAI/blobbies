@@ -68,6 +68,12 @@ export interface PromptExtensions {
    */
   connectedApps?: string[];
   /**
+   * Whether the app tools exist this turn, which is not the same as having
+   * apps listed above: an account can be reachable with nothing connected
+   * yet, and `app_find_tool` searches the whole catalogue either way.
+   */
+  appsReachable?: boolean;
+  /**
    * Set when this turn happens in a group chat: the group's name and the
    * names of the other Blobs in it (this Blob excluded).
    */
@@ -213,15 +219,24 @@ export function blobSystemPrompt(
     "Connected servers",
     (extensions.mcpServers ?? []).map((entry) => `- ${entry}`).join("\n"),
   );
-  // Naming the apps without promising tools. Tools for these arrive with the
-  // execution work; until then the wording below has to do the whole job.
   const connectedApps = extensions.connectedApps ?? [];
+  // Rendered whenever the tools exist, not only when something is connected:
+  // a signed-in user with nothing added yet still has the whole catalogue one
+  // search away, and a silent section had the Blob deny having apps at all.
+  const appsReachable = extensions.appsReachable === true || connectedApps.length > 0;
   const apps = section(
     "Connected apps",
-    connectedApps.length === 0
+    !appsReachable
       ? ""
       : [
-          ...connectedApps.map((entry) => `- ${entry}`),
+          ...(connectedApps.length === 0
+            ? ["None connected yet, but the catalogue is searchable."]
+            : connectedApps.map((entry) => `- ${entry}`)),
+          // Names the mechanism, because a Blob asked "do you have MCP?"
+          // otherwise answers no while using it: the word appears nowhere
+          // else in its prompt or tool descriptions, so it reads the question
+          // as being about the user-added MCP servers section instead.
+          "These are reached over Composio's hosted MCP endpoint, through the app_* tools below.",
           // One line, because the tool descriptions carry the rest. What only
           // the prompt can say is that these apps exist at all and which tool
           // is the way in: without it a model asked about email reaches for
