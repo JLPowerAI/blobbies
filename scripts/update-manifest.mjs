@@ -36,7 +36,6 @@ const platforms = {};
 for (const [key, file] of Object.entries(PLATFORMS)) {
   const sigFile = `${file}.sig`;
   if (!files.has(file) || !files.has(sigFile)) {
-    // biome-ignore lint/suspicious/noConsole: a release gate reports why it stopped.
     console.error(`update-manifest: missing ${file} or ${sigFile} in ${distDir}`);
     process.exit(1);
   }

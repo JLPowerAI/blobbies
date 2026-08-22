@@ -2812,6 +2812,16 @@ a.modal-button {
   padding: 8px 20px 14px;
 }
 
+/* Which side of the pane a row hugs. Declared before the adjacency rule below
+   so specificity climbs down the file rather than up it. */
+.message-row-agent {
+  align-items: flex-start;
+}
+
+.message-row-user {
+  align-items: flex-end;
+}
+
 /* Extra air where the speaker changes. Consecutive Blob bubbles stay tight —
    they read as one side continuing — but a user message against a Blob's is a
    turn boundary, and at the same 7px the two sides ran together. Applied to
@@ -2866,14 +2876,6 @@ a.modal-button {
 
 .message-row-user.message-fresh {
   transform-origin: 85% 100%;
-}
-
-.message-row-agent {
-  align-items: flex-start;
-}
-
-.message-row-user {
-  align-items: flex-end;
 }
 
 /* Overlay anchor for the floating reaction picker. */
@@ -3687,8 +3689,11 @@ a.modal-button {
   flex-basis: 100%;
 }
 
-/* First control of the right-hand cluster takes the pushing margin. */
-.composer-expanded .composer-mic {
+/* First control of the right-hand cluster takes the pushing margin. `:where`
+   keeps this at one class' weight, matching the plain `.composer-mic` rules
+   further down rather than out-specifying them from above; nothing else sets
+   this margin, so the cascade result is unchanged. */
+:where(.composer-expanded) .composer-mic {
   margin-inline-start: auto;
 }
 
@@ -3864,6 +3869,15 @@ a.modal-button {
   gap: 1px;
 }
 
+/* Declared before the two-class rule below, so specificity climbs down the
+   file: the shared name style first, the min-width escape hatch after. */
+.attachment-card-name {
+  overflow: hidden;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Both halves need the min-width:0 escape hatch, or a long filename refuses to
    ellipsize and pushes the card past its max-width instead. */
 .composer-file-text .attachment-card-name,
@@ -3927,13 +3941,6 @@ a.modal-button {
   min-width: 0;
   flex-direction: column;
   gap: 1px;
-}
-
-.attachment-card-name {
-  overflow: hidden;
-  font-size: 13.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .attachment-card-size {
@@ -4901,7 +4908,10 @@ a.modal-button {
   padding-block: 4px;
 }
 
-.onboarding-body > .onboarding-step {
+/* `:where` on the parent keeps this at one class' weight, so the plain
+   `.onboarding-step` rules further down are not out-specified from above.
+   The `-blobs` override below still wins on its own extra class. */
+:where(.onboarding-body) > .onboarding-step {
   margin-block: auto;
 }
 
