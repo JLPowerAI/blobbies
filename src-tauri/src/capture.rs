@@ -29,12 +29,20 @@
 //! page and read it again with that in mind.
 
 use crate::error::{Error, Result};
-use crate::home::{home_root, write_bytes};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use image::codecs::png::PngEncoder;
-use image::{ImageEncoder, RgbaImage, imageops::FilterType};
 use serde::Serialize;
+
+// Everything below is the capture implementation itself, absent on platforms
+// this is not built for (see the module docs and Cargo.toml).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use crate::home::{home_root, write_bytes};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use base64::Engine as _;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use base64::engine::general_purpose::STANDARD as BASE64;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use image::codecs::png::PngEncoder;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use image::{ImageEncoder, RgbaImage, imageops::FilterType};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use xcap::{Monitor, Window};
 
@@ -43,10 +51,12 @@ use xcap::{Monitor, Window};
 /// Retina displays hand back 3–6k-pixel frames, which are megabytes of PNG and
 /// far more detail than OCR or a vision model needs. 1600 keeps window text
 /// legible while putting a full-screen capture in the low hundreds of KB.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const MAX_EDGE: u32 = 1600;
 
 /// Ceiling for one encoded capture. Well above a downscaled screenshot, so it
 /// only ever catches something pathological before it reaches the home budget.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const MAX_CAPTURE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// A window a Blob could capture, as offered to the model for discovery.
@@ -110,10 +120,6 @@ pub(crate) fn capture_list_windows() -> Result<Vec<WindowInfo>> {
 /// escape the folder.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[tauri::command]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "tauri commands must take AppHandle by value"
-)]
 pub(crate) fn capture_take(
     _app: tauri::AppHandle,
     _id: &str,
@@ -195,6 +201,7 @@ fn capture_primary() -> Result<RgbaImage> {
 
 /// Shrink to `MAX_EDGE` on the longest side, preserving aspect. Images already
 /// within the cap are returned untouched rather than re-sampled.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn downscale(image: RgbaImage) -> RgbaImage {
     let longest = image.width().max(image.height());
     if longest <= MAX_EDGE || longest == 0 {
@@ -217,6 +224,7 @@ fn downscale(image: RgbaImage) -> RgbaImage {
     )
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[cfg(test)]
 mod tests {
     use super::*;
