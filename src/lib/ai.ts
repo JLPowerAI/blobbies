@@ -471,6 +471,34 @@ function isCompleteThought(text: string): boolean {
 }
 
 /**
+ * Does this reply promise work rather than report it? — "I'll check the
+ * servers", "Let me start by finding the Discord tools."
+ *
+ * In chat that is fine: the model says it, calls a tool, and if it forgets the
+ * user simply says "go on". A routine has no user. Nobody sees the promise,
+ * nobody prompts again, and the scheduled work silently never happens — which
+ * is indistinguishable, from the outside, from a routine that ran and found
+ * nothing. So a routine turn that ends on one of these gets one more round.
+ *
+ * simplification: a phrase list, not a classifier. It is checked ONLY on a
+ * routine turn that called no tools at all, so the worst a false positive can
+ * do is spend one extra round; the alternative (another model call to judge
+ * intent) costs that much every time and can be wrong too.
+ */
+export function announcesIntent(text: string): boolean {
+  // The tail is what matters: a reply that says "I'll check" and then reports
+  // what it found has already done the work.
+  const tail =
+    text
+      .trim()
+      .split(/\n{2,}/)
+      .pop() ?? "";
+  return /\b(?:i(?:'| a)?m going to|i(?:'ll| will)|let me|let's|i can start|starting)\b/i.test(
+    tail,
+  );
+}
+
+/**
  * One conversational turn for a Blob, run on gg-agent's `agentLoop`: it
  * validates tool args, executes configure_blob, and feeds results back until
  * the model settles on a text reply. Returns the full text of the reply.
@@ -903,8 +931,17 @@ export async function streamBlobTurn(options: {
   let text = result.text;
 
   // The model handed the turn to the user: the question IS the reply, and no
-  // rescue round may run — it would answer on the user's behalf.
-  if (pendingAsk !== null) {
+  // further round may run — it would answer on the user's behalf.
+  //
+  // A function because two paths can end this way: the main loop here, and the
+  // routine follow-through round further down, which also carries the full
+  // tool catalog. A question raised there and not surfaced is worse than one
+  // in chat: the run settles as finished instead of `waiting_input`, so the
+  // user is never notified and the routine's question is lost outright.
+  const handOffAsk = (): string | null => {
+    if (pendingAsk === null) {
+      return null;
+    }
     const ask: PendingAsk = pendingAsk;
     options.onAsk?.(ask);
     // The model often says the question as text right before calling the
@@ -913,6 +950,10 @@ export async function streamBlobTurn(options: {
       options.onSegment(ask.question);
     }
     return ask.question;
+  };
+  const handedOff = handOffAsk();
+  if (handedOff !== null) {
+    return handedOff;
   }
 
   // Two ways a turn ends without a usable answer: the model spends every round
@@ -954,6 +995,50 @@ export async function streamBlobTurn(options: {
       if (isAbortError(error)) {
         throw error;
       }
+    }
+  }
+  // A routine that only announced the work never did it, and there is no user
+  // sitting there to say "go on" — the whole point of a routine is that it
+  // runs unattended. Observed live: a scheduled Discord check replied "Let me
+  // start by finding what Discord tools are available to me." and stopped, and
+  // the same Blob did the work correctly the moment a human asked why.
+  //
+  // Narrow on purpose. Only when the turn called NO tool at all (one that used
+  // tools and then spoke has done its job), only for routines, and only once:
+  // the round below cannot re-enter this branch. A routine whose deliverable
+  // really is text ("write today's standup note") does not match the phrasing,
+  // and if it ever did it would cost one round, not a loop.
+  if (scope === "routine" && gathered.length === 0 && announcesIntent(text)) {
+    conversation = [
+      ...conversation,
+      {
+        role: "user",
+        content:
+          "You described what you were about to do, but you have not done it " +
+          "yet — and this is a scheduled task, so nobody is here to ask you to " +
+          "continue. Carry it out now using your tools, then report what you " +
+          "actually found. If it turns out you cannot, say plainly what " +
+          "stopped you.",
+      },
+    ];
+    try {
+      const carried = await runLoop("web");
+      // This round carries the full catalog, so it can end by asking the user
+      // — and that question has to reach them, or the run settles as finished
+      // while actually waiting on an answer nobody was asked for.
+      const carriedAsk = handOffAsk();
+      if (carriedAsk !== null) {
+        return carriedAsk;
+      }
+      // The announcement is already a bubble on screen (`onSegment` emitted it
+      // live); this return feeds the run summary and the notification, where
+      // what the routine actually did is the useful half.
+      text = carried.latest.trim() === "" ? text : carried.text;
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      // Keep the announcement: it is still the most honest thing on screen.
     }
   }
   // Whitespace-only is empty as far as the user is concerned; returning it

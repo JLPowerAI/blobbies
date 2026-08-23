@@ -1415,3 +1415,117 @@ describe("streamBlobTurn routine scope", () => {
     expect(subagent?.result).toContain("nothing useful");
   });
 });
+
+describe("a routine that only announces the work", () => {
+  it("is sent back to actually do it, and the result is what the user reads", async () => {
+    // Observed live: a scheduled Discord check replied "Let me start by
+    // finding what Discord tools are available to me." and stopped. Nobody is
+    // watching a routine, so a promise nobody chases is the work never
+    // happening — indistinguishable from a check that found nothing.
+    const said: string[] = [];
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      return round === 1
+        ? ndjson(textChunks("I'll check the servers. Let me start by listing them."))
+        : ndjson(textChunks("Checked all three: nothing new since yesterday."));
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "check my servers" }],
+      scope: "routine",
+      memory: { list: () => [], save: () => {} },
+      onSegment: (segment) => said.push(segment),
+      onConfigure: () => {},
+    });
+    expect(round).toBe(2);
+    // The announcement stays on screen — the user saw it — with the real
+    // answer following it rather than replacing it.
+    expect(said[0]).toContain("Let me start by listing them");
+    expect(text).toContain("nothing new since yesterday");
+  });
+
+  it("leaves a routine that reported real findings alone", async () => {
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      return ndjson(textChunks("Three new posts since yesterday, all about pricing."));
+    };
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "check my servers" }],
+      scope: "routine",
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    expect(round).toBe(1);
+  });
+
+  it("surfaces a question the follow-through round asks, instead of losing it", async () => {
+    // The nudge round carries the full tool catalog, so it can end by asking
+    // the user. If that question is not handed off, the run settles as
+    // finished while actually waiting for an answer nobody was asked for —
+    // and a routine's question is the one nobody is watching for.
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      return round === 1
+        ? ndjson(textChunks("I'll check the servers. Let me start by listing them."))
+        : ndjson(
+            toolCallChunks("ask_user", {
+              question: "Which server should I check?",
+              kind: "question",
+            }),
+          );
+    };
+    const asks: { question: string }[] = [];
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "check my servers" }],
+      scope: "routine",
+      memory: { list: () => [], save: () => {} },
+      onAsk: (ask) => asks.push(ask),
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    expect(asks.map((ask) => ask.question)).toEqual(["Which server should I check?"]);
+    // The question is the reply, so the caller parks the run on it.
+    expect(text).toBe("Which server should I check?");
+  });
+
+  it("leaves chat alone — there a user can simply say 'go on'", async () => {
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      return ndjson(textChunks("I'll check the servers. Let me start by listing them."));
+    };
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "check my servers" }],
+      // Pre-classified so the intent router does not fire a request of its own.
+      intent: { action: "none" },
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    expect(round).toBe(1);
+  });
+});
+
+describe("announcesIntent", () => {
+  it("spots a promise of work", async () => {
+    const { announcesIntent } = await import("@/lib/ai");
+    expect(announcesIntent("Let me start by listing them.")).toBe(true);
+    expect(announcesIntent("I'll check the servers now.")).toBe(true);
+    expect(announcesIntent("I'm going to pull the messages.")).toBe(true);
+  });
+
+  it("does not mistake a finished report for one", async () => {
+    const { announcesIntent } = await import("@/lib/ai");
+    expect(announcesIntent("Three new posts, all about pricing.")).toBe(false);
+    expect(announcesIntent("Nothing new since yesterday.")).toBe(false);
+    // Said it, then did it: the last paragraph is the report, so no nudge.
+    expect(announcesIntent("I'll check now.\n\nChecked — all quiet.")).toBe(false);
+  });
+});
