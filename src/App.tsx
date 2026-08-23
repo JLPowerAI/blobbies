@@ -67,12 +67,12 @@ import type { Recap, RecapEntry } from "@/lib/recap";
 import { type ActiveRun, assertTransition, isTerminal, type RunTrigger } from "@/lib/run-state";
 import { describeSchedule, nextFireTime, scheduleBudget } from "@/lib/schedule";
 import { startScheduler } from "@/lib/scheduler";
-import type { Capture } from "@/lib/screenshot";
+import { type Capture, canCapture } from "@/lib/screenshot";
 import type { SearchResult } from "@/lib/search";
 import { listSkills, type Skill, skillLine } from "@/lib/skills";
 import { playChime } from "@/lib/sound";
 import * as store from "@/lib/store";
-import { isTauri, openExternal } from "@/lib/tauri";
+import { openExternal } from "@/lib/tauri";
 import { isTinfoilModel } from "@/lib/tinfoil-model";
 import "./App.css";
 
@@ -1633,8 +1633,8 @@ export function App() {
             appsReachable: composioReady,
             // This host shows captures in the transcript, so the turn's
             // catalog carries take_screenshot and the prompt names it. False
-            // in the browser build, where capture cannot work at all.
-            canScreenshot: isTauri(),
+            // where capture cannot work at all (browser, Linux builds).
+            canScreenshot: canCapture(),
             // What the window can no longer hold, in one paragraph. Changes
             // only on a compaction turn, which rewrites the history below it
             // anyway — so it costs no cache hit that was not already lost.

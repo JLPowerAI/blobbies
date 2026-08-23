@@ -43,6 +43,19 @@ export interface Capture {
   height: number;
 }
 
+/**
+ * Whether this build can capture at all.
+ *
+ * Desktop only, and not Linux: capture there would mean shipping pipewire as a
+ * system requirement for every user (see `src-tauri/Cargo.toml`), so those
+ * builds leave it out and the commands report themselves unsupported. Telling
+ * a model about a tool it cannot call is the misfire the prompt's tool list
+ * exists to avoid, so the same answer gates both the catalog and the prompt.
+ */
+export function canCapture(): boolean {
+  return isTauri() && !navigator.userAgent.includes("Linux");
+}
+
 /** How much OCR text one capture may return to a text-only model. */
 const OCR_LIMIT = 6_000;
 
@@ -115,8 +128,8 @@ export function makeScreenshotTool(options: {
     // running at once would race on both the name and the home size budget.
     executionMode: "sequential",
     execute: async (args) => {
-      if (!isTauri()) {
-        return "Screenshots only work in the desktop app.";
+      if (!canCapture()) {
+        return "Screenshots aren't available in this build — tell the user what you were about to look at and ask them to describe it.";
       }
       const { invoke } = await import("@tauri-apps/api/core");
       let target: WindowInfo | undefined;

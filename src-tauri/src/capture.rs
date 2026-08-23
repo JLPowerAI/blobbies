@@ -35,6 +35,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use image::codecs::png::PngEncoder;
 use image::{ImageEncoder, RgbaImage, imageops::FilterType};
 use serde::Serialize;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use xcap::{Monitor, Window};
 
 /// Longest edge of a saved capture, in pixels.
@@ -77,6 +78,13 @@ pub(crate) struct Capture {
 /// This is also the app's honest permission probe: on macOS without Screen
 /// Recording consent the window list comes back with empty titles rather than
 /// failing, which the caller reports as "grant access" instead of "no windows".
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[tauri::command]
+pub(crate) fn capture_list_windows() -> Result<Vec<WindowInfo>> {
+    Err(Error::CaptureUnsupported)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[tauri::command]
 pub(crate) fn capture_list_windows() -> Result<Vec<WindowInfo>> {
     let windows = Window::all().map_err(|error| Error::Capture(error.to_string()))?;
@@ -100,6 +108,22 @@ pub(crate) fn capture_list_windows() -> Result<Vec<WindowInfo>> {
 /// `name` is the file to write inside the Blob's home; it goes through the
 /// same path sandbox as every other write, so a model-chosen name cannot
 /// escape the folder.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri commands must take AppHandle by value"
+)]
+pub(crate) fn capture_take(
+    _app: tauri::AppHandle,
+    _id: &str,
+    _name: &str,
+    _window_id: Option<u32>,
+) -> Result<Capture> {
+    Err(Error::CaptureUnsupported)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
@@ -144,6 +168,7 @@ pub(crate) fn capture_take(
     })
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn capture_window(wanted: u32) -> Result<RgbaImage> {
     let windows = Window::all().map_err(|error| Error::Capture(error.to_string()))?;
     let found = windows
@@ -155,6 +180,7 @@ fn capture_window(wanted: u32) -> Result<RgbaImage> {
         .map_err(|error| Error::Capture(error.to_string()))
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn capture_primary() -> Result<RgbaImage> {
     let monitors = Monitor::all().map_err(|error| Error::Capture(error.to_string()))?;
     let primary = monitors

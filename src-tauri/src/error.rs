@@ -47,6 +47,11 @@ pub enum Error {
     #[error("that window is no longer open")]
     WindowGone,
 
+    /// Built without screen capture — Linux, where it would drag pipewire in as
+    /// a system requirement for every user (see capture.rs and Cargo.toml).
+    #[error("taking screenshots isn't supported on this platform")]
+    CaptureUnsupported,
+
     /// Capture failed. On macOS that is usually missing Screen Recording
     /// consent, which only the user can grant — so the text points them there
     /// instead of reading as a bug in the app.

@@ -31,7 +31,7 @@ import {
   registerNativeOllamaProvider,
 } from "@/lib/ollama-native";
 import { configFieldEmpty } from "@/lib/prompt";
-import { type Capture, makeScreenshotTool } from "@/lib/screenshot";
+import { type Capture, canCapture, makeScreenshotTool } from "@/lib/screenshot";
 import { isTinfoilModel, registerTinfoilProvider, tinfoilStructuredCall } from "@/lib/tinfoil";
 
 // From here on, "local" streams over native /api/chat so every turn carries
@@ -752,10 +752,10 @@ export async function streamBlobTurn(options: {
       // Same sandbox as the fs tools: `run_command`'s file readers are
       // contained to this Blob's home, and refused on a turn without one.
       makeShellTool(options.home?.id),
-      // Offered only when the host wants the pictures: with nowhere to show a
-      // capture, taking one would be exactly the invisible screenshot the
-      // tool is built to rule out.
-      ...(options.onCapture === undefined
+      // Offered only when the host wants the pictures AND this build can take
+      // them: with nowhere to show a capture, taking one would be exactly the
+      // invisible screenshot the tool is built to rule out.
+      ...(options.onCapture === undefined || !canCapture()
         ? []
         : [
             makeScreenshotTool({

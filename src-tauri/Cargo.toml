@@ -72,8 +72,16 @@ image = { version = "0.25.10", default-features = false, features = [
     "gif",
     "bmp",
 ] }
-xcap = "0.9.8"
 base64 = "0.22.1"
+
+# Screen capture (src/capture.rs) — macOS and Windows only, deliberately not
+# Linux. There, xcap captures Wayland through pipewire, a hard (non-optional)
+# dependency that needs libpipewire-0.3 at build time and on every user's
+# machine. Taking that on would add a system requirement to the .deb and
+# AppImage for a feature nobody installs this on Linux for; the tool reports
+# itself unavailable there instead.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+xcap = "0.9.8"
 
 [lints.rust]
 # Deny, not forbid: notifications.rs needs one audited `unsafe` (deref of the
