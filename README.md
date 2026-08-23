@@ -100,9 +100,9 @@ Everyone else offers a **promise**: a policy page, a retention toggle, a "we don
 | --- | --- |
 | **Blobbies + local model** | **$0.** Forever. |
 | **Blobbies + Tinfoil** | Roughly **$10 to $20**, on your own key |
-| Grok Bot (cheapest) | $40/seat Standard Teams |
-| Grok Bot (solo, entry) | $60 Cursor Pro+, or $100 SuperGrok Plus |
-| Grok Bot (solo, top tier) | $200 Cursor Ultra, or $300 SuperGrok Heavy |
+| Grok Bot (cheapest) | $60 Cursor Pro+, or $100 SuperGrok Plus |
+| Grok Bot (top tier) | $200 Cursor Ultra, or $300 SuperGrok Heavy |
+| Grok Bot (teams) | $40/seat Standard, on a team plan |
 
 Tinfoil is that cheap because of the next bit. Biggest myth going: you need the smartest model on earth to read your email. You don't. Sorting an inbox is not a maths olympiad.
 
@@ -127,7 +127,7 @@ xAI's take on AI teammates, in beta since 11 Aug 2026 and genuinely capable. Als
 |  | 🫧 **Blobbies** | **Grok Bot** |
 | --- | --- | --- |
 | **Source code** | Open, AGPL-3.0. Verify these claims yourself | Closed |
-| **Price** | Free, or your own Tinfoil key | $40–$300/mo, plus metered usage |
+| **Price** | Free, or your own Tinfoil key | $60–$300/mo solo, plus metered usage |
 | **Where your data sits** | `~/.blobbies` on your disk | xAI's cloud. Required, not a setting |
 | **Private by default** | Yes, architecturally: no server to send it to | No. Privacy Mode (Legacy) blocks the product |
 | **The AI** | Local, or open models in attested enclaves | Grok only, no model picker |
