@@ -100,8 +100,8 @@ Everyone else offers a **promise**: a policy page, a retention toggle, a "we don
 | --- | --- |
 | **Blobbies + local model** | **$0.** Forever. |
 | **Blobbies + Tinfoil** | Roughly **$10 to $20**, on your own key |
-| Grok Bot (cheapest) | $120/seat Premium Teams |
-| Grok Bot (solo) | $200 Cursor Ultra, or $300 SuperGrok Heavy |
+| Grok Bot (cheapest) | $40/seat Standard Teams |
+| Grok Bot (solo) | $60 Cursor Pro+, or $100 SuperGrok Plus |
 
 Tinfoil is that cheap because of the next bit. Biggest myth going: you need the smartest model on earth to read your email. You don't. Sorting an inbox is not a maths olympiad.
 
@@ -126,7 +126,7 @@ xAI's take on AI teammates, in beta since 11 Aug 2026 and genuinely capable. Als
 |  | 🫧 **Blobbies** | **Grok Bot** |
 | --- | --- | --- |
 | **Source code** | Open, AGPL-3.0. Verify these claims yourself | Closed |
-| **Price** | Free, or your own Tinfoil key | $120–$300/mo, plus metered usage |
+| **Price** | Free, or your own Tinfoil key | $40–$100/mo, plus metered usage |
 | **Where your data sits** | `~/.blobbies` on your disk | xAI's cloud. Required, not a setting |
 | **Private by default** | Yes, architecturally: no server to send it to | No. Privacy Mode (Legacy) blocks the product |
 | **The AI** | Local, or open models in attested enclaves | Grok only, no model picker |
@@ -134,7 +134,7 @@ xAI's take on AI teammates, in beta since 11 Aug 2026 and genuinely capable. Als
 | **Always on** | Your machine. Cloud runners on the roadmap | Yes, their cloud VM |
 | **Platforms** | macOS, Windows, Linux | macOS, Windows, iOS. No Linux |
 
-Facts from [x.ai/bot](https://x.ai/bot) and xAI's docs, checked 22 Aug 2026. It's a beta; expect change.
+Facts from [x.ai/bot](https://x.ai/bot) and xAI's docs, checked 24 Aug 2026. It's a beta; expect change.
 
 **Fair is fair.** Grok Bots have a cloud computer, so they keep working with your laptop shut. Blobbies runs on your machine, so routines fire while it is on.
 
