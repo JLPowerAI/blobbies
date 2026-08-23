@@ -404,23 +404,14 @@ function MessageRow({
           {author.name}
         </span>
       )}
-      {message.kind !== "text" || (message.attachments ?? []).length === 0 ? null : (
-        <span className="message-attachments">
-          {(message.attachments ?? []).map((attachment) => (
-            // Keyed on the name the user picked, which does not change when the
-            // saved name settles from `photo.png` to `photo.png.txt` — keying on
-            // the saved name would remount the <img> and flash the picture.
-            <AttachmentView
-              key={attachment.label ?? attachment.name}
-              attachment={attachment}
-              reading={reading}
-            />
-          ))}
-        </span>
-      )}
       {/* The bubble and its hover bar share one line: the line hugs the
           bubble, so the bar can sit beside it, vertically centered — right of
-          agent bubbles, left of user ones — instead of above it. */}
+          agent bubbles, left of user ones — instead of above it.
+
+          Attachments live on this line too, not above it: the bar centres on
+          whatever the line contains, so a message that is only a picture (a
+          screenshot a Blob took) gets the bar beside the picture rather than
+          floating beside the empty space where a bubble would have been. */}
       <div className="message-line">
         <div className="message-actions" role="toolbar" aria-label="Message actions">
           <button type="button" className="icon-button message-action" aria-label="More options">
@@ -447,12 +438,28 @@ function MessageRow({
             <Smile size={15} strokeWidth={1.8} aria-hidden="true" />
           </button>
         </div>
-        {/* An attachment-only message has no words, so it gets no empty bubble. */}
-        {message.kind !== "text" ? (
-          <FileBubble message={message} />
-        ) : message.segments.some((segment) => segment.text !== "") ? (
-          <TextBubble message={message} palette={palette} />
-        ) : null}
+        <div className="message-stack">
+          {message.kind !== "text" || (message.attachments ?? []).length === 0 ? null : (
+            <span className="message-attachments">
+              {(message.attachments ?? []).map((attachment) => (
+                // Keyed on the name the user picked, which does not change when
+                // the saved name settles from `photo.png` to `photo.png.txt` —
+                // keying on the saved name would remount the <img> and flash it.
+                <AttachmentView
+                  key={attachment.label ?? attachment.name}
+                  attachment={attachment}
+                  reading={reading}
+                />
+              ))}
+            </span>
+          )}
+          {/* An attachment-only message has no words, so it gets no empty bubble. */}
+          {message.kind !== "text" ? (
+            <FileBubble message={message} />
+          ) : message.segments.some((segment) => segment.text !== "") ? (
+            <TextBubble message={message} palette={palette} />
+          ) : null}
+        </div>
       </div>
       {reaction === undefined ? null : (
         <span className="bubble-reaction" role="img" aria-label={`Reacted with ${reaction}`}>

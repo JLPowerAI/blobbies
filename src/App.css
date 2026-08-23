@@ -3902,11 +3902,26 @@ a.modal-button {
   background: #5c5c5c;
 }
 
-/* Sent attachments sit outside the bubble: an image needs no frame, and a
-   card carries its own. Both align to the message's own side. */
+/* Attachments sit outside the bubble — an image needs no frame, and a card
+   carries its own — but inside the message line, stacked above the bubble.
+   That is what lets the hover bar centre on the pair, and on the picture alone
+   when a message is only a screenshot. Both align to the message's own side. */
+.message-stack {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.message-row-user .message-stack {
+  align-items: flex-end;
+}
+
 .message-attachments {
   display: flex;
-  max-width: 72%;
+  /* The 72% cap now comes from .message-line, which wraps this; repeating it
+     here would take 72% of an already-capped width. */
+  max-width: 100%;
   flex-wrap: wrap;
   gap: 6px;
 }
