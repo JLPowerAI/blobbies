@@ -3925,6 +3925,55 @@ a.modal-button {
   object-fit: contain;
 }
 
+/* A screenshot a Blob took: the picture over its file name, as one button that
+   reveals the full-resolution PNG on disk. A native <button> rather than a
+   clickable <figure>, so Enter, Space and focus come from the platform. */
+.attachment-shot {
+  display: flex;
+  max-width: 100%;
+  flex-direction: column;
+  padding: 0;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-bubble);
+  background: var(--bubble-agent);
+  cursor: pointer;
+  /* The picture is the card's top edge: without this the square corners of
+     the image poke through the rounded border. */
+  overflow: hidden;
+  font: inherit;
+  text-align: left;
+}
+
+.attachment-shot:hover {
+  border-color: var(--border-strong);
+}
+
+.attachment-shot:hover .attachment-image {
+  filter: brightness(0.94);
+}
+
+.attachment-shot:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+/* Corners come from the card, which clips them; a radius here would leave a
+   sliver of card visible along the top edge. */
+.attachment-shot .attachment-image {
+  border-radius: 0;
+}
+
+.attachment-shot-name {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  font-size: 12px;
+  /* One line, ellipsised: a long window title must not stretch the bubble. */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .attachment-card {
   display: inline-flex;
   max-width: 100%;

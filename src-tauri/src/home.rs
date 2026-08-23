@@ -193,7 +193,16 @@ fn read_file(home: &Path, relative: &str) -> Result<String> {
 }
 
 fn write_file(home: &Path, relative: &str, content: &str) -> Result<()> {
-    if content.len() as u64 > MAX_FILE_BYTES {
+    write_bytes(home, relative, content.as_bytes(), MAX_FILE_BYTES)
+}
+
+/// Write raw bytes into the home folder, under a caller-chosen size cap.
+///
+/// Same sandbox, same home budget and the same atomic rename as the text path;
+/// only the per-file ceiling differs, because a screenshot is legitimately
+/// larger than the 256 KB a text file is allowed (see `capture.rs`).
+pub(crate) fn write_bytes(home: &Path, relative: &str, content: &[u8], max: u64) -> Result<()> {
+    if content.len() as u64 > max {
         return Err(Error::FileTooLarge);
     }
     if dir_size(home) + content.len() as u64 > MAX_HOME_BYTES {

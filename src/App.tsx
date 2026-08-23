@@ -61,16 +61,18 @@ import { type McpServerConfig, parseLoopbackUrl } from "@/lib/mcp-config";
 import { notify, shouldNotify } from "@/lib/notify";
 import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
+import { imagePreview } from "@/lib/preview";
 import { blobSystemPrompt, configFieldEmpty, splitHistory, timeNote } from "@/lib/prompt";
 import type { Recap, RecapEntry } from "@/lib/recap";
 import { type ActiveRun, assertTransition, isTerminal, type RunTrigger } from "@/lib/run-state";
 import { describeSchedule, nextFireTime, scheduleBudget } from "@/lib/schedule";
 import { startScheduler } from "@/lib/scheduler";
+import type { Capture } from "@/lib/screenshot";
 import type { SearchResult } from "@/lib/search";
 import { listSkills, type Skill, skillLine } from "@/lib/skills";
 import { playChime } from "@/lib/sound";
 import * as store from "@/lib/store";
-import { openExternal } from "@/lib/tauri";
+import { isTauri, openExternal } from "@/lib/tauri";
 import { isTinfoilModel } from "@/lib/tinfoil-model";
 import "./App.css";
 
@@ -1629,6 +1631,10 @@ export function App() {
             // The tools can exist with nothing connected yet; the prompt says
             // so rather than reading as "no apps at all".
             appsReachable: composioReady,
+            // This host shows captures in the transcript, so the turn's
+            // catalog carries take_screenshot and the prompt names it. False
+            // in the browser build, where capture cannot work at all.
+            canScreenshot: isTauri(),
             // What the window can no longer hold, in one paragraph. Changes
             // only on a compaction turn, which rewrites the history below it
             // anyway — so it costs no cache hit that was not already lost.
@@ -1879,6 +1885,9 @@ export function App() {
         onAsk: (pending) => {
           askBox.value = pending;
         },
+        onCapture: (capture, caption) => {
+          void showCapture(convoId, speaker.id, capture, caption);
+        },
         onCheckpoint: flushTranscript,
         onUsage: (usage) => {
           spent.inputTokens += usage.inputTokens;
@@ -2094,6 +2103,45 @@ export function App() {
       );
       store.saveConversation(conversationId, next);
       return { ...previous, [conversationId]: next };
+    });
+  };
+
+  /**
+   * Put a screenshot the Blob just took into the transcript.
+   *
+   * The bubble carries a small JPEG thumbnail, not the capture itself: the
+   * transcript is one JSON file with a size cap, and full-resolution PNGs in
+   * it would hit that cap within a handful of screenshots. The real file stays
+   * in the Blob's home folder, and `path` is what the click reveals.
+   *
+   * Shown as it is taken, mid-turn, rather than with the finished reply — the
+   * user should see what was captured at the moment it happens, including on a
+   * routine that runs unattended.
+   */
+  const showCapture = async (
+    conversationId: string,
+    blobId: string,
+    capture: Capture,
+    caption: string,
+  ) => {
+    const bytes = Uint8Array.from(atob(capture.png), (character) => character.charCodeAt(0));
+    const preview = await imagePreview(bytes);
+    appendMessage(conversationId, {
+      id: crypto.randomUUID(),
+      kind: "text",
+      author: "agent",
+      authorId: blobId,
+      segments: [],
+      timestampMs: Date.now(),
+      attachments: [
+        {
+          name: capture.name,
+          bytes: bytes.length,
+          label: `${caption}.png`,
+          path: capture.path,
+          ...(preview === undefined ? {} : { preview }),
+        },
+      ],
     });
   };
 

@@ -31,6 +31,7 @@ import {
   registerNativeOllamaProvider,
 } from "@/lib/ollama-native";
 import { configFieldEmpty } from "@/lib/prompt";
+import { type Capture, makeScreenshotTool } from "@/lib/screenshot";
 import { isTinfoilModel, registerTinfoilProvider, tinfoilStructuredCall } from "@/lib/tinfoil";
 
 // From here on, "local" streams over native /api/chat so every turn carries
@@ -555,6 +556,12 @@ export async function streamBlobTurn(options: {
    * current round and the caller parks the run as waiting_input.
    */
   onAsk?: (ask: PendingAsk) => void;
+  /**
+   * The Blob took a screenshot. Delivered as it happens so the host can put
+   * the picture in the transcript — a capture the user cannot see is the one
+   * thing that feature must never do.
+   */
+  onCapture?: (capture: Capture, caption: string) => void;
   /** Safe flush point: assistant text + tool results for a turn are complete. */
   onCheckpoint?: () => void;
   /**
@@ -745,6 +752,18 @@ export async function streamBlobTurn(options: {
       // Same sandbox as the fs tools: `run_command`'s file readers are
       // contained to this Blob's home, and refused on a turn without one.
       makeShellTool(options.home?.id),
+      // Offered only when the host wants the pictures: with nowhere to show a
+      // capture, taking one would be exactly the invisible screenshot the
+      // tool is built to rule out.
+      ...(options.onCapture === undefined
+        ? []
+        : [
+            makeScreenshotTool({
+              ...(options.home === undefined ? {} : { blobId: options.home.id }),
+              model: options.model,
+              onCapture: options.onCapture,
+            }),
+          ]),
       ...(fs === null ? [] : [...fs.readOnly, ...fs.mutating]),
       ...rosterTools,
       ...(options.routines === undefined ? [] : makeRoutineTools(options.routines)),

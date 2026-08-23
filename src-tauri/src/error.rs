@@ -43,6 +43,16 @@ pub enum Error {
     #[error("the Blob's home folder is full")]
     HomeFull,
 
+    /// The window disappeared between being listed and being captured.
+    #[error("that window is no longer open")]
+    WindowGone,
+
+    /// Capture failed. On macOS that is usually missing Screen Recording
+    /// consent, which only the user can grant — so the text points them there
+    /// instead of reading as a bug in the app.
+    #[error("couldn't capture that ({0}) — check Screen Recording access in System Settings")]
+    Capture(String),
+
     #[error("storage error: {0}")]
     Io(String),
 

@@ -72,6 +72,8 @@ image = { version = "0.25.10", default-features = false, features = [
     "gif",
     "bmp",
 ] }
+xcap = "0.9.8"
+base64 = "0.22.1"
 
 [lints.rust]
 # Deny, not forbid: notifications.rs needs one audited `unsafe` (deref of the

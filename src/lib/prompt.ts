@@ -79,6 +79,11 @@ export interface PromptExtensions {
    */
   group?: { name: string; others: string[] };
   /**
+   * The host can show captures, so `take_screenshot` is in this turn's
+   * catalog and belongs in the tool list.
+   */
+  canScreenshot?: boolean;
+  /**
    * Rolling summary of the part of THIS conversation that no longer fits in
    * the history window (see `lib/recap.ts`). Not a memory: it is conversation
    * state, replaced wholesale at every compaction, and it never reaches the
@@ -197,6 +202,15 @@ export function blobSystemPrompt(
       "- web_fetch: read one page; after a search, fetch the best result before " +
       "answering from snippets.\n" +
       "- run_subagent: one bounded research step inside this task.\n" +
+      // Gated on the host actually offering it (no capture surface in the
+      // browser build), because naming a tool the model cannot see is the
+      // misfire this list exists to avoid — see the note above.
+      (extensions.canScreenshot === true
+        ? "- take_screenshot: look at what is on the user's screen — name an app " +
+          "for one window, or omit it for the whole screen. For what they can " +
+          "see right now, not for anything you could fetch or read from a file. " +
+          "The user sees every screenshot you take.\n"
+        : "") +
       (extensions.group === undefined
         ? "- spawn_blob: start a separate ongoing job — never a step of this task.\n" +
           "- message_blob: message another Blob; its reply arrives later in its own " +

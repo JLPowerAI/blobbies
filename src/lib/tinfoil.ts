@@ -20,6 +20,7 @@ import { SecureClient } from "tinfoil";
  * check a model id without loading this stack; re-exported for back-compat.
  */
 import { rememberTinfoilWindows } from "@/lib/context-window";
+import { rememberTinfoilVision } from "@/lib/model-vision";
 import { getSecret, setSecret } from "@/lib/secrets";
 import { TINFOIL_BASE_URL, tinfoilModelId } from "@/lib/tinfoil-model";
 
@@ -194,6 +195,8 @@ export interface TinfoilModel {
   name: string;
   /** Tokens the model accepts; absent when the catalog omits it. */
   contextWindow?: number;
+  /** True when the model accepts images, from the catalog's own flag. */
+  multimodal?: boolean;
 }
 
 /**
@@ -207,7 +210,13 @@ export async function listTinfoilModels(): Promise<TinfoilModel[]> {
       return [];
     }
     const payload = (await response.json()) as {
-      data?: { id?: string; name?: string; type?: string; context_window?: number }[];
+      data?: {
+        id?: string;
+        name?: string;
+        type?: string;
+        context_window?: number;
+        multimodal?: boolean;
+      }[];
     };
     const models = (payload.data ?? [])
       .filter((model) => model.type === "chat" && typeof model.id === "string")
@@ -226,8 +235,13 @@ export async function listTinfoilModels(): Promise<TinfoilModel[]> {
         model.context_window > 0
           ? { contextWindow: model.context_window }
           : {}),
+        // Checked, not cast, for the same reason as the window above: a truthy
+        // non-boolean here would send an image to a text-only model, which
+        // rejects the whole request rather than ignoring the picture.
+        ...(typeof model.multimodal === "boolean" ? { multimodal: model.multimodal } : {}),
       }));
     rememberTinfoilWindows(models);
+    rememberTinfoilVision(models);
     return models;
   } catch {
     return [];

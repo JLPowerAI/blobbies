@@ -37,6 +37,12 @@ export interface Attachment {
   label?: string;
   /** Thumbnail data URL for an image, so the bubble shows the picture. */
   preview?: string;
+  /**
+   * Absolute path to the full-resolution file, when the transcript only holds
+   * a thumbnail of it — a screenshot keeps its real PNG in the Blob's home
+   * folder, so clicking the bubble can reveal that file instead of this copy.
+   */
+  path?: string;
 }
 
 /**

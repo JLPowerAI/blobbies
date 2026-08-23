@@ -1,3 +1,4 @@
+mod capture;
 mod commands;
 mod error;
 mod home;
@@ -47,6 +48,8 @@ pub fn run() {
             home::blob_home_write,
             home::blob_home_delete,
             ocr::ocr_image,
+            capture::capture_list_windows,
+            capture::capture_take,
             notifications::request_notification_permission,
             notifications::send_notification,
             oauth::oauth_listen_port,

@@ -5,6 +5,13 @@ import { ChatPane } from "@/components/ChatPane";
 import type { Agent, Message } from "@/data/agents";
 import type { PickedFile } from "@/lib/attachments";
 
+/** Revealing a file is an OS call; what matters here is that it is asked for. */
+const revealFile = vi.fn(async (_path: string) => {});
+vi.mock("@/lib/tauri", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tauri")>()),
+  revealFile: (path: string) => revealFile(path),
+}));
+
 const agent: Agent = {
   id: "61ec34f1-9ba5-4eff-b8e1-7acefb2148ea",
   name: "Ken",
@@ -689,5 +696,65 @@ describe("ChatPane", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/too long to save/i);
     // Says what to do about it, not just that something broke.
     expect(screen.getByRole("alert")).toHaveTextContent(/start a new chat/i);
+  });
+
+  it("shows a Blob's screenshot as a card that reveals the real file", async () => {
+    // The picture must be visible in the conversation — a capture the user
+    // cannot see is the thing this feature must never do — and clicking it
+    // opens the full-resolution PNG, which the transcript only thumbnails.
+    const user = userEvent.setup();
+    const shot: Message[] = [
+      {
+        id: "m3",
+        kind: "text",
+        author: "agent",
+        segments: [],
+        attachments: [
+          {
+            name: "screenshots/safari.png",
+            bytes: 4096,
+            label: "Safari — Hacker News.png",
+            path: "/Users/ken/.blobbies/blobs/x/home/screenshots/safari.png",
+            preview: "data:image/png;base64,iVBORw0KGgo=",
+          },
+        ],
+      },
+    ];
+    render(pane(false, () => {}, shot));
+
+    const card = screen.getByRole("button", { name: /Safari — Hacker News/ });
+    // The name is on screen, not only in a tooltip: it is what tells the user
+    // this is a real file on disk rather than something pasted into the chat.
+    expect(card).toHaveTextContent("Safari — Hacker News.png");
+    expect(within(card).getByRole("img").getAttribute("src")).toMatch(/^data:image\/png/);
+
+    await user.click(card);
+    expect(revealFile).toHaveBeenCalledWith(
+      "/Users/ken/.blobbies/blobs/x/home/screenshots/safari.png",
+    );
+  });
+
+  it("leaves a user's own attached image as a picture, with nothing to open", () => {
+    // They already have the original; a reveal button would point at our copy.
+    render(
+      pane(false, () => {}, [
+        {
+          id: "m4",
+          kind: "text",
+          author: "user",
+          segments: [{ text: "look at this" }],
+          attachments: [
+            {
+              name: "photo.png.txt",
+              bytes: 10,
+              label: "photo.png",
+              preview: "data:image/png;base64,iVBORw0KGgo=",
+            },
+          ],
+        },
+      ]),
+    );
+    expect(screen.getByRole("img", { name: "photo.png" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /photo.png/ })).not.toBeInTheDocument();
   });
 });

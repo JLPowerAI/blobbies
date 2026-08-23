@@ -418,6 +418,27 @@ describe("splitHistory", () => {
   });
 });
 
+describe("the tools catalog", () => {
+  it("names take_screenshot when the host can show captures", async () => {
+    // A Blob that is not told it has this tool answers "I can't see your
+    // screen" while holding it — the same misfire the catalog exists to stop.
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const prompt = blobSystemPrompt({ name: "Ken" }, undefined, { canScreenshot: true });
+    expect(prompt).toContain("take_screenshot");
+    // The two facts the model has to act on: how to aim it, and that the
+    // capture is not private to the turn.
+    expect(prompt).toMatch(/name an app/i);
+    expect(prompt).toMatch(/user sees every screenshot/i);
+  });
+
+  it("withholds it where captures cannot happen", async () => {
+    // Naming a tool the model cannot call is the measured misfire the rest of
+    // this list is careful to avoid; the browser build has no capture at all.
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    expect(blobSystemPrompt({ name: "Ken" })).not.toContain("take_screenshot");
+  });
+});
+
 describe("the recap section", () => {
   it("renders the conversation's compacted head, and nothing when there is none", async () => {
     const { blobSystemPrompt } = await import("@/lib/ai");

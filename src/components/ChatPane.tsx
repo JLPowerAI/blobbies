@@ -34,6 +34,7 @@ import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
 import { type MentionPalette, mentionPalette } from "@/lib/mentions";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
 import { imagePreview } from "@/lib/preview";
+import { revealFile } from "@/lib/tauri";
 // Tinfoil's real module (attestation stack) is a lazy chunk; only the pure
 // id helpers are static. The probe/model-list go through `import()`.
 import type { TinfoilModel } from "@/lib/tinfoil";
@@ -155,8 +156,36 @@ function AttachmentView({ attachment, reading }: { attachment: Attachment; readi
     attachment.preview?.startsWith("data:image/") === true ? attachment.preview : undefined;
 
   if (preview !== undefined) {
+    // A screenshot keeps its full-resolution PNG on disk and carries only a
+    // thumbnail here, so clicking shows the real file. Files the user attached
+    // have no path and stay a plain picture — they already have the original.
+    const full = attachment.path;
+    if (full === undefined) {
+      return (
+        <img
+          className="attachment-image"
+          src={preview}
+          alt={label}
+          title={label}
+          draggable={false}
+        />
+      );
+    }
+    // A card with the picture over its name, like the tool-image cards in GG
+    // Coder: the caption is what tells the user this is a real file on disk
+    // and not just something pasted into the conversation.
     return (
-      <img className="attachment-image" src={preview} alt={label} title={label} draggable={false} />
+      <button
+        type="button"
+        className="attachment-shot"
+        title={`Show ${label} in Finder`}
+        onClick={() => {
+          void revealFile(full);
+        }}
+      >
+        <img className="attachment-image" src={preview} alt={label} draggable={false} />
+        <span className="attachment-shot-name">{label}</span>
+      </button>
     );
   }
   return (

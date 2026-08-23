@@ -36,6 +36,29 @@ export async function openExternal(url: string): Promise<void> {
   return openUrl(url);
 }
 
+/**
+ * Show a file this app saved in the OS file manager.
+ *
+ * Reveal, not open: `opener:allow-reveal-item-in-dir` selects the file and
+ * stops there, where opening a path would hand an arbitrary file to whatever
+ * application claims its type. The paths here come from our own capture
+ * command, but they are stored in the transcript — a plain JSON file the user
+ * can edit — so the weaker verb is the one worth keeping.
+ *
+ * Never throws: a failed reveal is a click that did nothing.
+ */
+export async function revealFile(path: string): Promise<void> {
+  if (!isTauri() || path === "") {
+    return;
+  }
+  try {
+    const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+    await revealItemInDir(path);
+  } catch {
+    // Blocked by the capability scope, or the file has since been deleted.
+  }
+}
+
 /** Hostnames that always denote this machine or the local network. */
 const LOCAL_HOST_PATTERN =
   /^(?:localhost|.*\.local|.*\.internal|0\.0\.0\.0|127(?:\.\d+){3}|10(?:\.\d+){3}|192\.168(?:\.\d+){2}|169\.254(?:\.\d+){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d+){2}|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.\d+){2}|\[?::1\]?|\[?f[cd][0-9a-f]{2}:.*|\[?fe80:.*)$/i;
