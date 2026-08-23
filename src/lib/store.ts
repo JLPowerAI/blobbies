@@ -4,6 +4,7 @@ import type { Agent, Message, Routine } from "@/data/agents";
 import type { BlobMemory } from "@/lib/blob-tools";
 import { type Group, groupIdFromConversation } from "@/lib/groups";
 import type { McpServerConfig } from "@/lib/mcp";
+import type { Recap } from "@/lib/recap";
 import { type ActiveRun, parseRun } from "@/lib/run-state";
 import { isTauri } from "@/lib/tauri";
 
@@ -13,7 +14,7 @@ import { isTauri } from "@/lib/tauri";
  * under the same keys, so behavior is identical without Tauri.
  */
 
-export type BlobSliceName = "config" | "routines" | "transcript" | "runs";
+export type BlobSliceName = "config" | "routines" | "transcript" | "runs" | "recap";
 
 export interface Settings {
   userName: string;
@@ -451,6 +452,32 @@ export function conversationSliceKey(conversationId: string): string {
   return groupId === null ? `blobs/${conversationId}/transcript` : `groups/${groupId}/transcript`;
 }
 
+/**
+ * The compacted head of a conversation (see `lib/recap.ts`), keyed the same
+ * way `saveConversation` is: a Blob's own chat or a group's, one recap each.
+ */
+export async function loadRecap(conversationId: string): Promise<Recap | null> {
+  const value = await rawRead(recapSliceKey(conversationId));
+  if (value === null || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  // Written by us, but read back from disk a user can edit: a half-valid
+  // recap must read as no recap, never as `undefined` spliced into a prompt.
+  return typeof record.text === "string" && typeof record.coveredId === "string"
+    ? { text: record.text, coveredId: record.coveredId }
+    : null;
+}
+
+export function saveRecap(conversationId: string, recap: Recap): void {
+  queueWrite(recapSliceKey(conversationId), recap);
+}
+
+function recapSliceKey(conversationId: string): string {
+  const groupId = groupIdFromConversation(conversationId);
+  return groupId === null ? `blobs/${conversationId}/recap` : `groups/${groupId}/recap`;
+}
+
 export async function loadBlobRun(id: string): Promise<ActiveRun | null> {
   return parseRun(await rawRead(`blobs/${id}/runs`));
 }
@@ -469,7 +496,7 @@ export async function deleteBlobData(id: string): Promise<void> {
     await invoke("store_delete_blob", { id });
     return;
   }
-  for (const slice of ["config", "routines", "transcript", "runs"]) {
+  for (const slice of ["config", "routines", "transcript", "runs", "recap"]) {
     backendRemove(`slice:blobs/${id}/${slice}`);
   }
 }

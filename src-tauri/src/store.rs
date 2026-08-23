@@ -43,11 +43,12 @@ struct TrashMarker {
 /// group-chat list (names and ids only — transcripts are their own slices).
 const ROOT_SLICES: [&str; 5] = ["settings", "ui-layout", "roster", "user", "groups"];
 
-/// Slices that live inside a Blob directory.
-const BLOB_SLICES: [&str; 4] = ["config", "routines", "transcript", "runs"];
+/// Slices that live inside a Blob directory. `recap` is the rolling summary of
+/// the conversation's compacted head (see `lib/recap.ts`).
+const BLOB_SLICES: [&str; 5] = ["config", "routines", "transcript", "runs", "recap"];
 
 /// Slices that live inside a group-chat directory.
-const GROUP_SLICES: [&str; 1] = ["transcript"];
+const GROUP_SLICES: [&str; 2] = ["transcript", "recap"];
 
 /// True for `transcript-1`, `transcript-2`, … — the sealed older halves of a
 /// long conversation.
@@ -518,6 +519,9 @@ mod tests {
         assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/runs")).is_ok());
         assert!(resolve_slice_path(root, "groups").is_ok());
         assert!(resolve_slice_path(root, &format!("groups/{BLOB_ID}/transcript")).is_ok());
+        // Conversation recaps, for a Blob's own chat and for a group's.
+        assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/recap")).is_ok());
+        assert!(resolve_slice_path(root, &format!("groups/{BLOB_ID}/recap")).is_ok());
         // Sealed halves of a long conversation, for Blobs and groups alike.
         assert_eq!(
             resolve_slice_path(root, &format!("blobs/{BLOB_ID}/transcript-1"))

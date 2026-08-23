@@ -62,6 +62,22 @@ vi.mock("@/lib/intent", async (importOriginal) => ({
   }),
 }));
 
+/**
+ * The summariser behind compaction. Mocked for the same reason the intent
+ * router is: it is one model call, covered against a faked fetch elsewhere —
+ * what App owns is *when* it runs and what happens to its answer.
+ */
+const summarize = vi.fn(async (options: { entries: { id: string }[] }) => ({
+  text: "They are migrating the invoice script to Postgres.",
+  // A pass reports the newest entry it actually read — here, all of them.
+  coveredId: options.entries[options.entries.length - 1]?.id ?? "",
+  usage: { inputTokens: 900, outputTokens: 40 },
+}));
+vi.mock("@/lib/recap", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/recap")>()),
+  summarizeHistory: (options: { entries: { id: string }[] }) => summarize(options),
+}));
+
 const notify = vi.fn(async () => {});
 /**
  * Composio's reachability, controllable per test.
@@ -238,6 +254,7 @@ describe("turn wiring", () => {
     composio.signedIn = false;
     composio.apps = [];
     notify.mockClear();
+    summarize.mockClear();
   });
 
   it("stays silent for a message the user typed and is watching", async () => {
@@ -1332,6 +1349,128 @@ describe("turn wiring", () => {
     // One turn, and it is the mentioned Blob's: the other member stays quiet.
     expect(calls.length).toBe(1);
     expect(speakerName(calls[0])).toBe("Writer");
+  });
+
+  it("summarises what a long conversation pushed out of the window, once", async () => {
+    // The point of a recap: a Blob talked to for a week must not silently
+    // forget how its job was described. Eight fat messages overflow the local
+    // window, so the oldest leave the prompt on the very first turn.
+    const id = "61ec34f1-9ba5-4eff-b8e1-7acefb210001";
+    await store.flushRoster([
+      {
+        id,
+        name: "Ken",
+        time: "Now",
+        snippet: "Migrating the invoice script",
+        tone: "blue",
+        shape: "sphere",
+      },
+    ]);
+    store.saveBlobTranscript(
+      id,
+      Array.from({ length: 8 }, (_, index) => ({
+        id: `old-${index}`,
+        kind: "text" as const,
+        author: index % 2 === 0 ? ("user" as const) : ("agent" as const),
+        segments: [{ text: `${index}: ${"invoice ".repeat(1_250)}` }],
+      })),
+    );
+    window.dispatchEvent(new Event("beforeunload"));
+
+    const user = userEvent.setup();
+    script = [() => "Still on it.", () => "Yes."];
+    mountWithModel();
+    await screen.findByRole("log");
+    await say(user, "where were we");
+    await waitFor(() => expect(summarize).toHaveBeenCalledTimes(1));
+
+    // It was handed exactly the messages that left the prompt, oldest first.
+    const entries = summarize.mock.calls[0]?.[0].entries ?? [];
+    const last = entries[entries.length - 1]?.id ?? "";
+    expect(entries.map((entry) => entry.id)).toContain("old-0");
+    const sent = calls[0]?.messages ?? [];
+    expect(sent.some((message) => String(message.content).startsWith("0: invoice"))).toBe(false);
+
+    // Persisted against the newest message it covers, so the next pass reads
+    // only what is new.
+    window.dispatchEvent(new Event("beforeunload"));
+    await waitFor(async () =>
+      expect(await store.loadRecap(id)).toEqual({
+        text: "They are migrating the invoice script to Postgres.",
+        coveredId: last,
+      }),
+    );
+    // Its tokens are the user's spend like any other; the run record is
+    // already closed, so they land in the Blob's lifetime total.
+    const roster = await store.loadRoster();
+    expect(roster?.[0]?.usage?.inputTokens).toBeGreaterThanOrEqual(900);
+
+    // Next turn: the same block falls out, and none of it is new — a second
+    // summary here would re-read settled material and drift.
+    await say(user, "is that still right");
+    await waitFor(() => expect(screen.getByText("Yes.")).toBeInTheDocument());
+    expect(summarize).toHaveBeenCalledTimes(1);
+    // And the Blob is told what it forgot.
+    const secondPrompt = String(
+      calls[1]?.messages.find((message) => message.role === "system")?.content ?? "",
+    );
+    expect(secondPrompt).toContain("## Earlier in this conversation");
+    expect(secondPrompt).toContain("migrating the invoice script");
+  });
+
+  it("records only what the summariser read, and resumes from there", async () => {
+    // One pass is capped (RECAP_INPUT_CHARS), so on a big window it reads only
+    // part of the dropped block. Recording the whole block as covered would
+    // drop the remainder from the prompt AND the recap — gone for good.
+    const id = "61ec34f1-9ba5-4eff-b8e1-7acefb210002";
+    await store.flushRoster([
+      {
+        id,
+        name: "Ken",
+        time: "Now",
+        snippet: "Migrating the invoice script",
+        tone: "blue",
+        shape: "sphere",
+      },
+    ]);
+    store.saveBlobTranscript(
+      id,
+      Array.from({ length: 8 }, (_, index) => ({
+        id: `old-${index}`,
+        kind: "text" as const,
+        author: index % 2 === 0 ? ("user" as const) : ("agent" as const),
+        segments: [{ text: `${index}: ${"invoice ".repeat(1_250)}` }],
+      })),
+    );
+    window.dispatchEvent(new Event("beforeunload"));
+
+    // A pass that got through only the first message of the block.
+    summarize.mockImplementationOnce(async (options) => ({
+      text: "Partial so far.",
+      coveredId: options.entries[0]?.id ?? "",
+      usage: { inputTokens: 100, outputTokens: 10 },
+    }));
+
+    const user = userEvent.setup();
+    script = [() => "Still on it.", () => "Yes."];
+    mountWithModel();
+    await screen.findByRole("log");
+    await say(user, "where were we");
+    await waitFor(() => expect(summarize).toHaveBeenCalledTimes(1));
+
+    const dropped = summarize.mock.calls[0]?.[0].entries.map((entry) => entry.id) ?? [];
+    const firstRead = dropped[0] ?? "";
+    window.dispatchEvent(new Event("beforeunload"));
+    await waitFor(async () => expect((await store.loadRecap(id))?.coveredId).toBe(firstRead));
+
+    // The next turn picks up the unread remainder instead of skipping it.
+    await say(user, "is that still right");
+    await waitFor(() => expect(summarize).toHaveBeenCalledTimes(2));
+    const resumed = summarize.mock.calls[1]?.[0].entries.map((entry) => entry.id) ?? [];
+    expect(resumed).not.toContain(firstRead);
+    // Exactly where the first pass stopped — nothing skipped in between.
+    expect(resumed[0]).toBe(dropped[1]);
+    expect(resumed).toContain(dropped[dropped.length - 1]);
   });
 
   it("gives the turn its own identity, and no servers when none are configured", async () => {

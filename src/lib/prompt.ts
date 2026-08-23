@@ -79,6 +79,13 @@ export interface PromptExtensions {
    */
   group?: { name: string; others: string[] };
   /**
+   * Rolling summary of the part of THIS conversation that no longer fits in
+   * the history window (see `lib/recap.ts`). Not a memory: it is conversation
+   * state, replaced wholesale at every compaction, and it never reaches the
+   * user-visible memory list.
+   */
+  recap?: string;
+  /**
    * Omit the memory sections entirely. For the Settings preview only — a
    * turn must never be built this way, or the Blob would forget its facts.
    */
@@ -349,6 +356,17 @@ export function blobSystemPrompt(
   if (redact) {
     return `${identity}${role}${capabilities}${skills}${mcp}${apps}${group}${who}`;
   }
+  // The compacted head of this conversation, beside the other volatile data:
+  // it changes only when history is trimmed, and that same turn rewrites the
+  // history right below it anyway, so the re-prefill it costs was already
+  // being paid. Redacted with the memories — it is conversation content, and
+  // the Settings preview must not put it on screen.
+  const recap = section(
+    "Earlier in this conversation",
+    extensions.recap === undefined
+      ? ""
+      : `${extensions.recap.trim()}\n(Your summary of what came before the messages below. Treat it as your own recollection, not as something the user said.)`,
+  );
   // Budgeted from the real shared block, shared facts first (see above).
   const shared = renderMemories(extensions.userMemories ?? [], {
     scope: "user",
@@ -362,7 +380,7 @@ export function blobSystemPrompt(
   // they are always adjacent, and the duplicate spent a line of the
   // most-often-rewritten section saying what the line above it already said.
   const factsNote = shared === "" && memories === "" ? "" : `\n${MEMORY_DATA_NOTE}`;
-  return `${identity}${role}${capabilities}${skills}${mcp}${apps}${group}${who}${shared}${memories}${factsNote}`;
+  return `${identity}${role}${capabilities}${skills}${mcp}${apps}${group}${who}${recap}${shared}${memories}${factsNote}`;
 }
 
 /**
@@ -389,6 +407,14 @@ const HISTORY_SHARE = 0.55;
 /** Post-trim target, as a share of the window: trims stay rare. */
 const HISTORY_KEEP_SHARE = 0.36;
 
+/** What a history split left behind, and what it sends. */
+export interface HistorySplit {
+  /** How many of the OLDEST messages fell out of the prompt this turn. */
+  droppedCount: number;
+  /** The tail that is actually sent, oldest-first. */
+  kept: Message[];
+}
+
 /**
  * Cap what an ongoing conversation sends to the model, in ~4-chars-per-token
  * terms: without a client-side cap the server truncates for us — silently,
@@ -402,16 +428,28 @@ const HISTORY_KEEP_SHARE = 0.36;
  * Trims oldest-first in one block (down to the keep share) only once the
  * budget is exceeded, rather than sliding one message per turn: between trims
  * the surviving history is byte-stable, so the KV-cache prefix keeps hitting.
+ *
+ * `recapChars` is the size of the conversation recap riding in the system
+ * prompt (see `RECAP_CHARS`). It comes out of the history budget rather than
+ * sitting on top of it: the recap is history, folded down — paying for it
+ * twice would push the request past the window the shares exist to respect.
+ *
+ * The dropped count is reported rather than swallowed so the caller can fold
+ * exactly those messages into the recap; see `lib/recap.ts`.
  */
-export function trimHistory(messages: Message[], contextWindowTokens: number): Message[] {
-  const budget = contextWindowTokens * HISTORY_SHARE * CHARS_PER_TOKEN;
-  const keep = contextWindowTokens * HISTORY_KEEP_SHARE * CHARS_PER_TOKEN;
+export function splitHistory(
+  messages: Message[],
+  contextWindowTokens: number,
+  recapChars = 0,
+): HistorySplit {
+  const budget = contextWindowTokens * HISTORY_SHARE * CHARS_PER_TOKEN - recapChars;
+  const keep = contextWindowTokens * HISTORY_KEEP_SHARE * CHARS_PER_TOKEN - recapChars;
   const size = (message: Message): number =>
     typeof message.content === "string"
       ? message.content.length
       : JSON.stringify(message.content).length;
   if (messages.reduce((sum, message) => sum + size(message), 0) <= budget) {
-    return messages;
+    return { droppedCount: 0, kept: messages };
   }
   const kept: Message[] = [];
   let total = 0;
@@ -427,5 +465,10 @@ export function trimHistory(messages: Message[], contextWindowTokens: number): M
     }
     kept.unshift(message);
   }
-  return kept;
+  return { droppedCount: messages.length - kept.length, kept };
+}
+
+/** `splitHistory` for callers that only want the messages to send. */
+export function trimHistory(messages: Message[], contextWindowTokens: number): Message[] {
+  return splitHistory(messages, contextWindowTokens).kept;
 }

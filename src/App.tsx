@@ -61,7 +61,8 @@ import { type McpServerConfig, parseLoopbackUrl } from "@/lib/mcp-config";
 import { notify, shouldNotify } from "@/lib/notify";
 import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
-import { blobSystemPrompt, configFieldEmpty, timeNote, trimHistory } from "@/lib/prompt";
+import { blobSystemPrompt, configFieldEmpty, splitHistory, timeNote } from "@/lib/prompt";
+import type { Recap, RecapEntry } from "@/lib/recap";
 import { type ActiveRun, assertTransition, isTerminal, type RunTrigger } from "@/lib/run-state";
 import { describeSchedule, nextFireTime, scheduleBudget } from "@/lib/schedule";
 import { startScheduler } from "@/lib/scheduler";
@@ -84,6 +85,8 @@ let intentModule: Promise<typeof import("@/lib/intent")> | undefined;
 const loadIntent = () => (intentModule ??= import("@/lib/intent"));
 let tinfoilModule: Promise<typeof import("@/lib/tinfoil")> | undefined;
 const loadTinfoil = () => (tinfoilModule ??= import("@/lib/tinfoil"));
+let recapModule: Promise<typeof import("@/lib/recap")> | undefined;
+const loadRecapModule = () => (recapModule ??= import("@/lib/recap"));
 
 /**
  * How many Blob → Blob hand-offs may chain before the next one is refused.
@@ -310,6 +313,12 @@ export function App() {
   runsRef.current = runsByBlob;
   /** Routines mirror for the scheduler (reads outside the render cycle). */
   const routinesRef = useRef<Record<string, Routine[]>>({});
+  /**
+   * Rolling summary per conversation of what history no longer fits (see
+   * lib/recap.ts). A ref, not state: it is read and written inside the turn
+   * and nothing on screen shows it, so it must not cost a render.
+   */
+  const recapsRef = useRef<Record<string, Recap | null>>({});
   /**
    * The one in-flight turn app-wide. Turns are serial — a single local model
    * serves them — so user sends and routine fires share this slot and the
@@ -1550,6 +1559,55 @@ export function App() {
     // One backend for the whole turn: attachment reads below and the fs tools
     // the turn's catalog carries both point at this Blob's sandbox.
     const home = homeFor(target.id);
+    // The compacted head of this conversation, hydrated on first use: a routine
+    // or a hand-off can run a turn in a conversation nobody opened this
+    // session, and starting from no recap there would summarise it all again.
+    // `null` is a hydrated "there is none", so it is not re-read every turn.
+    let recap = recapsRef.current[convoId];
+    if (recap === undefined) {
+      recap = await store.loadRecap(convoId);
+      recapsRef.current[convoId] = recap;
+    }
+    // Attachment text is read back from the home folder and inlined into
+    // the message that carried it — the chat catalog has no file tool, so
+    // this is the only way an attachment reaches the model there. Per-message
+    // and content-stable, so the cached prefix survives; the split below sizes
+    // the result like any other history, against this model's own window.
+    //
+    // Paired with the transcript id each message came from, so whatever falls
+    // out of the window can be handed to the summariser after the turn.
+    const rendered: RecapEntry[] = await Promise.all(
+      history
+        .filter((entry): entry is Extract<Message, { kind: "text" }> => entry.kind === "text")
+        .map(async (entry): Promise<RecapEntry> => {
+          // In a group, another Blob's line is not this Blob's own output:
+          // it arrives in the user role, labelled with who said it (the
+          // system prompt explains the labels). Only this Blob's own
+          // messages are the assistant.
+          const own =
+            entry.author === "agent" && (group === undefined || entry.authorId === target.id);
+          const role = own ? ("assistant" as const) : ("user" as const);
+          const said =
+            own || entry.author === "user" || group === undefined
+              ? undefined
+              : group.members.find((member) => member.id === entry.authorId)?.name;
+          const body = entry.segments.map((segment) => segment.text).join("");
+          const line = said === undefined ? body : `[${said}]: ${body}`;
+          const block = await attachmentsPrompt(home, entry.attachments ?? []);
+          // An attachment-only message has no words of its own; a leading
+          // blank line in its place is noise the model has to read past.
+          const content = [line, block].filter((part) => part !== "").join("\n\n");
+          return { id: entry.id, message: { role, content } };
+        }),
+    );
+    // The recap costs history bytes rather than sitting on top of them: it is
+    // history, folded down, and paying for it twice would push the request past
+    // the window these shares exist to respect.
+    const split = splitHistory(
+      rendered.map((entry) => entry.message),
+      contextWindow(model),
+      recap?.text.length ?? 0,
+    );
     const aiMessages: AiMessage[] = [
       // Byte-stable across turns (no clock inside): the system prompt plus the
       // untrimmed history form the request prefix, and Ollama's KV cache only
@@ -1571,6 +1629,10 @@ export function App() {
             // The tools can exist with nothing connected yet; the prompt says
             // so rather than reading as "no apps at all".
             appsReachable: composioReady,
+            // What the window can no longer hold, in one paragraph. Changes
+            // only on a compaction turn, which rewrites the history below it
+            // anyway — so it costs no cache hit that was not already lost.
+            ...(recap === null ? {} : { recap: recap.text }),
             ...(group === undefined
               ? {}
               : {
@@ -1584,38 +1646,7 @@ export function App() {
           },
         ),
       },
-      // Attachment text is read back from the home folder and inlined into
-      // the message that carried it — the chat catalog has no file tool, so
-      // this is the only way an attachment reaches the model there. Per-message
-      // and content-stable, so the cached prefix survives; trimHistory sizes
-      // the result like any other history, against this model's own window.
-      ...trimHistory(
-        await Promise.all(
-          history
-            .filter((entry): entry is Extract<Message, { kind: "text" }> => entry.kind === "text")
-            .map(async (entry): Promise<AiMessage> => {
-              // In a group, another Blob's line is not this Blob's own output:
-              // it arrives in the user role, labelled with who said it (the
-              // system prompt explains the labels). Only this Blob's own
-              // messages are the assistant.
-              const own =
-                entry.author === "agent" && (group === undefined || entry.authorId === target.id);
-              const role = own ? ("assistant" as const) : ("user" as const);
-              const speaker =
-                own || entry.author === "user" || group === undefined
-                  ? undefined
-                  : group.members.find((member) => member.id === entry.authorId)?.name;
-              const body = entry.segments.map((segment) => segment.text).join("");
-              const said = speaker === undefined ? body : `[${speaker}]: ${body}`;
-              const block = await attachmentsPrompt(home, entry.attachments ?? []);
-              // An attachment-only message has no words of its own; a leading
-              // blank line in its place is noise the model has to read past.
-              const content = [said, block].filter((part) => part !== "").join("\n\n");
-              return { role, content };
-            }),
-        ),
-        contextWindow(model),
-      ),
+      ...split.kept,
     ];
     // Routine (and answer-to-routine) turns carry the instruction as the
     // prompt; it is not a visible transcript message — the event line is.
@@ -1968,6 +1999,50 @@ export function App() {
     }
     // Persist once the reply settled; per-delta saves would thrash the store.
     flushTranscript();
+    // Compaction, last: whatever fell out of the window this turn is folded
+    // into the conversation's recap so the Blob does not simply forget it.
+    // Deliberately after the reply, the chime and the notification — it must
+    // never delay anything the user is watching — but still inside the queued
+    // turn, so a group's members cannot race each other for one recap: the
+    // second finds `coveredId` already advanced and has nothing to do.
+    //
+    // simplification: awaiting here makes the NEXT queued turn wait out the
+    // summariser (seconds, and only on a compaction turn). If that ever bites,
+    // fire-and-forget behind a per-conversation promise chain, like
+    // `rollovers` in store.ts.
+    if (split.droppedCount > 0) {
+      const { pendingMessages, summarizeHistory } = await loadRecapModule();
+      const pending = pendingMessages(rendered.slice(0, split.droppedCount), recap ?? undefined);
+      if (pending.length > 0) {
+        const summary = await summarizeHistory({
+          model,
+          previous: recap?.text,
+          entries: pending,
+          blobName: speaker.name,
+        });
+        // On failure `coveredId` stays put, so the next compaction retries with
+        // a bigger block. The messages are out of the prompt either way — the
+        // behaviour before recaps existed, and the floor this cannot fall below.
+        if (summary !== null) {
+          // The summariser's own mark, not the newest pending message: one
+          // pass is capped, so anything past the cut is folded in next turn
+          // rather than marked covered without ever being read.
+          const next: Recap = { text: summary.text, coveredId: summary.coveredId };
+          recapsRef.current[convoId] = next;
+          store.saveRecap(convoId, next);
+          // The run record is terminal by now, so these tokens can only be
+          // folded into the lifetime total — but spend has to stay visible.
+          const previous = agentsRef.current.find((candidate) => candidate.id === target.id)?.usage;
+          updateBlob(target.id, {
+            usage: {
+              inputTokens: (previous?.inputTokens ?? 0) + summary.usage.inputTokens,
+              outputTokens: (previous?.outputTokens ?? 0) + summary.usage.outputTokens,
+              runs: previous?.runs ?? 0,
+            },
+          });
+        }
+      }
+    }
     // Any turn can have written a file now (the catalog is shared), so the
     // Files list re-reads whenever a turn settles.
     setFilesKey((key) => key + 1);

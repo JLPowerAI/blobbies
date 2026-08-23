@@ -84,6 +84,8 @@ export function streamLocalChat(options: {
   /** Allow chain-of-thought (slow but deeper). Defaults off — see NO_THINKING. */
   thinking?: boolean;
   tools?: Tool[];
+  /** Ceiling on the reply. Defaults to MAX_REPLY_TOKENS; short for side calls. */
+  maxTokens?: number;
   signal?: AbortSignal;
 }): StreamResult {
   return stream({
@@ -93,7 +95,7 @@ export function streamLocalChat(options: {
     // Thinking on: omit the knob so the model uses its default reasoning depth.
     ...(options.thinking === true ? {} : { thinking: NO_THINKING }),
     ...(options.tools === undefined ? {} : { tools: options.tools }),
-    maxTokens: MAX_REPLY_TOKENS,
+    maxTokens: options.maxTokens ?? MAX_REPLY_TOKENS,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
 }
@@ -154,7 +156,7 @@ export type { PromptExtensions, UserContext } from "@/lib/prompt";
  * provider stack. Re-exported here — plus `isAbortError`, so App.tsx's lazy
  * boundary is a single dynamic import of this module.
  */
-export { blobSystemPrompt, timeNote, trimHistory } from "@/lib/prompt";
+export { blobSystemPrompt, splitHistory, timeNote, trimHistory } from "@/lib/prompt";
 
 /**
  * How many tool round-trips one user message may trigger.

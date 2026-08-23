@@ -382,6 +382,67 @@ describe("trimHistory", () => {
   });
 });
 
+describe("splitHistory", () => {
+  const LOCAL_WINDOW = 16_384;
+  const conversation = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `${index}:${"x".repeat(10_000)}`,
+    }));
+
+  it("reports how many messages fell out, so they can be summarised", async () => {
+    const { splitHistory } = await import("@/lib/ai");
+    const messages = conversation(8);
+    const { droppedCount, kept } = splitHistory(messages, LOCAL_WINDOW);
+    expect(droppedCount).toBeGreaterThan(0);
+    // The two halves account for the whole conversation, in order: anything
+    // else means a message is either lost or summarised while still on screen.
+    expect(droppedCount + kept.length).toBe(messages.length);
+    expect(kept).toEqual(messages.slice(droppedCount));
+  });
+
+  it("drops nothing while the conversation fits", async () => {
+    const { splitHistory } = await import("@/lib/ai");
+    const messages = conversation(3);
+    expect(splitHistory(messages, LOCAL_WINDOW)).toEqual({ droppedCount: 0, kept: messages });
+  });
+
+  it("charges the recap against the history budget, not on top of it", async () => {
+    // The recap rides in the system prompt; if history kept its full share
+    // beside it the request would grow past the window the shares protect.
+    const { splitHistory } = await import("@/lib/ai");
+    const messages = conversation(4);
+    const withoutRecap = splitHistory(messages, LOCAL_WINDOW, 0);
+    const withRecap = splitHistory(messages, LOCAL_WINDOW, 12_000);
+    expect(withRecap.droppedCount).toBeGreaterThan(withoutRecap.droppedCount);
+  });
+});
+
+describe("the recap section", () => {
+  it("renders the conversation's compacted head, and nothing when there is none", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const blob = { name: "Ken", title: "Coach", description: "Helps." };
+    const withRecap = blobSystemPrompt(blob, undefined, {
+      recap: "The user is migrating the invoice script to Postgres.",
+    });
+    expect(withRecap).toContain("## Earlier in this conversation");
+    expect(withRecap).toContain("migrating the invoice script");
+    expect(blobSystemPrompt(blob)).not.toContain("Earlier in this conversation");
+  });
+
+  it("is withheld from the Settings preview, like the memories", async () => {
+    // The preview is on screen in Settings: it shows the structure of a
+    // prompt, never a transcript of what the user has been saying.
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const preview = blobSystemPrompt({ name: "Ken" }, undefined, {
+      recap: "The user is migrating the invoice script to Postgres.",
+      redactMemories: true,
+    });
+    expect(preview).not.toContain("Earlier in this conversation");
+    expect(preview).not.toContain("invoice script");
+  });
+});
+
 describe("streamBlobTurn", () => {
   it("self-configures via structured outputs when forced, then streams the reply", async () => {
     fetchHandler = async (_input, init) => {
