@@ -1223,7 +1223,7 @@ describe("onboarding", () => {
     // field is the fallback for when browser sign-in cannot work, so it stays
     // hidden until sign-in has actually failed — offered up front, it read as
     // "log in, THEN fetch a key, THEN paste it": three chores for one click.
-    expect(flow().getByRole("button", { name: "Log in with Composio" })).toBeEnabled();
+    expect(flow().getByRole("button", { name: "Log in" })).toBeEnabled();
     expect(flow().queryByLabelText("Composio API key")).not.toBeInTheDocument();
     // Skip is still the only way past, and the primary button stays shut.
     expect(flow().getByRole("button", { name: "Make your first Blob" })).toBeDisabled();

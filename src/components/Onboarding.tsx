@@ -593,15 +593,15 @@ export function Onboarding({
                             : "Log in to connect your apps."}
                   </span>
                 </span>
+                {/* Action on the right of its own row, like Allow on the
+                    permissions step — and in the exact spot the Ready state
+                    takes over once connected, so nothing jumps. */}
                 {composio.kind === "signedIn" ? (
                   <span className="onboarding-row-state" data-granted={true}>
                     <Check size={13} strokeWidth={2.2} aria-hidden="true" />
                     Ready
                   </span>
-                ) : null}
-              </div>
-              {composio.kind === "signedIn" ? null : (
-                <div className="onboarding-key-row">
+                ) : (
                   <button
                     type="button"
                     className="onboarding-allow"
@@ -612,16 +612,21 @@ export function Onboarding({
                       ? "Working\u2026"
                       : composio.kind === "failed"
                         ? "Try again"
-                        : "Log in with Composio"}
+                        : "Log in"}
                   </button>
-                </div>
-              )}
+                )}
+              </div>
               {/* The key is the fallback for when the browser sign-in cannot
-                  work \u2014 SSO that refuses a loopback redirect, a locked-down
-                  machine \u2014 so it appears only once sign-in has actually
+                  work — SSO that refuses a loopback redirect, a locked-down
+                  machine — so it appears only once sign-in has actually
                   failed. Shown alongside the button from the start, it read as
                   "log in, then fetch a key, then paste it": three chores for
-                  what is one click. */}
+                  what is one click.
+
+                  Divided from the row above like the permissions card divides
+                  its rows: this is a second way in, not a second step of the
+                  first one. */}
+              {composio.kind !== "failed" ? null : <div className="onboarding-divider" />}
               {composio.kind !== "failed" ? null : (
                 <div className="onboarding-key-row">
                   <input

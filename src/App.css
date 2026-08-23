@@ -5345,12 +5345,17 @@ a.modal-button {
   gap: 8px;
 }
 
-/* Inside a card (the Composio step) the row has to pick up the same inset the
-   card's own rows use, or the field and its button sit flush against the card
-   edge while the title above them is indented. The Tinfoil step's key row is
-   not in a card and keeps its full width. */
+/* Inside a card (the Composio step) the key row is a card row like any other,
+   so it takes the same padding — otherwise the field sits flush against the
+   card edge while the title above it is indented. The Tinfoil step's key row
+   is not in a card and keeps its full width. */
 .onboarding-card .onboarding-key-row {
-  padding: 0 16px 14px;
+  padding: 14px 16px;
+}
+
+/* The link closes the card, so it only needs the space below the field. */
+.onboarding-card .onboarding-key-row + .onboarding-link {
+  padding-top: 0;
 }
 
 .onboarding-key-row .creator-name {
