@@ -78,6 +78,18 @@ pub(crate) async fn request_notification_permission(
     {
         use objc2_user_notifications::UNAuthorizationOptions;
 
+        // Opened straight from the DMG (or any still-quarantined copy), macOS
+        // runs the app from a random read-only AppTranslocation path. The
+        // prompt still appears and the user still clicks Allow, but the grant
+        // is recorded against that throwaway path — so it reads back as denied
+        // on every launch, and the app tells someone who just allowed it that
+        // it is "Not allowed". Its own state, so the UI can say the one thing
+        // that actually fixes it: move the app into Applications.
+        if std::env::current_exe()
+            .is_ok_and(|path| path.to_string_lossy().contains("/AppTranslocation/"))
+        {
+            return Ok("translocated");
+        }
         // "unavailable", not an error: the frontend already draws this state,
         // and a dev build with no bundle has nothing the user can act on.
         let Some(center) = center() else {

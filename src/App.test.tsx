@@ -1219,10 +1219,13 @@ describe("onboarding", () => {
     await user.click(flow().getByRole("button", { name: /Skip, I'll use the local model/ }));
     expect(await getSecret("tinfoil-api-key")).toBeNull();
 
-    // Composio is optional in the same way, and now asks for its own key: the
-    // hosted MCP endpoint replaced the CLI that used to own that credential.
+    // Composio is optional in the same way. One button, not two paths: the key
+    // field is the fallback for when browser sign-in cannot work, so it stays
+    // hidden until sign-in has actually failed — offered up front, it read as
+    // "log in, THEN fetch a key, THEN paste it": three chores for one click.
+    expect(flow().getByRole("button", { name: "Log in with Composio" })).toBeEnabled();
+    expect(flow().queryByLabelText("Composio API key")).not.toBeInTheDocument();
     // Skip is still the only way past, and the primary button stays shut.
-    expect(flow().getByLabelText("Composio API key")).toHaveValue("");
     expect(flow().getByRole("button", { name: "Make your first Blob" })).toBeDisabled();
     // And it is the last step: picking plugins is not part of setup, because
     // it asks which apps you want before you have a Blob to use them with.

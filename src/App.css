@@ -5278,6 +5278,25 @@ a.modal-button {
   cursor: default;
 }
 
+/* "Get a key from Composio" — a quiet text link on its own row beneath the
+   card's content. Shares the row's horizontal padding so it lines up with the
+   titles above it instead of sitting flush against the card edge. */
+.onboarding-link {
+  display: block;
+  width: 100%;
+  padding: 0 16px 14px;
+  background: none;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  text-align: start;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.onboarding-link:hover {
+  color: var(--text-primary);
+}
+
 .onboarding-row-state {
   display: inline-flex;
   flex-shrink: 0;
@@ -5324,6 +5343,14 @@ a.modal-button {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Inside a card (the Composio step) the row has to pick up the same inset the
+   card's own rows use, or the field and its button sit flush against the card
+   edge while the title above them is indented. The Tinfoil step's key row is
+   not in a card and keeps its full width. */
+.onboarding-card .onboarding-key-row {
+  padding: 0 16px 14px;
 }
 
 .onboarding-key-row .creator-name {

@@ -5,7 +5,7 @@ import { PillSelect } from "@/components/PillSelect";
 import { MAX_USER_NAME_LENGTH } from "@/components/SettingsModal";
 import type { AgentShape, AvatarTone } from "@/data/agents";
 import { COMPOSIO_DASHBOARD_URL, composioSignedIn, forgetComposioSession } from "@/lib/composio";
-import { composioLogIn } from "@/lib/composio-oauth";
+import { composioLogIn, OauthError } from "@/lib/composio-oauth";
 import { requestNotificationPermission } from "@/lib/notify";
 import { getSecret, setSecret } from "@/lib/secrets";
 import { openExternal } from "@/lib/tauri";
@@ -83,7 +83,7 @@ const TRIO = [
   compactScale: number;
 }[];
 
-type PermissionState = "idle" | "granted" | "denied" | "unavailable";
+type PermissionState = "idle" | "granted" | "denied" | "unavailable" | "translocated";
 
 /**
  * Shown, not resolved: the real path comes from Rust (`store::data_root`) and
@@ -124,9 +124,18 @@ type KeyState = "idle" | "saved" | "rejected";
 type ComposioState =
   | { kind: "idle" }
   | { kind: "checking" }
-  | { kind: "needsKey" }
+  /** Not connected yet. One button: log in. */
+  | { kind: "signedOut" }
   | { kind: "verifying" }
   | { kind: "signedIn" }
+  /**
+   * Sign-in failed, so the key field is offered as the way through.
+   *
+   * A fallback, and only shown once it is needed: a key is what the transport
+   * reaches for when there is no OAuth token (see composio-mcp credential()),
+   * and showing both up front read as "log in, THEN fetch a key, THEN paste
+   * it" — three chores for what is one button.
+   */
   | { kind: "failed"; message: string };
 
 /**
@@ -267,7 +276,7 @@ export function Onboarding({
     void (async () => {
       // Already keyed is a real state on a replayed run; asking again there
       // would invite a pointless second paste.
-      setComposio({ kind: (await composioSignedIn()) ? "signedIn" : "needsKey" });
+      setComposio({ kind: (await composioSignedIn()) ? "signedIn" : "signedOut" });
     })();
   }, [step, composio.kind]);
 
@@ -284,11 +293,23 @@ export function Onboarding({
     try {
       await composioLogIn(openExternal);
       forgetComposioSession();
-      setComposio((await composioSignedIn()) ? { kind: "signedIn" } : { kind: "needsKey" });
+      setComposio(
+        (await composioSignedIn())
+          ? { kind: "signedIn" }
+          : // Came back from the browser without a working session: say so,
+            // which is also what reveals the key fallback.
+            { kind: "failed", message: "That did not connect. Paste a key instead?" },
+      );
     } catch (error) {
+      // Our own OauthError messages are written for this screen ("Session
+      // expired\u2026"); anything else is a stack-shaped string from a failed
+      // invoke, which tells the user nothing they can act on. Both end in the
+      // same place \u2014 the key field below \u2014 so unknown failures say that
+      // instead of leaking "Cannot read properties of undefined".
+      const known = error instanceof OauthError ? error.message : null;
       setComposio({
         kind: "failed",
-        message: error instanceof Error ? error.message : String(error),
+        message: known ?? "Sign-in did not work here. Paste a key instead?",
       });
     }
   };
@@ -430,6 +451,10 @@ export function Onboarding({
                         <Check size={13} strokeWidth={2.2} aria-hidden="true" />
                         Allowed
                       </>
+                    ) : notifications === "translocated" ? (
+                      // Not the user's doing: they clicked Allow and macOS
+                      // threw the grant away with the temporary copy.
+                      "Move to Applications first"
                     ) : notifications === "denied" ? (
                       "Not allowed"
                     ) : (
@@ -583,14 +608,27 @@ export function Onboarding({
                     disabled={composio.kind === "verifying"}
                     onClick={() => void logInComposio()}
                   >
-                    {composio.kind === "verifying" ? "Working\u2026" : "Log in with Composio"}
+                    {composio.kind === "verifying"
+                      ? "Working\u2026"
+                      : composio.kind === "failed"
+                        ? "Try again"
+                        : "Log in with Composio"}
                   </button>
                 </div>
               )}
-              {composio.kind === "signedIn" ? null : (
+              {/* The key is the fallback for when the browser sign-in cannot
+                  work \u2014 SSO that refuses a loopback redirect, a locked-down
+                  machine \u2014 so it appears only once sign-in has actually
+                  failed. Shown alongside the button from the start, it read as
+                  "log in, then fetch a key, then paste it": three chores for
+                  what is one click. */}
+              {composio.kind !== "failed" ? null : (
                 <div className="onboarding-key-row">
                   <input
-                    className="onboarding-key-input"
+                    // The same field style the Tinfoil step uses; a key row is
+                    // a key row, and this one had a class with no CSS behind
+                    // it, so it rendered as a raw browser input.
+                    className="creator-name"
                     type="password"
                     value={composioKey}
                     placeholder="ck_…"
@@ -608,20 +646,22 @@ export function Onboarding({
                   <button
                     type="button"
                     className="onboarding-allow"
-                    disabled={composio.kind === "verifying" || composioKey.trim() === ""}
+                    disabled={composioKey.trim() === ""}
                     onClick={() => void saveComposioKey()}
                   >
-                    {composio.kind === "verifying" ? "Checking" : "Connect"}
+                    Connect
                   </button>
                 </div>
               )}
-              <button
-                type="button"
-                className="onboarding-link"
-                onClick={() => void openExternal(COMPOSIO_DASHBOARD_URL)}
-              >
-                Get a key from Composio
-              </button>
+              {composio.kind !== "failed" ? null : (
+                <button
+                  type="button"
+                  className="onboarding-link"
+                  onClick={() => void openExternal(COMPOSIO_DASHBOARD_URL)}
+                >
+                  Get a key from Composio
+                </button>
+              )}
             </div>
           </div>
         );

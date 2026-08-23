@@ -50,7 +50,7 @@ export function shouldNotify(event: {
  * lists the app in System Settings, and drops every notification it sends.
  */
 export async function requestNotificationPermission(): Promise<
-  "granted" | "denied" | "unavailable"
+  "granted" | "denied" | "unavailable" | "translocated"
 > {
   if (!isTauri()) {
     return "unavailable";
@@ -59,7 +59,11 @@ export async function requestNotificationPermission(): Promise<
     const { invoke } = await import("@tauri-apps/api/core");
     // "unavailable" also arrives from Rust when the process has no app bundle
     // to hang a notification center on — i.e. a `cargo run` dev build.
-    return await invoke<"granted" | "denied" | "unavailable">("request_notification_permission");
+    // "translocated" means the app is running from the DMG on a throwaway
+    // path, where a granted permission cannot stick (see notifications.rs).
+    return await invoke<"granted" | "denied" | "unavailable" | "translocated">(
+      "request_notification_permission",
+    );
   } catch {
     // The command is missing or the OS refused to answer.
     return "unavailable";
