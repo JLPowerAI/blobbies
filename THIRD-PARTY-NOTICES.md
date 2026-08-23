@@ -181,6 +181,8 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | alloc-no-stdlib | 2.0.4 | BSD-3-Clause — Daniel Reiter Horn <danielrh@dropbox.com> | https://github.com/dropbox/rust-alloc-no-stdlib |
 | alloc-stdlib | 0.2.4 | BSD-3-Clause — Daniel Reiter Horn <danielrh@dropbox.com> | https://github.com/dropbox/rust-alloc-no-stdlib |
 | android_system_properties | 0.1.6 | MIT OR Apache-2.0 — Nicolas Silva <nical@fastmail.com> | https://github.com/nical/android_system_properties |
+| annotate-snippets | 0.11.5 | MIT OR Apache-2.0 | https://github.com/rust-lang/annotate-snippets-rs |
+| anstyle | 1.0.14 | MIT OR Apache-2.0 | https://github.com/rust-cli/anstyle.git |
 | anyhow | 1.0.104 | MIT OR Apache-2.0 — David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/anyhow |
 | arbitrary | 1.4.2 | MIT OR Apache-2.0 — The Rust-Fuzz Project Developers, Nick Fitzgerald <fitzgen@gmail.com>, Manish Goregaokar <manishsmail@gmail.com>, Simonas Kazlauskas <arbitrary@kazlauskas.me>, Brian L. Troutwine <brian@troutwine.us>, Corey Farwell <coreyf@rwell.org> | https://github.com/rust-fuzz/arbitrary/ |
 | async-broadcast | 0.7.2 | MIT OR Apache-2.0 — Stjepan Glavina <stjepang@gmail.com>, Yoshua Wuyts <yoshuawuyts@gmail.com>, Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/smol-rs/async-broadcast |
@@ -199,6 +201,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | autocfg | 1.5.1 | Apache-2.0 OR MIT — Josh Stone <cuviper@gmail.com> | https://github.com/cuviper/autocfg |
 | base64 | 0.21.7 | MIT OR Apache-2.0 — Alice Maz <alice@alicemaz.com>, Marshall Pierce <marshall@mpierce.org> | https://github.com/marshallpierce/rust-base64 |
 | base64 | 0.22.1 | MIT OR Apache-2.0 — Marshall Pierce <marshall@mpierce.org> | https://github.com/marshallpierce/rust-base64 |
+| bindgen | 0.72.1 | BSD-3-Clause — Jyun-Yan You <jyyou.tw@gmail.com>, Emilio Cobos Álvarez <emilio@crisal.io>, Nick Fitzgerald <fitzgen@gmail.com>, The Servo project developers | https://github.com/rust-lang/rust-bindgen |
 | bit-set | 0.8.0 | Apache-2.0 OR MIT — Alexis Beingessner <a.beingessner@gmail.com> | https://github.com/contain-rs/bit-set |
 | bit-vec | 0.8.0 | Apache-2.0 OR MIT — Alexis Beingessner <a.beingessner@gmail.com> | https://github.com/contain-rs/bit-vec |
 | bitflags | 1.3.2 | MIT/Apache-2.0 — The Rust Project Developers | https://github.com/bitflags/bitflags |
@@ -210,6 +213,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | brotli-decompressor | 5.0.3 | BSD-3-Clause/MIT — Daniel Reiter Horn <danielrh@dropbox.com>, The Brotli Authors | https://github.com/dropbox/rust-brotli-decompressor |
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 — Nick Fitzgerald <fitzgen@gmail.com> | https://github.com/fitzgen/bumpalo |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT — Lokathor <zefria@gmail.com> | https://github.com/Lokathor/bytemuck |
+| bytemuck_derive | 1.12.0 | Zlib OR Apache-2.0 OR MIT — Lokathor <zefria@gmail.com> | https://github.com/Lokathor/bytemuck |
 | byteorder | 1.5.0 | Unlicense OR MIT — Andrew Gallant <jamslam@gmail.com> | https://github.com/BurntSushi/byteorder |
 | byteorder-lite | 0.1.0 | Unlicense OR MIT | https://github.com/image-rs/byteorder-lite |
 | bytes | 1.12.1 | MIT — Carl Lerche <me@carllerche.com>, Sean McArthur <sean@seanmonstar.com> | https://github.com/tokio-rs/bytes |
@@ -221,17 +225,21 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | cargo-platform | 0.1.9 | MIT OR Apache-2.0 | https://github.com/rust-lang/cargo |
 | cc | 1.4.2 | MIT OR Apache-2.0 | https://github.com/rust-lang/cc-rs |
 | cesu8 | 1.1.0 | Apache-2.0/MIT — Eric Kidd <git@randomhacks.net> | https://github.com/emk/cesu8-rs |
+| cexpr | 0.6.0 | Apache-2.0/MIT — Jethro Beekman <jethro@jbeekman.nl> | https://github.com/jethrogb/rust-cexpr |
 | cfb | 0.7.3 | MIT — Matthew D. Steele <mdsteele@alum.mit.edu> | https://github.com/mdsteele/rust-cfb |
 | cfg_aliases | 0.2.2 | MIT — Zicklag <zicklag@katharostech.com> | https://github.com/katharostech/cfg_aliases |
 | cfg-expr | 0.15.8 | MIT OR Apache-2.0 — Embark <opensource@embark-studios.com>, Jake Shadle <jake.shadle@embark-studios.com> | https://github.com/EmbarkStudios/cfg-expr |
+| cfg-expr | 0.20.9 | MIT OR Apache-2.0 — Embark <opensource@embark-studios.com>, Jake Shadle <jake.shadle@embark-studios.com> | https://github.com/EmbarkStudios/cfg-expr |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 — Alex Crichton <alex@alexcrichton.com> | https://github.com/rust-lang/cfg-if |
 | chacha20 | 0.10.1 | MIT OR Apache-2.0 — RustCrypto Developers | https://github.com/RustCrypto/stream-ciphers |
 | chrono | 0.4.45 | MIT OR Apache-2.0 | https://github.com/chronotope/chrono |
+| clang-sys | 1.9.1 | Apache-2.0 — Kyle Mayes <kyle@mayeses.com> | https://github.com/KyleMayes/clang-sys |
 | color_quant | 1.1.0 | MIT — nwin <nwin@users.noreply.github.com> | https://github.com/image-rs/color_quant.git |
 | combine | 4.6.7 | MIT — Markus Westerlind <marwes91@gmail.com> | https://github.com/Marwes/combine |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT — Stjepan Glavina <stjepang@gmail.com>, Taiki Endo <te316e89@gmail.com>, John Nunley <dev@notgull.net> | https://github.com/smol-rs/concurrent-queue |
 | cookie | 0.18.2 | MIT OR Apache-2.0 — Sergio Benitez <sb@sergio.bz>, Alex Crichton <alex@alexcrichton.com> | https://github.com/SergioBenitez/cookie-rs |
 | cookie_store | 0.22.1 | MIT OR Apache-2.0 — Patrick Fernie <patrick.fernie@gmail.com> | https://github.com/pfernie/cookie_store |
+| cookie-factory | 0.3.3 | MIT — Geoffroy Couprie <geo.couprie@gmail.com>, Pierre Chifflier <chifflier@wzdftpd.net> | https://github.com/rust-bakery/cookie-factory |
 | core-foundation | 0.9.4 | MIT OR Apache-2.0 — The Servo Project Developers | https://github.com/servo/core-foundation-rs |
 | core-foundation | 0.10.1 | MIT OR Apache-2.0 — The Servo Project Developers | https://github.com/servo/core-foundation-rs |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 — The Servo Project Developers | https://github.com/servo/core-foundation-rs |
@@ -264,11 +272,18 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | dirs-sys | 0.5.0 | MIT OR Apache-2.0 — Simon Ochsenreither <simon@ochsenreither.de> | https://github.com/dirs-dev/dirs-sys-rs |
 | dispatch2 | 0.3.1 | Zlib OR Apache-2.0 OR MIT — Mads Marquart <mads@marquart.dk>, Mary <mary@mary.zone> | https://github.com/madsmtm/objc2 |
 | displaydoc | 0.2.7 | MIT OR Apache-2.0 — Jane Lusby <jlusby@yaah.dev> | https://github.com/yaahc/displaydoc |
+| dlib | 0.5.3 | MIT — Elinor Berger <elinor@safaradeg.net> | https://github.com/elinorbgr/dlib |
 | dlopen2 | 0.8.2 | MIT — Szymon Wieloch <szymon.wieloch@gmail.com>, Ahmed Masud <ahmed.masud@saf.ai>, OpenByte <development.openbyte@gmail.com> | https://github.com/OpenByteDev/dlopen2 |
 | dlopen2_derive | 0.4.3 | MIT — Szymon Wieloch <szymon.wieloch@gmail.com>, OpenByte <development.openbyte@gmail.com> | https://github.com/OpenByteDev/dlopen2 |
 | document-features | 0.2.12 | MIT OR Apache-2.0 — Slint Developers <info@slint.dev> | https://github.com/slint-ui/document-features |
 | dom_query | 0.27.0 | MIT — niklak <morgenpurple@gmail.com>, importcjj <importcjj@gmail.com> | https://github.com/niklak/dom_query |
+| downcast-rs | 1.2.1 | MIT/Apache-2.0 — Ashish Myles <marcianx@gmail.com>, Runji Wang <wangrunji0408@163.com> | https://github.com/marcianx/downcast-rs |
 | dpi | 0.1.2 | Apache-2.0 AND MIT | https://github.com/rust-windowing/winit |
+| drm | 0.14.1 | MIT — Tyler Slabinski <tslabinski@slabity.net>, Victoria Brekenfeld <crates-io@drakulix.de> | https://github.com/Smithay/drm-rs |
+| drm | 0.15.0 | MIT — Tyler Slabinski <slabity@slabity.dev>, Victoria Brekenfeld <crates-io@drakulix.de> | https://github.com/Smithay/drm-rs |
+| drm-ffi | 0.9.1 | MIT — Tyler Slabinski <tslabinski@slabity.net> | https://github.com/Smithay/drm-rs |
+| drm-fourcc | 2.2.0 | MIT — Daniel Franklin <daniel@danielzfranklin.org> | https://github.com/danielzfranklin/drm-fourcc-rs |
+| drm-sys | 0.8.1 | MIT — Tyler Slabinski <tslabinski@slabity.net> | https://github.com/Smithay/drm-rs |
 | dtoa | 1.0.11 | MIT OR Apache-2.0 — David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/dtoa |
 | dtoa-short | 0.3.5 | MPL-2.0 — Xidorn Quan <me@upsuper.org> | https://github.com/upsuper/dtoa-short |
 | dtor | 0.3.0 | Apache-2.0 OR MIT — Matt Mastracci <matthew@mastracci.com> | https://github.com/mmastrac/rust-ctor |
@@ -309,6 +324,8 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | futures-sink | 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs |
 | futures-task | 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs |
 | futures-util | 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs |
+| gbm | 0.18.0 | MIT — Victoria Brekenfeld <github@drakulix.de> | https://github.com/Smithay/gbm.rs |
+| gbm-sys | 0.4.0 | MIT — Drakulix (Victor Brekenfeld) | https://github.com/Drakulix/gbm.rs/tree/master/gbm-sys |
 | gdk | 0.18.2 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk3-rs |
 | gdk-pixbuf | 0.18.5 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk-rs-core |
 | gdk-pixbuf-sys | 0.18.0 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk-rs-core |
@@ -323,6 +340,8 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | gif | 0.14.2 | MIT OR Apache-2.0 — The image-rs Developers | https://github.com/image-rs/image-gif |
 | gio | 0.18.4 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk-rs-core |
 | gio-sys | 0.18.1 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk-rs-core |
+| gl | 0.14.0 | Apache-2.0 — Brendan Zabarauskas <bjzaba@yahoo.com.au>, Corey Richardson, Arseny Kapoulkine | https://github.com/brendanzab/gl-rs/ |
+| gl_generator | 0.14.0 | Apache-2.0 — Brendan Zabarauskas <bjzaba@yahoo.com.au>, Corey Richardson, Arseny Kapoulkine | https://github.com/brendanzab/gl-rs/ |
 | glib | 0.18.5 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk-rs-core |
 | glib-macros | 0.18.5 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk-rs-core |
 | glib-sys | 0.18.1 | MIT — The gtk-rs Project Developers | https://github.com/gtk-rs/gtk-rs-core |
@@ -367,6 +386,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | ipnet | 2.12.1 | MIT OR Apache-2.0 — Kris Price <kris@krisprice.nz> | https://github.com/krisprice/ipnet |
 | is-docker | 0.2.0 | MIT — Sean Larkin <TheLarkInn@users.noreply.github.com> | https://github.com/TheLarkInn/is-docker |
 | is-wsl | 0.4.0 | MIT — Sean Larkin <TheLarkInn@users.noreply.github.com> | https://github.com/TheLarkInn/is-wsl |
+| itertools | 0.13.0 | MIT OR Apache-2.0 — bluss | https://github.com/rust-itertools/itertools |
 | itoa | 1.0.18 | MIT OR Apache-2.0 — David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/itoa |
 | javascriptcore-rs | 1.1.2 | MIT | https://github.com/tauri-apps/javascriptcore-rs |
 | javascriptcore-rs-sys | 1.1.1 | MIT — The Gtk-rs Project Developers | https://github.com/tauri-apps/javascriptcore-rs |
@@ -381,12 +401,20 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | jsonptr | 0.6.3 | MIT OR Apache-2.0 — chance dinkins, André Sá de Mello <codasm@pm.me> | https://github.com/chanced/jsonptr |
 | keyboard-types | 0.7.0 | MIT OR Apache-2.0 — Pyfisch <pyfisch@posteo.org> | https://github.com/pyfisch/keyboard-types |
 | keyring | 3.6.3 | MIT OR Apache-2.0 — Walther Chen <walther.chen@gmail.com>, Daniel Brotsky <dev@brotsky.com> | https://github.com/hwchen/keyring-rs.git |
+| khronos_api | 3.1.0 | Apache-2.0 — Brendan Zabarauskas <bjzaba@yahoo.com.au>, Corey Richardson, Arseny Kapoulkine, Pierre Krieger <pierre.krieger1708@gmail.com> | https://github.com/brendanzab/gl-rs/ |
+| khronos-egl | 6.0.0 | MIT/Apache-2.0 — Timothée Haudebourg <author@haudebourg.net>, Sean Kerr <sean@metatomic.io> | https://github.com/timothee-haudebourg/khronos-egl |
 | libappindicator | 0.9.0 | Apache-2.0 OR MIT | — |
 | libappindicator-sys | 0.9.0 | Apache-2.0 OR MIT | — |
 | libc | 0.2.189 | MIT OR Apache-2.0 | https://github.com/rust-lang/libc |
 | libdbus-sys | 0.2.7 | Apache-2.0/MIT — David Henningsson <diwic@ubuntu.com> | https://github.com/diwic/dbus-rs |
 | libloading | 0.7.4 | ISC — Simonas Kazlauskas <libloading@kazlauskas.me> | https://github.com/nagisa/rust_libloading/ |
+| libloading | 0.8.9 | ISC — Simonas Kazlauskas <libloading@kazlauskas.me> | https://github.com/nagisa/rust_libloading/ |
 | libredox | 0.1.19 | MIT — 4lDO2 <4lDO2@protonmail.com> | https://gitlab.redox-os.org/redox-os/libredox.git |
+| libspa | 0.10.1 | MIT — Tom Wagner <tom.a.wagner@protonmail.com>, Guillaume Desmottes <guillaume.desmottes@collabora.com> | https://gitlab.freedesktop.org/pipewire/pipewire-rs |
+| libspa-sys | 0.10.1 | MIT — Tom Wagner <tom.a.wagner@protonmail.com>, Guillaume Desmottes <guillaume.desmottes@collabora.com> | https://gitlab.freedesktop.org/pipewire/pipewire-rs |
+| libwayshot-xcap | 0.3.3 | BSD-2-Clause — Shinyzenith <https://aakash.is-a.dev> | https://github.com/nashaofu/wayshot |
+| linux-raw-sys | 0.4.15 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT — Dan Gohman <dev@sunfishcode.online> | https://github.com/sunfishcode/linux-raw-sys |
+| linux-raw-sys | 0.9.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT — Dan Gohman <dev@sunfishcode.online> | https://github.com/sunfishcode/linux-raw-sys |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT — Dan Gohman <dev@sunfishcode.online> | https://github.com/sunfishcode/linux-raw-sys |
 | litemap | 0.8.3 | Unicode-3.0 — The ICU4X Project Developers | https://github.com/unicode-org/icu4x |
 | litrs | 1.0.0 | MIT OR Apache-2.0 — Lukas Kalbertodt <lukas.kalbertodt@gmail.com> | https://github.com/LukasKalbertodt/litrs |
@@ -396,8 +424,10 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | mac-notification-sys | 0.6.15 | MIT/Apache-2.0 — Felix Döring <development@felixdoering.com>, Hendrik Sollich <hendrik@hoodie.de> | https://github.com/h4llow3En/mac-notification-sys |
 | markup5ever | 0.38.0 | MIT OR Apache-2.0 — The html5ever Project Developers | https://github.com/servo/html5ever |
 | memchr | 2.8.3 | Unlicense OR MIT — Andrew Gallant <jamslam@gmail.com>, bluss | https://github.com/BurntSushi/memchr |
+| memmap2 | 0.9.11 | MIT OR Apache-2.0 — Dan Burkert <dan@danburkert.com>, Yevhenii Reizner <razrfalcon@gmail.com>, The Contributors | https://github.com/RazrFalcon/memmap2-rs |
 | memoffset | 0.9.1 | MIT — Gilad Naaman <gilad.naaman@gmail.com> | https://github.com/Gilnaa/memoffset |
 | mime | 0.3.17 | MIT OR Apache-2.0 — Sean McArthur <sean@seanmonstar.com> | https://github.com/hyperium/mime |
+| minimal-lexical | 0.2.1 | MIT/Apache-2.0 — Alex Huszagh <ahuszagh@gmail.com> | https://github.com/Alexhuszagh/minimal-lexical |
 | minisign-verify | 0.2.5 | MIT — Frank Denis <github@pureftpd.org> | https://github.com/jedisct1/rust-minisign-verify |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 — Frommi <daniil.liferenko@gmail.com>, oyvindln <oyvindln@users.noreply.github.com>, Rich Geldreich richgel99@gmail.com | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide |
 | mio | 1.2.2 | MIT — Carl Lerche <me@carllerche.com>, Thomas de Zeeuw <thomasdezeeuw@gmail.com>, Tokio Contributors <team@tokio.rs> | https://github.com/tokio-rs/mio |
@@ -406,6 +436,8 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | ndk | 0.9.0 | MIT OR Apache-2.0 — The Rust Mobile contributors | https://github.com/rust-mobile/ndk |
 | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 — The Rust Windowing contributors | https://github.com/rust-mobile/ndk |
 | new_debug_unreachable | 1.0.6 | MIT — Matt Brubeck <mbrubeck@limpet.net>, Jonathan Reem <jonathan.reem@gmail.com> | https://github.com/mbrubeck/rust-debug-unreachable |
+| nom | 7.1.3 | MIT — contact@geoffroycouprie.com | https://github.com/Geal/nom |
+| nom | 8.0.0 | MIT — contact@geoffroycouprie.com | https://github.com/rust-bakery/nom |
 | notify-rust | 4.18.0 | MIT OR Apache-2.0 — Hendrik Sollich <hendrik@hoodie.de> | https://github.com/hoodie/notify-rust |
 | num_cpus | 1.17.0 | MIT OR Apache-2.0 — Sean McArthur <sean@seanmonstar.com> | https://github.com/seanmonstar/num_cpus |
 | num_enum | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 — Daniel Wagner-Hall <dawagner@gmail.com>, Daniel Henry-Mantilla <daniel.henry.mantilla@gmail.com>, Vincent Esche <regexident@gmail.com> | https://github.com/illicitonion/num_enum |
@@ -414,17 +446,26 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | num-traits | 0.2.19 | MIT OR Apache-2.0 — The Rust Project Developers | https://github.com/rust-num/num-traits |
 | objc2 | 0.6.4 | MIT — Mads Marquart <mads@marquart.dk> | https://github.com/madsmtm/objc2 |
 | objc2-app-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
+| objc2-av-foundation | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
+| objc2-avf-audio | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-cloud-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
+| objc2-core-audio | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
+| objc2-core-audio-types | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-core-data | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-core-foundation | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-core-graphics | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-core-image | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-core-location | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
+| objc2-core-media | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-core-text | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
+| objc2-core-video | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-encode | 4.1.0 | MIT — Mads Marquart <mads@marquart.dk> | https://github.com/madsmtm/objc2 |
 | objc2-exception-helper | 0.1.1 | Zlib OR Apache-2.0 OR MIT — Mads Marquart <mads@marquart.dk> | https://github.com/madsmtm/objc2 |
 | objc2-foundation | 0.3.2 | MIT | https://github.com/madsmtm/objc2 |
+| objc2-image-io | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-io-surface | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
+| objc2-media-toolbox | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
+| objc2-metal | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-osa-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-quartz-core | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-ui-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
@@ -450,6 +491,8 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | phf_shared | 0.13.1 | MIT — Steven Fackler <sfackler@gmail.com> | https://github.com/rust-phf/rust-phf |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT | https://github.com/taiki-e/pin-project-lite |
 | piper | 0.2.5 | MIT OR Apache-2.0 — Stjepan Glavina <stjepang@gmail.com>, John Nunley <dev@notgull.net> | https://github.com/smol-rs/piper |
+| pipewire | 0.10.1 | MIT — Tom Wagner <tom.a.wagner@protonmail.com>, Guillaume Desmottes <guillaume.desmottes@collabora.com> | https://gitlab.freedesktop.org/pipewire/pipewire-rs |
+| pipewire-sys | 0.10.1 | MIT — Tom Wagner <tom.a.wagner@protonmail.com>, Guillaume Desmottes <guillaume.desmottes@collabora.com> | https://gitlab.freedesktop.org/pipewire/pipewire-rs |
 | pkg-config | 0.3.34 | MIT OR Apache-2.0 — Alex Crichton <alex@alexcrichton.com> | https://github.com/rust-lang/pkg-config-rs |
 | plist | 1.10.0 | MIT — Ed Barnard <eabarnard@gmail.com> | https://github.com/ebarnard/rust-plist/ |
 | png | 0.17.16 | MIT OR Apache-2.0 — The image-rs Developers | https://github.com/image-rs/image-png |
@@ -507,6 +550,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | rten-vecmath | 0.24.0 | MIT OR Apache-2.0 — Robert Knight | https://github.com/robertknight/rten |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 | https://github.com/djc/rustc-version-rs |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT — The Rust Project Developers | https://github.com/rust-lang/rustc-hash |
+| rustix | 0.38.44 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT — Dan Gohman <dev@sunfishcode.online>, Jakub Konka <kubkon@jakubkonka.com> | https://github.com/bytecodealliance/rustix |
 | rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT — Dan Gohman <dev@sunfishcode.online>, Jakub Konka <kubkon@jakubkonka.com> | https://github.com/bytecodealliance/rustix |
 | rustls | 0.23.43 | Apache-2.0 OR ISC OR MIT | https://github.com/rustls/rustls |
 | rustls-native-certs | 0.8.4 | Apache-2.0 OR ISC OR MIT | https://github.com/rustls/rustls-native-certs |
@@ -522,6 +566,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | schemars | 0.9.0 | MIT — Graham Esau <gesau@hotmail.co.uk> | https://github.com/GREsau/schemars |
 | schemars | 1.2.2 | MIT — Graham Esau <gesau@hotmail.co.uk> | https://github.com/GREsau/schemars |
 | schemars_derive | 0.8.22 | MIT — Graham Esau <gesau@hotmail.co.uk> | https://github.com/GREsau/schemars |
+| scoped-tls | 1.0.1 | MIT/Apache-2.0 — Alex Crichton <alex@alexcrichton.com> | https://github.com/alexcrichton/scoped-tls |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 — bluss | https://github.com/bluss/scopeguard |
 | security-framework | 2.11.1 | MIT OR Apache-2.0 — Steven Fackler <sfackler@gmail.com>, Kornel <kornel@geekhood.net> | https://github.com/kornelski/rust-security-framework |
 | security-framework | 3.7.0 | MIT OR Apache-2.0 — Steven Fackler <sfackler@gmail.com>, Kornel <kornel@geekhood.net> | https://github.com/kornelski/rust-security-framework |
@@ -544,6 +589,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | serialize-to-javascript-impl | 0.1.2 | MIT OR Apache-2.0 — Chip Reed <chip@chip.sh> | https://github.com/chippers/serialize-to-javascript |
 | servo_arc | 0.4.3 | MIT OR Apache-2.0 — The Servo Project Developers | https://github.com/servo/stylo |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 — RustCrypto Developers | https://github.com/RustCrypto/hashes |
+| shlex | 1.3.0 | MIT OR Apache-2.0 — comex <comexk@gmail.com>, Fenhl <fenhl@fenhl.net>, Adrian Taylor <adetaylor@chromium.org>, Alex Touchet <alextouchet@outlook.com>, Daniel Parks <dp+git@oxidized.org>, Garrett Berg <googberg@gmail.com> | https://github.com/comex/rust-shlex |
 | shlex | 2.0.1 | MIT OR Apache-2.0 — comex <comexk@gmail.com>, Fenhl <fenhl@fenhl.net>, Adrian Taylor <adetaylor@chromium.org>, Alex Touchet <alextouchet@outlook.com>, Daniel Parks <dp+git@oxidized.org>, Garrett Berg <googberg@gmail.com> | https://github.com/comex/rust-shlex |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 — Michal 'vorner' Vaner <vorner@vorner.cz>, Masaki Hara <ackie.h.gmai@gmail.com> | https://github.com/vorner/signal-hook |
 | simd_cesu8 | 1.2.0 | Apache-2.0 OR MIT — Sean C. Roach <me@seancroach.dev> | https://github.com/seancroach/simd_cesu8 |
@@ -570,10 +616,12 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | system-configuration | 0.7.0 | MIT OR Apache-2.0 — Mullvad VPN | https://github.com/mullvad/system-configuration-rs |
 | system-configuration-sys | 0.6.0 | MIT OR Apache-2.0 — Mullvad VPN | https://github.com/mullvad/system-configuration-rs |
 | system-deps | 6.2.2 | MIT OR Apache-2.0 — Guillaume Desmottes <guillaume.desmottes@collabora.com>, Josh Triplett <josh@joshtriplett.org> | https://github.com/gdesmott/system-deps |
+| system-deps | 7.0.8 | MIT OR Apache-2.0 — Guillaume Desmottes <guillaume.desmottes@collabora.com>, Josh Triplett <josh@joshtriplett.org> | https://github.com/gdesmott/system-deps |
 | tao | 0.35.3 | Apache-2.0 — Tauri Programme within The Commons Conservancy, The winit contributors | https://github.com/tauri-apps/tao |
 | tao-macros | 0.1.4 | MIT OR Apache-2.0 — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tao |
 | tar | 0.4.46 | MIT OR Apache-2.0 — Alex Crichton <alex@alexcrichton.com> | https://github.com/composefs/tar-rs |
 | target-lexicon | 0.12.16 | Apache-2.0 WITH LLVM-exception — Dan Gohman <sunfish@mozilla.com> | https://github.com/bytecodealliance/target-lexicon |
+| target-lexicon | 0.13.5 | Apache-2.0 WITH LLVM-exception — Dan Gohman <sunfish@mozilla.com> | https://github.com/bytecodealliance/target-lexicon |
 | tauri | 2.11.5 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tauri |
 | tauri-build | 2.6.3 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tauri |
 | tauri-codegen | 2.6.3 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tauri |
@@ -636,6 +684,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | unic-ucd-version | 0.9.0 | MIT/Apache-2.0 — The UNIC Project Developers | https://github.com/open-i18n/rust-unic/ |
 | unicode-ident | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 — David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/unicode-ident |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 — kwantam <kwantam@gmail.com>, Manish Goregaokar <manishsmail@gmail.com> | https://github.com/unicode-rs/unicode-segmentation |
+| unicode-width | 0.2.2 | MIT OR Apache-2.0 — kwantam <kwantam@gmail.com>, Manish Goregaokar <manishsmail@gmail.com> | https://github.com/unicode-rs/unicode-width |
 | untrusted | 0.9.0 | ISC — Brian Smith <brian@briansmith.org> | https://github.com/briansmith/untrusted |
 | url | 2.5.8 | MIT OR Apache-2.0 — The rust-url developers | https://github.com/servo/rust-url |
 | urlpattern | 0.3.0 | MIT — the Deno authors, crowlKats <crowlkats@toaxl.com> | https://github.com/denoland/rust-urlpattern |
@@ -655,6 +704,13 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | wasm-bindgen-macro-support | 0.2.127 | MIT OR Apache-2.0 — The wasm-bindgen Developers | https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro-support |
 | wasm-bindgen-shared | 0.2.127 | MIT OR Apache-2.0 — The wasm-bindgen Developers | https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared |
 | wasm-streams | 0.5.0 | MIT OR Apache-2.0 — Mattias Buelens <mattias@buelens.com> | https://github.com/MattiasBuelens/wasm-streams/ |
+| wayland-backend | 0.3.17 | MIT — Elinor Berger <elinor@safaradeg.net> | https://github.com/smithay/wayland-rs |
+| wayland-client | 0.31.15 | MIT — Elinor Berger <elinor@safaradeg.net> | https://github.com/smithay/wayland-rs |
+| wayland-protocols | 0.32.13 | MIT — Elinor Berger <elinor@safaradeg.net> | https://github.com/smithay/wayland-rs |
+| wayland-protocols-wlr | 0.3.12 | MIT — Elinor Berger <elinor@safaradeg.net> | https://github.com/smithay/wayland-rs |
+| wayland-scanner | 0.31.11 | MIT — Elinor Berger <elinor@safaradeg.net> | https://github.com/smithay/wayland-rs |
+| wayland-server | 0.31.14 | MIT — Elinor Berger <elinor@safaradeg.net> | https://github.com/smithay/wayland-rs |
+| wayland-sys | 0.31.11 | MIT — Elinor Berger <elinor@safaradeg.net> | https://github.com/smithay/wayland-rs |
 | web_atoms | 0.2.6 | MIT OR Apache-2.0 — The html5ever Project Developers | https://github.com/servo/html5ever |
 | web-sys | 0.3.104 | MIT OR Apache-2.0 — The wasm-bindgen Developers | https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys |
 | web-time | 1.1.0 | MIT OR Apache-2.0 | https://github.com/daxpedda/web-time |
@@ -666,12 +722,14 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | webview2-com-macros | 0.8.1 | MIT | https://github.com/wravery/webview2-rs |
 | webview2-com-sys | 0.38.2 | MIT | https://github.com/wravery/webview2-rs |
 | weezl | 0.1.12 | MIT OR Apache-2.0 — The image-rs Developers | https://github.com/image-rs/weezl |
+| widestring | 1.2.1 | MIT OR Apache-2.0 | https://github.com/VoidStarKat/widestring-rs |
 | winapi | 0.3.9 | MIT/Apache-2.0 — Peter Atashian <retep998@gmail.com> | https://github.com/retep998/winapi-rs |
 | winapi-i686-pc-windows-gnu | 0.4.0 | MIT/Apache-2.0 — Peter Atashian <retep998@gmail.com> | https://github.com/retep998/winapi-rs |
 | winapi-util | 0.1.11 | Unlicense OR MIT — Andrew Gallant <jamslam@gmail.com> | https://github.com/BurntSushi/winapi-util |
 | winapi-x86_64-pc-windows-gnu | 0.4.0 | MIT/Apache-2.0 — Peter Atashian <retep998@gmail.com> | https://github.com/retep998/winapi-rs |
 | window-vibrancy | 0.6.0 | Apache-2.0 OR MIT — Tauri Programme within The Commons Conservancy | https://github.com/tauri-apps/tauri-plugin-vibrancy |
 | windows | 0.61.3 | MIT OR Apache-2.0 — Microsoft | https://github.com/microsoft/windows-rs |
+| windows | 0.62.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows_aarch64_gnullvm | 0.42.2 | MIT OR Apache-2.0 — Microsoft | https://github.com/microsoft/windows-rs |
 | windows_aarch64_gnullvm | 0.52.6 | MIT OR Apache-2.0 — Microsoft | https://github.com/microsoft/windows-rs |
 | windows_aarch64_gnullvm | 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
@@ -696,14 +754,17 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 — Microsoft | https://github.com/microsoft/windows-rs |
 | windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-collections | 0.2.0 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
+| windows-collections | 0.3.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-core | 0.61.2 | MIT OR Apache-2.0 — Microsoft | https://github.com/microsoft/windows-rs |
 | windows-core | 0.62.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-future | 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
+| windows-future | 0.3.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-implement | 0.60.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-interface | 0.59.3 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-link | 0.1.3 | MIT OR Apache-2.0 — Microsoft | https://github.com/microsoft/windows-rs |
 | windows-link | 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-numerics | 0.2.0 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
+| windows-numerics | 0.3.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-registry | 0.6.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-result | 0.3.4 | MIT OR Apache-2.0 — Microsoft | https://github.com/microsoft/windows-rs |
 | windows-result | 0.4.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
@@ -718,6 +779,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | windows-targets | 0.52.6 | MIT OR Apache-2.0 — Microsoft | https://github.com/microsoft/windows-rs |
 | windows-targets | 0.53.5 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-threading | 0.1.0 | MIT OR Apache-2.0 — Microsoft | https://github.com/microsoft/windows-rs |
+| windows-threading | 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-version | 0.1.7 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | winnow | 0.5.40 | MIT | https://github.com/winnow-rs/winnow |
 | winnow | 0.7.15 | MIT | https://github.com/winnow-rs/winnow |
@@ -729,11 +791,15 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | x11 | 2.21.0 | MIT — daggerbot <daggerbot@gmail.com>, Erle Pereira <erle@erlepereira.com>, AltF02 <contact@altf2.dev> | https://github.com/AltF02/x11-rs.git |
 | x11-dl | 2.21.0 | MIT — daggerbot <daggerbot@gmail.com>, Erle Pereira <erle@erlepereira.com>, AltF02 <contact@altf2.dev> | https://github.com/AltF02/x11-rs.git |
 | xattr | 1.6.1 | MIT OR Apache-2.0 — Steven Allen <steven@stebalien.com> | https://github.com/Stebalien/xattr |
+| xcap | 0.9.8 | Apache-2.0 | https://github.com/nashaofu/xcap.git |
+| xcb | 1.7.1 | MIT — Remi Thebault <remi.thebault@gmail.com> | https://github.com/rust-x-bindings/rust-xcb |
+| xml-rs | 0.8.29 | MIT — Vladimir Matveev <vmatveev@citrine.cc> | https://github.com/kornelski/xml-rs |
 | yoke | 0.8.3 | Unicode-3.0 — Manish Goregaokar <manishsmail@gmail.com> | https://github.com/unicode-org/icu4x |
 | yoke-derive | 0.8.2 | Unicode-3.0 — Manish Goregaokar <manishsmail@gmail.com> | https://github.com/unicode-org/icu4x |
-| zbus | 5.13.2 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
-| zbus_macros | 5.13.2 | MIT — Marc-André Lureau <marcandre.lureau@redhat.com>, Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
-| zbus_names | 4.3.1 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
+| zbus | 5.19.0 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
+| zbus_macros | 5.19.0 | MIT — Marc-André Lureau <marcandre.lureau@redhat.com>, Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
+| zbus_names | 4.3.4 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
+| zcheapstr | 1.1.0 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zcheapstr/ |
 | zerocopy | 0.8.56 | BSD-2-Clause OR Apache-2.0 OR MIT | https://github.com/google/zerocopy |
 | zerocopy-derive | 0.8.56 | BSD-2-Clause OR Apache-2.0 OR MIT | https://github.com/google/zerocopy |
 | zerofrom | 0.1.8 | Unicode-3.0 — The ICU4X Project Developers | https://github.com/unicode-org/icu4x |
@@ -747,9 +813,9 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 | zmij | 1.0.23 | MIT — David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/zmij |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib | https://github.com/etemesi254/zune-image |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib — caleb <etemesicaleb@gmail.com> | https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg |
-| zvariant | 5.9.2 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
-| zvariant_derive | 5.9.2 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
-| zvariant_utils | 3.3.0 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org>, turbocooler <turbocooler@cocaine.ninja> | https://github.com/z-galaxy/zbus/ |
+| zvariant | 5.15.0 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
+| zvariant_derive | 5.15.0 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/z-galaxy/zbus/ |
+| zvariant_utils | 4.2.0 | MIT — Zeeshan Ali Khan <zeeshanak@gnome.org>, turbocooler <turbocooler@cocaine.ninja> | https://github.com/z-galaxy/zbus/ |
 
 ## MIT licence
 
