@@ -658,6 +658,66 @@ describe("ChatPane", () => {
     }
   });
 
+  it("holds the transcript still while the composer measures itself", async () => {
+    // The jump seen while typing (measured live, 271 position reversals in one
+    // typing burst before the fix). Auto-grow measures by setting the
+    // textarea's height to `auto`, which on a `rows={1}` field collapses it to
+    // a single line rather than resolving to the content height. For that
+    // instant the pane above is taller, its max scroll offset is smaller, and
+    // the engine clamps scrollTop down to fit. Restoring the height does not
+    // undo a clamp — so every keystroke dropped the transcript a line and some
+    // later resize sprang it back.
+    //
+    // jsdom has no layout, so the clamp is modelled where a browser applies
+    // it: every time the composer's height changes, the transcript's room is
+    // recomputed and any offset past the new end is cut down — and, as in a
+    // real engine, putting the height back does not restore the lost offset.
+    const user = userEvent.setup();
+    render(pane(false, vi.fn(), messages));
+    const el = document.querySelector(".message-scroll");
+    const textarea = screen.getByRole("textbox", { name: "Message Ken" });
+    expect(el).not.toBeNull();
+    if (el === null) return;
+
+    const CONTENT = 2000;
+    // Collapsed to one line, the composer hands 32px back to the transcript.
+    let height = "32px";
+    const viewport = () => (height === "auto" ? 512 : 480);
+    let top = 0;
+    const clamp = () => {
+      top = Math.max(0, Math.min(top, CONTENT - viewport()));
+    };
+    Object.defineProperty(el, "scrollHeight", { get: () => CONTENT, configurable: true });
+    Object.defineProperty(el, "clientHeight", { get: () => viewport(), configurable: true });
+    Object.defineProperty(el, "scrollTop", {
+      get: () => top,
+      set: (value: number) => {
+        top = Math.max(0, Math.min(value, CONTENT - viewport()));
+      },
+      configurable: true,
+    });
+    Object.defineProperty(textarea.style, "height", {
+      get: () => height,
+      set: (value: string) => {
+        height = value;
+        clamp();
+      },
+      configurable: true,
+    });
+
+    // Parked at the bottom, following the conversation.
+    const bottom = CONTENT - viewport();
+    el.scrollTop = bottom;
+
+    // Grow: a draft long enough to wrap, typed a character at a time.
+    await user.type(textarea, "hey can you take a look at this and tell me what you think");
+    expect(top).toBe(bottom);
+
+    // Shrink: the same draft deleted again, which collapses the composer back.
+    await user.clear(textarea);
+    expect(top).toBe(bottom);
+  });
+
   it("says so when the conversation has stopped saving", () => {
     // Silence is the dangerous case here: every message is still on screen,
     // so nothing looks wrong until a restart drops the unsaved tail.

@@ -10,6 +10,7 @@ mod shell;
 mod skills;
 mod store;
 mod textutil;
+mod tray;
 
 pub use error::Error;
 
@@ -62,15 +63,54 @@ pub fn run() {
         .setup(|app| {
             store::startup_maintenance(app.handle());
             skills::seed_bundled(app.handle());
+            // Best-effort: an app with no tray icon is a smaller failure than
+            // no app at all, and every tray action has an equivalent inside
+            // the window.
+            if let Err(error) = tray::init(app.handle()) {
+                eprintln!("could not create the tray icon: {error}");
+            }
             Ok(())
+        })
+        .menu(tray::app_menu)
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == tray::HIDE_ID {
+                tray::hide_main_window(app);
+            }
+        })
+        // Closing the window puts Blobbies in the tray rather than ending it:
+        // routines run on a schedule and finished runs raise notifications, so
+        // a red X that killed the process would silently switch those off.
+        // ⌘Q lands on the menu item above, and the dock's Quit on the run loop
+        // below; the tray's Quit Blobbies is the one way out.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == "main"
+            {
+                let _ = window.hide();
+                api.prevent_close();
+            }
         })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|app, event| {
+        .run(|app, event| match event {
+            // ⌘Q, the dock's Quit, "Quit" in the app menu: all of them mean
+            // "get this off my screen", and none of them should stop the
+            // schedule. Hide instead, exactly like the window's close button.
+            //
+            // `code` is what separates the two intents — Tauri leaves it
+            // `None` for a user gesture and sets it for a programmatic
+            // `exit()`, which is what the tray's Quit calls. So the tray item
+            // falls straight through here and really does end the process, and
+            // it stays the only thing that can.
+            tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } => {
+                api.prevent_exit();
+                tray::hide_main_window(app);
+            }
             // Release the model's memory (weights + KV-cache snapshots, gigabytes)
             // as soon as the app closes, instead of waiting out keep_alive.
-            if matches!(event, tauri::RunEvent::Exit) {
-                commands::ollama_unload_on_exit(app);
-            }
+            tauri::RunEvent::Exit => commands::ollama_unload_on_exit(app),
+            _ => {}
         });
 }

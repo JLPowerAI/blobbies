@@ -27,7 +27,9 @@ tauri-build = { version = "2.6.3", features = [] }
 sha2 = "0.10.9"
 
 [dependencies]
-tauri = { version = "2.11.5", features = [] }
+# `tray-icon` puts Blobbies in the menu bar (src/tray.rs); `image-png` decodes
+# the template icon that goes in it.
+tauri = { version = "2.11.5", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2.5.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

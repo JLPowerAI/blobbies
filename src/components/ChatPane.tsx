@@ -965,12 +965,30 @@ export function ChatPane({
     if (el === null) {
       return;
     }
+    // The measurement below moves the transcript, and that is the composer's
+    // best-known jump: `height: auto` on a `rows={1}` textarea does not resolve
+    // to the content height, it collapses the field to one line. Reading
+    // `scrollHeight` forces layout in that collapsed state, the scroller above
+    // grows by the lines the composer just gave back, and the engine clamps
+    // scrollTop down to the shorter extent. Restoring the height does not undo
+    // a clamp — so the transcript stays one line low until some later resize
+    // re-pins it, which is the drop-and-spring-back seen while typing.
+    //
+    // Nothing here is allowed to paint, so the position is simply put back
+    // where the keystroke found it. Via `scrollTo`, because the pane sets
+    // `scroll-behavior: smooth` and an assignment to `scrollTop` would animate
+    // this correction into the very glide it exists to prevent.
+    const scroller = scrollRef.current;
+    const parked = scroller?.scrollTop;
     const previous = el.offsetHeight;
     el.style.height = "auto";
     const next = Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT);
     el.style.height = `${previous}px`;
     void el.offsetHeight; // commit the starting point before animating
     el.style.height = `${next}px`;
+    if (scroller !== null && parked !== undefined && scroller.scrollTop !== parked) {
+      scroller.scrollTo({ top: parked, behavior: "instant" });
+    }
     el.style.overflowY = next >= COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
     // A completed mention asked for the caret to land mid-draft; the value is
     // on screen now, so this is the first moment the range is valid.

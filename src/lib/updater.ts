@@ -248,6 +248,36 @@ export function initAutoUpdate(): void {
   window.setInterval(() => void checkForUpdates(), AUTO_CHECK_INTERVAL_MS);
 }
 
+/** The tray's "Check for Updates" item emits this (see `src-tauri/src/tray.rs`).
+ *  Kept next to the updater rather than in the component that listens, so the
+ *  name has one definition on the TypeScript side. */
+export const TRAY_CHECK_UPDATES_EVENT = "tray://check-for-updates";
+
+/**
+ * Run `handler` whenever the tray asks for an update check. Returns an
+ * unsubscribe. No-op (and no Tauri import) in a plain browser or in tests.
+ *
+ * Async subscription with a synchronous unsubscribe: `listen` resolves after
+ * an IPC round trip, so an unmount that lands first has to be remembered, or
+ * the listener outlives the component that asked for it.
+ */
+export function onTrayUpdateCheck(handler: () => void): () => void {
+  if (!isTauri()) return () => {};
+  let unlisten: (() => void) | null = null;
+  let stopped = false;
+  void import("@tauri-apps/api/event")
+    .then(({ listen }) => listen(TRAY_CHECK_UPDATES_EVENT, handler))
+    .then((off) => {
+      if (stopped) off();
+      else unlisten = off;
+    })
+    .catch(() => {});
+  return () => {
+    stopped = true;
+    unlisten?.();
+  };
+}
+
 /** Dev-only: drive the real state machine with a fake update, for visual work. */
 export async function simulateUpdate(): Promise<void> {
   setState({ phase: "available", version: "9.9.9", currentVersion: "0.1.0" });

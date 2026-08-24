@@ -74,6 +74,7 @@ import { playChime } from "@/lib/sound";
 import * as store from "@/lib/store";
 import { openExternal } from "@/lib/tauri";
 import { isTinfoilModel } from "@/lib/tinfoil-model";
+import { checkForUpdates, onTrayUpdateCheck } from "@/lib/updater";
 import "./App.css";
 
 // The provider stack (`@/lib/ai` → gg-ai + the OpenAI SDK + zod + Tinfoil,
@@ -956,6 +957,20 @@ export function App() {
     setSettingsTab(tab);
     setSettingsOpen(true);
   };
+
+  // "Check for Updates" in the tray menu. The window is already back on screen
+  // by the time this fires (Rust shows it first), so all that is left is to
+  // land on the tab that reports the result and start the same check its own
+  // button runs — one updater state machine, two ways in.
+  useEffect(() => {
+    // Setters rather than `openSettingsModal`, which is rebuilt every render
+    // and would resubscribe the tray listener along with it.
+    return onTrayUpdateCheck(() => {
+      setSettingsTab("updates");
+      setSettingsOpen(true);
+      void checkForUpdates();
+    });
+  }, []);
 
   /** Perform whatever a search palette row points at, then close the palette. */
   const openSearchResult = (result: SearchResult) => {
