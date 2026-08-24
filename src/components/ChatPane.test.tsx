@@ -413,6 +413,168 @@ describe("ChatPane", () => {
     expect(screen.queryByRole("button", { name: "Stop replying" })).not.toBeInTheDocument();
   });
 
+  it("opens another conversation at its bottom instantly, never on a glide", () => {
+    // The chat shooting upward out of sight when clicking into another
+    // session. `prevMessageCount` belongs to the conversation being left, so
+    // switching to a longer one whose last line is the user's own (sent, then
+    // clicked away) read as "the user just sent a message" and glided there.
+    // A smooth scroll animates toward the extent it measured when it started,
+    // while the incoming transcript is still settling into a shorter one — so
+    // it sails past the end into blank, and only a real scroll re-clamps it.
+    const other: Agent = { ...agent, id: "9b0f0ac6-6b7c-4c33-8a0e-0b7b3e1d2f44", name: "Robin" };
+    const longer: Message[] = [
+      ...messages,
+      { id: "m3", kind: "text", author: "agent", segments: [{ text: "Ask away." }] },
+      { id: "m4", kind: "text", author: "user", segments: [{ text: "one sec" }] },
+    ];
+    const { rerender } = render(pane(false, vi.fn(), messages));
+    const el = document.querySelector(".message-scroll");
+    expect(el).not.toBeNull();
+    if (el === null) return;
+    const scrollTo = vi.fn();
+    el.scrollTo = scrollTo as unknown as typeof el.scrollTo;
+    Object.defineProperty(el, "scrollHeight", { get: () => 1200, configurable: true });
+
+    rerender(
+      <ChatPane
+        agent={other}
+        messages={longer}
+        thinking={false}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        onStop={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1200, behavior: "instant" });
+    for (const call of scrollTo.mock.calls) {
+      expect(call[0]).not.toMatchObject({ behavior: "smooth" });
+    }
+  });
+
+  it("holds the bottom when showing the sidebar reflows the transcript taller", () => {
+    // The second reported repro: hiding or showing the sidebar shoots the
+    // chat up out of sight, and a small scroll brings it back.
+    //
+    // A narrower pane wraps the same text into more lines, so the transcript
+    // grows *below* a fixed scrollTop and the engine fires a scroll event for
+    // it. That event is not the user: it arrives before the ResizeObserver
+    // callback for the same frame, and it flips `nearBottom` to false — so the
+    // burst's one decision ("was the user following?") reads a flag the
+    // reflow itself just falsified, declines to pin, and the newest message
+    // is left walked off the top of the viewport.
+    vi.useFakeTimers();
+    const callbacks: (() => void)[] = [];
+    class FakeObserver {
+      constructor(callback: () => void) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeObserver);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      render(pane(false, vi.fn(), messages));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (el === null) return;
+
+      const VIEWPORT = 200;
+      let height = 1000;
+      let top = height - VIEWPORT;
+      const seat = (value: number) => {
+        top = Math.max(0, Math.min(value, height - VIEWPORT));
+      };
+      Object.defineProperty(el, "scrollHeight", { get: () => height, configurable: true });
+      Object.defineProperty(el, "clientHeight", { get: () => VIEWPORT, configurable: true });
+      Object.defineProperty(el, "scrollTop", {
+        get: () => top,
+        set: seat,
+        configurable: true,
+      });
+      el.scrollTo = ((options: ScrollToOptions) =>
+        seat(options.top ?? top)) as unknown as typeof el.scrollTo;
+
+      // At rest at the bottom, with a real scroll event behind us: this is the
+      // honest baseline the pane is allowed to trust.
+      fireEvent.scroll(el);
+
+      // The reflow. Same text, narrower pane, more lines — the transcript
+      // grows below a scrollTop that has not moved, and the engine fires a
+      // scroll event for the geometry change.
+      height = 1400;
+      fireEvent.scroll(el);
+      // The ResizeObserver callback for that same frame, after the event.
+      act(() => {
+        for (const callback of callbacks) callback();
+      });
+      act(() => {
+        vi.advanceTimersByTime(320);
+      });
+      act(() => {
+        for (let guard = 0; frames.length > 0 && guard < 10; guard += 1) {
+          for (const cb of frames.splice(0)) cb(0);
+        }
+      });
+
+      // Still following the conversation: the newest message is on screen, and
+      // no jump arrow is offered over a chat nobody left.
+      expect(top).toBe(1400 - VIEWPORT);
+      expect(screen.queryByRole("button", { name: "Scroll to bottom" })).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("still lets the user scroll away while a reply is streaming in", () => {
+    // The guard above ignores a scroll event whose height changed while the
+    // position did not — that is a reflow, not a person. Streaming growth
+    // changes the height too, so the pane must not use it to ignore someone
+    // deliberately scrolling up mid-reply and yank them back down.
+    render(pane(true, vi.fn(), messages));
+    const el = document.querySelector(".message-scroll");
+    expect(el).not.toBeNull();
+    if (el === null) return;
+
+    const VIEWPORT = 200;
+    let height = 1000;
+    let top = height - VIEWPORT;
+    Object.defineProperty(el, "scrollHeight", { get: () => height, configurable: true });
+    Object.defineProperty(el, "clientHeight", { get: () => VIEWPORT, configurable: true });
+    Object.defineProperty(el, "scrollTop", {
+      get: () => top,
+      set: (value: number) => {
+        top = value;
+      },
+      configurable: true,
+    });
+    el.scrollTo = (() => {}) as unknown as typeof el.scrollTo;
+
+    fireEvent.scroll(el);
+    expect(screen.queryByRole("button", { name: "Scroll to bottom" })).not.toBeInTheDocument();
+
+    // A delta lands (height grows) and the user drags upward in the same
+    // breath: the position moved, so this is intent however the content
+    // shifted underneath it.
+    height = 1100;
+    top = 300;
+    fireEvent.scroll(el);
+
+    expect(screen.getByRole("button", { name: "Scroll to bottom" })).toBeInTheDocument();
+  });
+
   it("clamps a stale scroll extent when a panel resize settles", () => {
     // WebKit (the Tauri webview) can leave scrollTop past the content end
     // after the sidebar's width transition: the per-frame pin reads

@@ -688,6 +688,19 @@ export function ChatPane({
   const scrollRef = useRef<HTMLDivElement>(null);
   /** Whether the view is close enough to the bottom to auto-follow. */
   const nearBottomRef = useRef(true);
+  /**
+   * Geometry as of the last scroll event or programmatic pin.
+   *
+   * The scroll handler tells a user's intent from a reflow's by comparing
+   * against this: intent moves `top` at a constant `height`, reflow changes
+   * `height` under a `top` that stays put. Seeded from a pin as well as from
+   * events, so the first event after opening a conversation has something
+   * truthful to be compared with.
+   */
+  const lastMetrics = useRef({ top: 0, height: 0 });
+  const noteMetrics = (el: HTMLElement) => {
+    lastMetrics.current = { top: el.scrollTop, height: el.scrollHeight };
+  };
   const prevMessageCount = useRef(messages.length);
   /** True while a programmatic smooth scroll is in flight; its intermediate
       scroll events must not be mistaken for the user scrolling up. */
@@ -702,10 +715,37 @@ export function ChatPane({
   const resizingRef = useRef<boolean | null>(null);
   /** Pending double-rAF from the resize settle, so unmount can cancel it. */
   const settleFrame = useRef<number | undefined>(undefined);
+  /** Pending settle *timer* from the resize burst. In a ref for the same
+      reason as the frame: a conversation switch has to be able to cancel it,
+      and a timer parked in the observer's closure is unreachable from there —
+      it fired against the new conversation and re-seated it on the old one's
+      scroll position. */
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const flipRects = useRef(new Map<string, DOMRect>());
 
   /** What "this conversation" means here: one Blob, or one group. */
   const conversationKey = group?.id ?? agent.id;
+
+  /**
+   * Page size back to one page the moment the conversation changes — during
+   * render, not in an effect.
+   *
+   * An effect trims the transcript *after* this commit has already pinned the
+   * view to the bottom, so the pin measured a page-size the next paint throws
+   * away: scrollTop is written against content that then shrinks under it,
+   * which is precisely the overscroll (thread pushed up, blank below) this
+   * pane keeps being bitten by. Adjusting state during render is React's own
+   * answer to "derived from a prop": the second pass replaces this one before
+   * anything is committed, so the DOM never holds the old conversation's page.
+   */
+  const pagedKey = useRef(conversationKey);
+  if (pagedKey.current !== conversationKey) {
+    pagedKey.current = conversationKey;
+    setVisibleCount(MESSAGE_PAGE_SIZE);
+  }
+  /** The conversation the scroll position was last pinned for; compared in a
+      layout effect, which runs before the passive reset below. */
+  const pinnedKey = useRef(conversationKey);
 
   // Mention colours, groups only: a 1-to-1 chat has nobody to address, so
   // there is nothing to disambiguate and "@" is just a character.
@@ -792,7 +832,6 @@ export function ChatPane({
     setMultiline(false);
     setReactions({});
     setUnseenCount(0);
-    setVisibleCount(MESSAGE_PAGE_SIZE);
     setShowJump(false);
     // A page-load pending at switch time must not survive: its geometry
     // belongs to the old conversation, and a stale anchor blocks paging.
@@ -807,6 +846,8 @@ export function ChatPane({
       cancelAnimationFrame(settleFrame.current);
       settleFrame.current = undefined;
     }
+    clearTimeout(settleTimer.current);
+    settleTimer.current = undefined;
   }, [conversationKey]);
 
   // Older page mounted above the viewport: keep what the user was looking at
@@ -844,7 +885,6 @@ export function ChatPane({
     if (el === null || typeof ResizeObserver !== "function") {
       return;
     }
-    let settle: ReturnType<typeof setTimeout> | undefined;
     const observer = new ResizeObserver(() => {
       // First frame of the burst: was the user following the conversation
       // before any of this reflow happened?
@@ -862,10 +902,10 @@ export function ChatPane({
         // out of re-rendering when the state is already `false`.
         setShowJump(false);
       }
-      clearTimeout(settle);
+      clearTimeout(settleTimer.current);
       // Comfortably past the 260ms panel transition, so a burst is not split
       // into two and judged twice.
-      settle = setTimeout(() => {
+      settleTimer.current = setTimeout(() => {
         // WebKit can leave the scroll extent stale after a width transition:
         // the last per-frame pin read `scrollHeight` mid-reflow, so scrollTop
         // can sit past the final, shorter content — a pane that shows blank
@@ -893,7 +933,7 @@ export function ChatPane({
     });
     observer.observe(el);
     return () => {
-      clearTimeout(settle);
+      clearTimeout(settleTimer.current);
       if (settleFrame.current !== undefined) {
         cancelAnimationFrame(settleFrame.current);
         settleFrame.current = undefined;
@@ -908,6 +948,7 @@ export function ChatPane({
       autoScrollRef.current = behavior === "smooth";
       nearBottomRef.current = true;
       el.scrollTo({ top: el.scrollHeight, behavior });
+      noteMetrics(el);
       if (behavior === "instant") {
         // WebKit can report a stale scroll extent at pin time: a conversation
         // switch measures scrollHeight mid-swap (old messages tearing down,
@@ -936,11 +977,34 @@ export function ChatPane({
   // from scrolled-up), streaming growth sticks instantly while already at the
   // bottom, and anything arriving while scrolled up feeds the "new message"
   // pill instead.
+  //
+  // Opening a *different* conversation is none of those things, and has to be
+  // taken out first. `prevMessageCount` belongs to the thread being left, so
+  // `arrived` there subtracts one transcript's length from another's: switch
+  // to a longer thread whose last line happens to be the user's own — you sent
+  // something and clicked away — and this read "the user just sent a message",
+  // and glided. That glide is the chat visibly shooting upward out of sight:
+  // `scroll-behavior: smooth` animates toward the extent measured when it
+  // started, while the transcript underneath is still settling into a shorter
+  // one, so it sails past the end into blank space and stays there (the engine
+  // re-clamps only on the next real scroll, which is the small flick that
+  // brings it back). Nor does the smooth path get the instant path's settling
+  // re-pin. A conversation opens at its bottom, instantly, always.
   // biome-ignore lint/correctness/useExhaustiveDependencies(scrollToLatest): stable helper
   useLayoutEffect(() => {
+    const switched = pinnedKey.current !== conversationKey;
+    pinnedKey.current = conversationKey;
     const arrived = messages.length - prevMessageCount.current;
     prevMessageCount.current = messages.length;
     if (scrollRef.current === null) {
+      return;
+    }
+    if (switched) {
+      // Ahead of the passive reset below, which runs after this one and would
+      // otherwise leave the pin reading the departed conversation's flags.
+      autoScrollRef.current = false;
+      nearBottomRef.current = true;
+      scrollToLatest("instant");
       return;
     }
     const latest = messages.at(-1);
@@ -955,7 +1019,7 @@ export function ChatPane({
     if (arrived > 0) {
       setUnseenCount((count) => count + arrived);
     }
-  }, [messages]);
+  }, [messages, conversationKey]);
 
   // Auto-grow the textarea toward the cap, animating between the measured
   // heights. The transient `auto` never paints, so the height transition runs
@@ -1419,6 +1483,32 @@ export function ChatPane({
           // events it fires would flip this to "scrolled up" and raise the
           // jump arrow over a conversation nobody left.
           if (resizingRef.current !== null) {
+            noteMetrics(el);
+            return;
+          }
+          // The same reflow, one beat EARLIER than that flag can help.
+          //
+          // A resize burst is bracketed by `resizingRef`, but the first frame
+          // of it is not: the engine fires this scroll event before the
+          // ResizeObserver callback that opens the bracket. So the sidebar's
+          // very first reflow frame arrives here as an ordinary scroll, flips
+          // the flag to "scrolled up", and the observer — which decides once,
+          // by reading exactly that flag — then declines to hold the bottom.
+          // The transcript is left walked off the top of the viewport, and
+          // only a real scroll brings it back. Bracketing cannot fix this;
+          // the decision is poisoned before the bracket exists.
+          //
+          // What separates the two is measurable without any timing: the user
+          // scrolling moves `scrollTop` at a constant `scrollHeight`, while a
+          // reflow (or a streamed delta) changes `scrollHeight` under a
+          // `scrollTop` that has not moved. Both conditions are required, so
+          // scrolling away *during* streaming growth still counts as intent —
+          // the position moved — and the pane does not fight the user.
+          const last = lastMetrics.current;
+          const grew = el.scrollHeight !== last.height;
+          const moved = Math.abs(el.scrollTop - last.top) > 1;
+          noteMetrics(el);
+          if (grew && !moved) {
             return;
           }
           // A glide we started passes through "scrolled up" positions; ignore
