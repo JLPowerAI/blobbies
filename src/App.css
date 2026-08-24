@@ -4941,9 +4941,9 @@ a.modal-button {
   background: var(--surface-chat);
   animation: pane-fade-in 200ms var(--ease-standard);
   overflow: hidden;
-  /* Plain (inheriting) twin of the registered `--orbit-r` below, which
-     cannot inherit. The "one job" step reserves its height from this, since
-     the orbiting Blobs are absolutely positioned and measure zero. */
+  /* Half the width of the "one job" spread, and the height that step reserves
+     for it — the three are absolutely positioned there and measure zero, so
+     without this the step collapses to its heading. */
   --orbit-radius: clamp(74px, 16vh, 132px);
 }
 
@@ -4996,25 +4996,136 @@ a.modal-button {
   gap: 24px;
 }
 
-/* The trio sits behind the copy: on the "one job" step it is the content,
-   everywhere else it shrinks up and out of the way.
+/* Onboarding meme cards: up to one per corner of the window, behind the
+   content and unreachable by the pointer, so they can never take a click
+   meant for a button. */
+.onboarding-memes {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
 
-   A box centred on the flow rather than the window: the compact percentages
-   below are relative to *this*, so the three stay pinned around the content
-   at any size. Sized to the window it would track the window instead — which
-   stranded them in the corners of a 1080p display and drove them into the
-   heading on a short one. */
+/* Hidden on a small window rather than shrunk: the content column is 460px,
+   and a card that cannot clear it stops being decoration and becomes clutter
+   behind the text. A single card only has to clear one side, so it survives a
+   narrower window than a facing pair does. The height bound is the same
+   argument vertically, and applies to both. */
+@media (max-width: 820px), (max-height: 600px) {
+  .onboarding-memes {
+    display: none;
+  }
+}
+
+@media (max-width: 940px) {
+  .onboarding-memes[data-count="4"] {
+    display: none;
+  }
+}
+
+.onboarding-meme {
+  position: absolute;
+  display: flex;
+  width: clamp(132px, 14vw, 176px);
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border-hairline);
+  border-radius: 14px;
+  background: var(--surface-modal-card);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  aspect-ratio: 5 / 4;
+  opacity: 0;
+  /* Set per card so the tilt survives the keyframe, which needs the whole
+     transform to itself to combine the rise and the settle. */
+  --meme-rot: 0deg;
+  /* One pass per set, matching ROTATE_MS: in, hold, out, then the remount
+     starts the next one. `forwards` keeps the last frame (invisible) so a card
+     never flashes back at full opacity waiting for its replacement. */
+  animation: onboarding-meme-cycle 7s var(--ease-entrance) forwards;
+}
+
+/* The top pair clears the traffic lights and the drag strip above the flow;
+   the bottom pair only has to clear the window edge. */
+.onboarding-meme[data-v="top"] {
+  top: 62px;
+}
+.onboarding-meme[data-v="bottom"] {
+  bottom: 30px;
+}
+.onboarding-meme[data-h="left"] {
+  left: clamp(16px, 3vw, 44px);
+}
+.onboarding-meme[data-h="right"] {
+  right: clamp(16px, 3vw, 44px);
+}
+
+@keyframes onboarding-meme-cycle {
+  0% {
+    opacity: 0;
+    transform: rotate(var(--meme-rot)) scale(0.92) translateY(10px);
+  }
+  10%,
+  86% {
+    opacity: 1;
+    transform: rotate(var(--meme-rot)) scale(1) translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(var(--meme-rot)) scale(0.97) translateY(-6px);
+  }
+}
+
+.onboarding-meme-gif {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.onboarding-meme-emoji {
+  font-size: 52px;
+  line-height: 1;
+}
+
+/* Over the GIF rather than under it: a caption bar below would make the card a
+   poster. White on a scrim reads on any frame, and on either theme. */
+.onboarding-meme-caption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  /* Bottom padding is the roomiest side because the longest captions wrap to
+     two lines, and the second one would otherwise sit on the card's edge. */
+  padding: 20px 7px 10px;
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.82),
+    rgba(0, 0, 0, 0.5) 55%,
+    rgba(0, 0, 0, 0)
+  );
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: #fff;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* The trio sits behind the copy: on the "one job" step it is the content,
+   everywhere else it drifts around the window as decoration.
+
+   One box for both, always the whole window. It used to shrink to a centred
+   900×460 rail on the "one job" step, which meant the Blobs' `left`/`top`
+   percentages changed *base* the instant the step did: the transition ran, but
+   from a coordinate that no longer meant the same place, so all three jumped a
+   hundred-odd pixels on the first frame. Same box, same origin, no jump — the
+   "one job" spread is expressed from the window's centre below, which is where
+   the content column is anyway. */
 .onboarding-trio {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  /* Wider than the 460px content column on purpose: the compact positions
-     below are percentages of this box, and keeping them under ~20% or over
-     ~80% puts every Blob in the side margin, so none can land on a card or
-     a heading however the column grows. */
-  width: min(900px, 100%);
-  height: min(460px, 100%);
-  translate: -50% -50%;
+  inset: 0;
   pointer-events: none;
   /* The trio stays mounted for the whole flow so appearing (after welcome)
      and disappearing (back to it) fade smoothly instead of popping. */
@@ -5025,58 +5136,158 @@ a.modal-button {
   opacity: 0;
 }
 
-/* Orbit radius, registered so it can be *transitioned* while the rotation
-   keyframes are running: that is what lets the three spiral gently into their
-   corner positions instead of snapping there when the step changes. On an
-   engine without @property the var still substitutes, so the orbit runs and
-   only the collapse is instant. */
-@property --orbit-r {
-  syntax: "<length>";
-  inherits: false;
-  initial-value: 0px;
-}
-
-/* On the "one job" step the three share one anchor and are spread by phase,
-   so they read as one slow carousel; `left`/`top` are only overridden (per
-   Blob, inline) once the step goes compact. */
+/* On the "one job" step the three are simply spread across the middle and
+   fade in — they are the content of that step, and content should arrive, not
+   circle. `left`/`top` are overridden (per Blob, inline) once it goes
+   compact. */
 .onboarding-trio-blob {
   position: absolute;
-  left: 50%;
+  /* The spread lives in `left`, not in the arrival transform: a finite
+     animation reverts its transform on the last frame, which dropped all three
+     back onto the centre point the moment it ended. */
+  left: calc(50% + var(--spread-x, 0px));
   top: 48%;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  /* The registered property cannot inherit, so it is assigned here from the
-     inheriting `--orbit-radius` set on `.onboarding` — which is where the
-     shrink-with-the-window clamp lives. */
-  --orbit-r: var(--orbit-radius);
   translate: -50% -50%;
-  /* One revolution per 40s: movement you notice only if you watch for it. */
-  animation: trio-orbit 40s linear infinite;
-  animation-delay: calc(var(--phase) * -13.333s);
+  /* Fast, and staggered by a beat per Blob so the three land in sequence
+     rather than as one block. */
+  animation: trio-arrive 260ms var(--ease-entrance) backwards;
+  animation-delay: calc(var(--phase) * 70ms);
+  /* Zero duration: position changes snap, they never travel.
+
+     Sliding between the "one job" spread and the compact anchors means most of
+     the window in a quarter of a second however it is eased, and at that speed
+     any easing reads as a lurch. So the move is instant and invisible instead:
+     the Blob is at zero opacity on the frame it happens (the arrival fade
+     below restarts, because the animation-name differs between the two
+     states), and fades up at its new home. Nothing is ever seen moving. */
   transition:
-    left var(--duration-panel) var(--ease-squish),
-    top var(--duration-panel) var(--ease-squish),
-    scale var(--duration-panel) var(--ease-squish),
-    --orbit-r var(--duration-panel) var(--ease-standard);
+    left 0s,
+    top 0s,
+    scale 0s;
 }
 
-/* The inner counter-rotation is what keeps each face and label upright while
-   the outer one carries it around the circle. */
-@keyframes trio-orbit {
+@keyframes trio-arrive {
   from {
-    transform: rotate(0deg) translateX(var(--orbit-r)) rotate(0deg);
+    opacity: 0;
+    transform: scale(0.9);
   }
   to {
-    transform: rotate(360deg) translateX(var(--orbit-r)) rotate(-360deg);
+    opacity: 1;
+    transform: scale(1);
   }
 }
 
-/* Compact positions and scales are per Blob, set inline; the orbit radius
-   collapses so the rotation keyframes keep running harmlessly at zero. */
+/* The compact twin of `trio-arrive`. Opacity only: the drift owns the
+   transform on these, and a scale here would fight it for the first 260ms. */
+@keyframes trio-settle {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The spread itself: one Blob left of centre, one raised on it, one right.
+   Sized from the same clamp the step reserves its height with, widened by half
+   again so the three job labels clear each other — the labels are wider than
+   the Blobs, and they are what sets the minimum gap. */
+.onboarding-trio-blob:nth-child(1) {
+  --spread-x: calc(-1.5 * var(--orbit-radius));
+}
+.onboarding-trio-blob:nth-child(2) {
+  --spread-x: 0px;
+  top: 40%;
+}
+.onboarding-trio-blob:nth-child(3) {
+  --spread-x: calc(1.5 * var(--orbit-radius));
+}
+
+/* Compact positions and scales are per Blob, set inline; from there each one
+   drifts on its own long, slow loop so the flow feels lived-in rather than
+   decorated.
+
+   Desync is by duration alone. The obvious trick — a big negative delay per
+   Blob — starts each one part-way along the path, so the instant the step
+   changed every Blob *teleported* by that offset and then transitioned to its
+   new anchor from there: the jerk you saw on every Next. Starting all three at
+   translate(0,0) means the drift begins from wherever the transition put them,
+   and the mismatched durations (47/53/59s, no common factor under a minute)
+   pull them apart within seconds and never realign. */
 .onboarding-trio[data-compact="true"] .onboarding-trio-blob {
-  --orbit-r: 0px;
+  /* Two animations, not one: the endless drift, plus a one-shot fade. Layering
+     them keeps the fade a fade — folded into the drift it would replay at
+     every loop boundary.
+
+     The fade is a *separate keyframe name* from the step's `trio-arrive`, and
+     has to be: when only the list position changes, the browser carries the
+     already-finished animation over by name instead of restarting it, so the
+     Blob repositioned at full opacity and the move was visible. A new name is
+     a new animation, and it runs. */
+  animation:
+    trio-drift 47s var(--ease-standard) infinite,
+    trio-settle 260ms var(--ease-entrance) backwards;
+}
+
+/* Both durations restated, because `animation-duration` applies down the whole
+   list: a lone `59s` would stretch the 260ms settle to a minute too. */
+.onboarding-trio[data-compact="true"] .onboarding-trio-blob:nth-child(2) {
+  animation-duration: 59s, 260ms;
+}
+
+.onboarding-trio[data-compact="true"] .onboarding-trio-blob:nth-child(3) {
+  animation-duration: 53s, 260ms;
+}
+
+/* Going back to welcome, the fade is the whole exit: the three hold position
+   while they disappear, and only then snap to wherever the next layout wants
+   them. Without the delay they fan outward in full view — an exit animation
+   for a thing that is leaving. `animation: none` is the other half: the
+   entering fade must not run on the way out.
+
+   Placed after the compact rules, not beside the other `[data-hidden]` one:
+   leaving is the last word on how a Blob behaves, so it has to be the last
+   rule of matching weight. */
+.onboarding-trio[data-hidden="true"] .onboarding-trio-blob {
+  transition-delay: var(--duration-panel);
+  animation: none;
+}
+
+/* Travel is in viewport units so it scales with the window, and is bounded on
+   both axes by what has to stay clear.
+
+   Vertically that is the meme cards: they own the top and bottom corners, so
+   the Blobs keep to the middle band. The compact starts sit at 40–62% and this
+   never moves one more than 13vh either way, which leaves it between roughly
+   27% and 75% — below the top card (ends ~26%) and above the bottom one
+   (starts ~76%).
+
+   Horizontally it is the 460px content column: under 7vw of travel keeps every
+   Blob in the side margin at the narrowest size this trio is shown at. */
+@keyframes trio-drift {
+  /* Opacity deliberately absent: this loop is infinite, so a fade folded into
+     it would replay at every wrap — the Blob blinking out once a minute
+     forever. The arrival fade is the separate one-shot layered beside it. */
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  20% {
+    transform: translate(5vw, -7vh);
+  }
+  40% {
+    transform: translate(1vw, 8vh);
+  }
+  60% {
+    transform: translate(6vw, 13vh);
+  }
+  80% {
+    transform: translate(-2vw, -11vh);
+  }
 }
 
 /* Small window: the compact trio is decoration, and there is no room for it
@@ -5089,13 +5300,20 @@ a.modal-button {
   }
 }
 
+/* A sentence in the Blob's own voice, not a job title on a pill — so it wraps
+   like text, and the shape softens to a card rather than a tag. The width is
+   what sets the spread: three of these side by side have to fit between the
+   window's margins, which is why they are narrower than the copy elsewhere. */
 .onboarding-trio-label {
-  padding: 7px 16px;
-  border-radius: 999px;
+  max-width: 15ch;
+  padding: 8px 14px;
+  border-radius: 12px;
   background: var(--surface-control);
-  font-size: 16px;
+  font-size: 13.5px;
+  line-height: 1.4;
   color: var(--text-primary);
-  white-space: nowrap;
+  text-align: center;
+  text-wrap: balance;
   transition: opacity var(--duration-fast) var(--ease-standard);
 }
 
@@ -5401,6 +5619,46 @@ a.modal-button {
   text-underline-offset: 2px;
 }
 
+/* The welcome screen's byline: quieter and smaller than the lede above it, so
+   it reads as a signature rather than a second sentence.
+
+   Pinned to the foot of the window, not the flow: as a flex child it would
+   sit directly under the button and shift it off-centre. `white-space: nowrap`
+   keeps it on one line — broken over two it reads as a sentence again. */
+.onboarding-byline {
+  position: absolute;
+  bottom: clamp(16px, 3vh, 28px);
+  left: 50%;
+  z-index: 1;
+  margin: 0;
+  translate: -50% 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Narrow window: one line no longer fits between the meme corners, and a
+   clipped signature is worse than none. */
+@media (max-width: 620px) {
+  .onboarding-byline {
+    display: none;
+  }
+}
+
+.onboarding-byline-link {
+  padding: 0;
+  font-size: inherit;
+  color: var(--accent-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.onboarding-byline-link:hover {
+  opacity: 0.75;
+}
+
 .onboarding-actions {
   display: flex;
   width: min(340px, 100%);
@@ -5582,18 +5840,18 @@ a.modal-button {
   .pin-tray-empty,
   .pin-tile,
   .drag-tile,
-  /* The orbit and the bob are ambient motion with nothing to convey: with
-     motion reduced the three simply hold their spread positions. */
+  /* The drift and the bob are ambient motion with nothing to convey: with
+     motion reduced the three simply hold their positions. The arrival fade on
+     the "one job" step goes with them — it is 260ms of opacity, and the step
+     is legible without it. */
   .onboarding-trio-blob,
   .onboarding-trio-avatar {
     animation: none;
   }
 
-  /* ...which the keyframes were providing, so place them statically. */
-  .onboarding-trio-blob {
-    transform: rotate(calc(var(--phase) * 120deg)) translateX(var(--orbit-r))
-      rotate(calc(var(--phase) * -120deg));
-  }
+  /* Nothing to restore: the spread is in `left` and the drift's resting frame
+     is no offset at all, so dropping the animations leaves the three exactly
+     where they belong. */
 
   /* The squish is the whole point of these; with motion reduced they simply
      change colour, and the drag still works. */

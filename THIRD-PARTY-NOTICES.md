@@ -8,6 +8,10 @@ Third-party trademarks: the app logos under `public/logos` belong to their
 respective owners and are used to identify the corresponding integrations.
 Blobbies is not affiliated with, or endorsed by, any of them.
 
+Bundled GIFs: the onboarding decoration under `src/assets/onboarding-memes`
+is third-party work, bundled unmodified. Each file's creator and source URL
+is listed in `src/assets/onboarding-memes/CREDITS.md`.
+
 Licence texts: MIT, ISC, BSD, Zlib and Unlicense require the copyright and
 permission notice reproduced below; per-package copyright holders are named
 in each row. Apache-2.0, MPL-2.0, Unicode-3.0 and CDLA-Permissive-2.0 works

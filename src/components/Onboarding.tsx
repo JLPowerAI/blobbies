@@ -1,6 +1,7 @@
 import { ArrowRight, Check } from "lucide-react";
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
+import { OnboardingMemes } from "@/components/OnboardingMemes";
 import { PillSelect } from "@/components/PillSelect";
 import { MAX_USER_NAME_LENGTH } from "@/components/SettingsModal";
 import type { AgentShape, AvatarTone } from "@/data/agents";
@@ -40,38 +41,42 @@ type Step = (typeof ALL_STEPS)[number];
 
 /**
  * The three Blobs that travel through the flow: the content of the "one job"
- * step, where CSS puts them on one slow clockwise orbit (phase spreads them
- * around it), then decoration once that step passes.
+ * step, where they fade in spread across the middle, then decoration drifting
+ * around the window once that step passes.
+ *
+ * Each one says what it does, in its own voice — "Inbox Triage" is a job
+ * title, and a job title tells you nothing about what the thing will actually
+ * do for you. One sentence, present tense, concrete enough to picture.
  *
  * The compact positions are deliberately uneven — different insets, heights
  * and scales — because three evenly spaced marks at one size read as a
- * progress indicator. They are percentages of the trio box in CSS, kept
- * under 20% or over 80% so every Blob sits in the margin beside the content
- * column and none can land on a card or a heading.
+ * progress indicator. They are percentages of the trio box in CSS, and they
+ * start each Blob inside the side margins, clear of both the content column
+ * and the meme corners; the drift keyframes keep them there.
  */
 const TRIO = [
   {
-    job: "Inbox Triage",
+    job: "I handle your inbox and flag the emails that actually matter",
     tone: "red",
     shape: "droplet",
-    compactX: "9%",
-    compactY: "14%",
+    compactX: "11%",
+    compactY: "40%",
     compactScale: 0.34,
   },
   {
-    job: "Monday Recap",
+    job: "I scan YouTube for the next video you should make",
     tone: "teal",
     shape: "cloud",
-    compactX: "4%",
-    compactY: "63%",
+    compactX: "6%",
+    compactY: "62%",
     compactScale: 0.26,
   },
   {
-    job: "Pipeline Watch",
+    job: "I watch your deals and tell you which ones are going cold",
     tone: "blue",
     shape: "squircle",
-    compactX: "93%",
-    compactY: "27%",
+    compactX: "91%",
+    compactY: "47%",
     compactScale: 0.42,
   },
 ] as const satisfies readonly {
@@ -102,6 +107,10 @@ const DATA_ROOT_LABEL = "~/.blobbies";
  * click from there, which beats landing someone on an error page.
  */
 const TINFOIL_KEYS_URL = "https://dash.tinfoil.sh/";
+
+/** The author's channels, linked from the welcome screen's byline. */
+const YOUTUBE_URL = "https://www.youtube.com/@kenkaidoesai";
+const SKOOL_URL = "https://www.skool.com/kenkai";
 
 /** Idle, or the outcome of one save attempt. */
 type KeyState = "idle" | "saved" | "rejected";
@@ -348,7 +357,7 @@ export function Onboarding({
               <h1 className="onboarding-title">Blobbies</h1>
             </div>
             <p className="onboarding-lede">
-              A small crew of agents you can hand real work to, living entirely on this machine.
+              Because we shouldn't be handing our sensitive data to AI providers. F*ck that.
             </p>
             <button type="button" className="onboarding-start" onClick={next}>
               Get started
@@ -692,6 +701,18 @@ export function Onboarding({
       tabIndex={-1}
       data-tauri-drag-region
     >
+      {/* Four corners on the welcome screen, one on every step after it: the
+          later steps are asking for something, and a single card beside the
+          question is flair rather than competition.
+
+          Keyed by step so every screen deals its own card in its own corner —
+          without it the rotation timer alone decides, and a step passed
+          through quickly inherits whatever the last one left behind.
+
+          Sits outside `.onboarding-body` because that scrolls and clips: the
+          corners belong to the window, not to the content column. */}
+      <OnboardingMemes key={step} count={step === "welcome" ? 4 : 1} />
+
       {/* Always mounted so it can fade in and out: the welcome screen hides
           it, every other step shows it, and the opacity transition below is
           the whole in/out animation. */}
@@ -730,6 +751,34 @@ export function Onboarding({
       {/* Scrolls when the content outgrows a short window; the actions below
           sit outside it, so Next and Back are reachable at any size. */}
       <div className="onboarding-body">{renderStep()}</div>
+
+      {/* Pinned to the bottom of the window rather than trailing the button:
+          a signature belongs at the foot of the page, and out of the flow it
+          cannot push the Get started button off-centre.
+
+          Buttons, not anchors: a webview follows an href in place, which would
+          replace the app with a web page and no way back. Same reason every
+          other link in this flow is a button. */}
+      {step === "welcome" ? (
+        <p className="onboarding-byline">
+          By Ken Kai · YouTube{" "}
+          <button
+            type="button"
+            className="onboarding-byline-link"
+            onClick={() => void openExternal(YOUTUBE_URL)}
+          >
+            @kenkaidoesai
+          </button>{" "}
+          · Learn with me{" "}
+          <button
+            type="button"
+            className="onboarding-byline-link"
+            onClick={() => void openExternal(SKOOL_URL)}
+          >
+            skool.com/kenkai
+          </button>
+        </p>
+      ) : null}
 
       {step === "welcome" ? null : (
         <div className="onboarding-actions">
