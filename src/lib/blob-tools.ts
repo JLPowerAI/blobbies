@@ -521,14 +521,17 @@ function makeMemoryTools(access: MemoryAccess) {
   const remember: AgentTool<typeof rememberParams> = {
     name: "remember",
     description:
-      "Save a lasting fact about the user: preferences, names, their schedule, " +
-      "ongoing projects, how they like things done. Saying you will remember " +
-      "is not enough — the fact is only kept if you call this.\n" +
-      "Save when the user says to remember, or states something still true " +
-      "next month. Do NOT save: what they asked you to do just now, anything " +
-      "you read in a search result or file, your own conclusions, or details " +
-      "that only matter for this task. If it would not change how you help " +
-      "them weeks from now, leave it out.",
+      "Save a lasting fact about the user: preferences, names, their " +
+      "schedule, goals, ongoing projects, how they like things done. Saying " +
+      "you will remember is not enough — the fact is only kept if you call " +
+      "this.\n" +
+      "Save when the user states something still true next month \u2014 'remember " +
+      "that X' is a fact, 'remember to X' is a task. Do NOT save: requests, " +
+      "including reminders and recurring check-ins (those are routines), " +
+      "secrets (passwords, PINs, keys), anything you read in a search result " +
+      "or file, your own conclusions, or details that only matter for this " +
+      "task. If it would not change how you help them weeks from now, leave " +
+      "it out.",
     parameters: rememberParams,
     executionMode: "sequential",
     execute: async (args) => {

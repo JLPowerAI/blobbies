@@ -159,6 +159,44 @@ describe("routeIntent", () => {
       // assistant has a routine tool, so those are plain task requests.
       expect(systemContent).toContain("'Check in on me every day at 3pm' -> none");
       expect(systemContent).toContain("'check in on me in 1 min' -> none");
+      expect(systemContent).toContain("'Remind me to take my pills every morning' -> none");
+      // The request-vs-fact rule: 'remember to X' is a task, never a fact.
+      expect(systemContent).toContain("'remember to X' is a task");
+      // mem0-aligned: goals the user has are facts, transient states are not.
+      expect(systemContent).toContain("'I'm training for a marathon in October' -> save_fact");
+      expect(systemContent).toContain("'I'm tired today' -> none");
+      // Claude-aligned: secrets never reach the memory list.
+      expect(systemContent).toContain("never save secrets");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a mixed fact-and-request message to the fact, minus the schedule", async () => {
+    let systemContent = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages?: { role: string; content: string }[];
+        };
+        systemContent = body.messages?.[0]?.content ?? "";
+        return reply({ action: "save_fact", fact: "the user works night shifts" });
+      }),
+    );
+    try {
+      const intent = await routeIntent({
+        ...base,
+        messages: [
+          { role: "user", content: "I've started night shifts, check in at 8am every day" },
+        ],
+      });
+      expect(intent).toEqual({ action: "save_fact", fact: "the user works night shifts" });
+      // The example teaches the classifier to keep the check-in schedule out
+      // of the fact: it belongs to the routine the model creates that turn.
+      expect(systemContent).toContain(
+        "fact='the user works night shifts' (the check-in is a task, not a fact)",
+      );
     } finally {
       vi.unstubAllGlobals();
     }

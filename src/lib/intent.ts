@@ -105,11 +105,17 @@ const ROUTER_PROMPT =
   "You classify the user's last message for a personal assistant. The request " +
   "may open with a short 'Earlier, for reference' block \u2014 background only; " +
   "classify ONLY the last message, which follows it.\n\n" +
-  "save_fact -> the user states something lasting about themselves (schedule, " +
-  "preferences, name, situation), or tells you to remember it. Copy it into " +
-  "`fact` as a short sentence about the user. `fact` restates what the user " +
-  "JUST SAID in this message — NEVER copy a sentence from the saved " +
-  "memories list; those are already saved.\n" +
+  "save_fact -> the user states something ENDURING about themselves: " +
+  "schedule, preferences, name, situation, goals, ongoing projects. " +
+  "'remember that X' is a fact, 'remember to X' is a task: a request for " +
+  "you to DO something — now, later, or recurring (reminders, check-ins) — " +
+  "is never a fact, and when a message holds both, save only the fact " +
+  "(a check-in's schedule belongs to the routine, not the memory). Ask: " +
+  "still true in a month? If not, or if unsure, it is not a fact — and " +
+  "never save secrets (passwords, PINs, keys). Copy the fact into `fact` " +
+  "as one short sentence about the user, restating what they JUST SAID in " +
+  "this message — NEVER copy from the saved memories list; those are " +
+  "already saved.\n" +
   "delete_fact -> the user asks you to forget, delete or drop something you " +
   "saved. Put that memory's number in `memory_number`. For every other " +
   "action set `memory_number` to 0, and for every action except save_fact " +
@@ -128,6 +134,8 @@ const ROUTER_PROMPT =
   "'Actually I train Fridays now. Update what you remember.' -> save_fact, " +
   "fact='the user trains on Fridays'\n" +
   "'My sister is called Mia' -> save_fact, fact=\"the user's sister is called Mia\"\n" +
+  "'I'm training for a marathon in October' -> save_fact, fact='the user is " +
+  "training for a marathon in October'\n" +
   "'Rough week, Mia and I broke up' (saved: [1] the user's girlfriend is " +
   "called Mia) -> save_fact, fact='the user and Mia broke up'\n" +
   "'Delete what you saved about my address' (saved: [2] the user's address...) " +
@@ -135,12 +143,16 @@ const ROUTER_PROMPT =
   "'Be my writing coach instead' -> change_job\n" +
   "'Check in on me every day at 3pm' -> none\n" +
   "'check in on me in 1 min' -> none\n" +
+  "'Remind me to take my pills every morning' -> none\n" +
   "'What day do I train?' -> none\n" +
   "'What's the weather in Lisbon tomorrow?' -> none\n" +
   "'Who wrote that book?' -> none\n" +
+  "'I'm tired today' -> none\n" +
   "'Search for the latest Node.js release notes' -> none\n" +
   "'I moved to Lisbon — what's the weather there?' -> save_fact, " +
   "fact='the user lives in Lisbon'\n" +
+  "'I've started night shifts, check in at 8am daily' -> save_fact, " +
+  "fact='the user works night shifts' (the check-in is a task, not a fact)\n" +
   "'Can you help me plan the week?' -> none\n" +
   "'thanks' -> none\n\n" +
   "A message ending in '?' is almost always none — unless it asks you to do " +

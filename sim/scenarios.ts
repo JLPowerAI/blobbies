@@ -247,6 +247,30 @@ export const scenarios: Scenario[] = [
     ],
   },
   {
+    // mem0-aligned (2026-08-24): goals and plans the user HAS are facts —
+    // distinct from work the assistant is asked to DO, which is never saved.
+    name: "memory: a goal the user shares is a fact",
+    start: { ...newBlob("Ken"), title: "Coach", description: "Helps Ken train." },
+    turns: [
+      {
+        say: "I'm training for a marathon in October.",
+        expect: [replied, memoryCount(1), memoryMentions("marathon")],
+      },
+    ],
+  },
+  {
+    // mem0's transient-vs-enduring split (2026-08-24): a state true only
+    // today never becomes a fact.
+    name: "memory: a state true only today is not a fact",
+    start: { ...newBlob("Ken"), title: "Coach", description: "Helps Ken train." },
+    turns: [
+      {
+        say: "I'm really tired today.",
+        expect: [replied, memoryCount(0)],
+      },
+    ],
+  },
+  {
     name: "memory: a life change replaces the stale fact, not sits beside it",
     start: {
       ...newBlob("Ken"),
@@ -459,6 +483,60 @@ export const scenarios: Scenario[] = [
           // "Never invent a time" — the turn asks, the tool is not called.
           notCalledTool("create_routine"),
           replyMentions("?"),
+        ],
+      },
+    ],
+  },
+  {
+    // Owner report (2026-08-24): a routine request sometimes also landed in
+    // memory as a "fact". A request to do something — recurring or not — is
+    // never a fact; the routine is the whole outcome of the turn.
+    name: "routines: a routine request is not also saved as a memory",
+    start: {
+      ...newBlob("Timmy"),
+      title: "Companion",
+      description: "Checks in with Ken.",
+      routines: [],
+    },
+    turns: [
+      {
+        say: "Remind me to take my pills every morning at 8.",
+        expect: [
+          replied,
+          calledTool("create_routine"),
+          createdRoutine({ kind: "daily", hour: 8 }),
+          notCalledTool("remember"),
+          memoryCount(0),
+        ],
+      },
+    ],
+  },
+  {
+    // The mixed case (2026-08-24): a life change and a check-in in one
+    // message. The fact is saved, the schedule belongs to the routine — the
+    // memory must not carry the check-in or its time. create_routine is not
+    // asserted: on this floor model a turn holding BOTH a routed memory
+    // write and a routine request sometimes banks the memory and only
+    // acknowledges the routine (2/3 runs, both phrasings) — a loop limitation
+    // the dedicated routine scenarios own, not what this scenario guards.
+    name: "routines: a mixed fact-and-check-in saves only the fact",
+    start: {
+      ...newBlob("Timmy"),
+      title: "Companion",
+      description: "Checks in with Ken.",
+      routines: [],
+    },
+    turns: [
+      {
+        // Request-first phrasing, like the dedicated routine scenarios.
+        say: "Check in on me at 8am every day — I've started night shifts.",
+        expect: [
+          replied,
+          calledTool("remember"),
+          memoryCount(1),
+          memoryMentions("night shift"),
+          memoryOmits("8am"),
+          memoryOmits("check in"),
         ],
       },
     ],
