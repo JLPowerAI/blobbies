@@ -9,13 +9,13 @@
 //! Three items, deliberately: open, update, quit. Everything else already has
 //! a home in the app itself.
 
-#[cfg(target_os = "macos")]
-use tauri::image::Image;
 use tauri::{
     AppHandle, Emitter, Manager, Runtime,
-    menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{TrayIconBuilder, TrayIconId},
 };
+#[cfg(target_os = "macos")]
+use tauri::{image::Image, menu::MenuItemKind};
 
 /// Emitted when "Check for Updates" is chosen. The updater lives in the
 /// webview (`src/lib/updater.ts`), which owns the whole check → download →
@@ -28,6 +28,7 @@ const UPDATES_ID: &str = "tray-check-updates";
 const QUIT_ID: &str = "tray-quit";
 
 /// The ⌘Q item that replaces the standard macOS Quit.
+#[cfg(target_os = "macos")]
 pub(crate) const HIDE_ID: &str = "app-hide-to-tray";
 
 /// The standard menu, with macOS's Quit swapped for "Hide to Menu Bar".
@@ -44,12 +45,10 @@ pub(crate) const HIDE_ID: &str = "app-hide-to-tray";
 /// # Errors
 /// Returns the Tauri error if the default menu or the replacement item cannot
 /// be built.
+#[cfg(target_os = "macos")]
 pub(crate) fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let menu = Menu::default(app)?;
 
-    // macOS only: the other platforms keep Quit under File, where it is the
-    // ordinary way to leave an app and not a reflex.
-    #[cfg(target_os = "macos")]
     if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.first() {
         // Quit is the last item of the app menu (see `Menu::default`), and the
         // only predefined one down there.

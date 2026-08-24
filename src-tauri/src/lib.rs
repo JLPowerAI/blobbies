@@ -24,7 +24,7 @@ pub use error::Error;
     reason = "there is no UI left to report into if the webview runtime fails to start"
 )]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
@@ -70,13 +70,20 @@ pub fn run() {
                 eprintln!("could not create the tray icon: {error}");
             }
             Ok(())
-        })
-        .menu(tray::app_menu)
-        .on_menu_event(|app, event| {
-            if event.id().as_ref() == tray::HIDE_ID {
-                tray::hide_main_window(app);
-            }
-        })
+        });
+
+    // macOS only, both of them: this exists to disarm ⌘Q, and elsewhere Tauri
+    // gives a window no menu bar at all. Attaching one everywhere would hang a
+    // File/Edit/View strip across the top of the Windows and Linux builds that
+    // nobody asked for.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(tray::app_menu).on_menu_event(|app, event| {
+        if event.id().as_ref() == tray::HIDE_ID {
+            tray::hide_main_window(app);
+        }
+    });
+
+    builder
         // Closing the window puts Blobbies in the tray rather than ending it:
         // routines run on a schedule and finished runs raise notifications, so
         // a red X that killed the process would silently switch those off.
