@@ -30,6 +30,7 @@ import {
   SAMPLE_MEMORIES,
   SAMPLE_USER_MEMORIES,
   agents as seedAgents,
+  type ToolTraceEntry,
   transcriptFor,
   uniqueBlobName,
 } from "@/data/agents";
@@ -75,6 +76,7 @@ import { playChime } from "@/lib/sound";
 import * as store from "@/lib/store";
 import { openExternal } from "@/lib/tauri";
 import { isTinfoilModel } from "@/lib/tinfoil-model";
+import { dropOrphanToolResults, toolTraceMessages, trimToolTrace } from "@/lib/tool-trace";
 import { checkForUpdates, onTrayUpdateCheck } from "@/lib/updater";
 import "./App.css";
 
@@ -1614,39 +1616,52 @@ export function App() {
     //
     // Paired with the transcript id each message came from, so whatever falls
     // out of the window can be handed to the summariser after the turn.
-    const rendered: RecapEntry[] = await Promise.all(
-      history
-        .filter((entry): entry is Extract<Message, { kind: "text" }> => entry.kind === "text")
-        .map(async (entry): Promise<RecapEntry> => {
-          // In a group, another Blob's line is not this Blob's own output:
-          // it arrives in the user role, labelled with who said it (the
-          // system prompt explains the labels). Only this Blob's own
-          // messages are the assistant.
-          const own =
-            entry.author === "agent" && (group === undefined || entry.authorId === target.id);
-          const role = own ? ("assistant" as const) : ("user" as const);
-          const said =
-            own || entry.author === "user" || group === undefined
-              ? undefined
-              : group.members.find((member) => member.id === entry.authorId)?.name;
-          const body = entry.segments.map((segment) => segment.text).join("");
-          const spoken = said === undefined ? body : `[${said}]: ${body}`;
-          // The evidence behind a past answer, replayed so the transcript does
-          // not read as "assistant knew a file's contents having called
-          // nothing" — the pattern the model was measured copying (see
-          // `readFiles`). Only on its own messages: another Blob's reads are
-          // not this one's to claim.
-          const line =
-            own && entry.readFiles !== undefined && entry.readFiles.length > 0
-              ? `${spoken}\n\n(read: ${entry.readFiles.join(", ")})`
-              : spoken;
-          const block = await attachmentsPrompt(home, entry.attachments ?? []);
-          // An attachment-only message has no words of its own; a leading
-          // blank line in its place is noise the model has to read past.
-          const content = [line, block].filter((part) => part !== "").join("\n\n");
-          return { id: entry.id, message: { role, content } };
-        }),
-    );
+    const rendered: RecapEntry[] = (
+      await Promise.all(
+        history
+          .filter((entry): entry is Extract<Message, { kind: "text" }> => entry.kind === "text")
+          .map(async (entry): Promise<RecapEntry[]> => {
+            // In a group, another Blob's line is not this Blob's own output:
+            // it arrives in the user role, labelled with who said it (the
+            // system prompt explains the labels). Only this Blob's own
+            // messages are the assistant.
+            const own =
+              entry.author === "agent" && (group === undefined || entry.authorId === target.id);
+            const role = own ? ("assistant" as const) : ("user" as const);
+            const said =
+              own || entry.author === "user" || group === undefined
+                ? undefined
+                : group.members.find((member) => member.id === entry.authorId)?.name;
+            const body = entry.segments.map((segment) => segment.text).join("");
+            const spoken = said === undefined ? body : `[${said}]: ${body}`;
+            const block = await attachmentsPrompt(home, entry.attachments ?? []);
+            // An attachment-only message has no words of its own; a leading
+            // blank line in its place is noise the model has to read past.
+            const content = [spoken, block].filter((part) => part !== "").join("\n\n");
+            // What the Blob actually did, replayed as the tool_call and
+            // tool_result messages it originally was, so the transcript does
+            // not read as "assistant knew this having called nothing" — the
+            // pattern it was measured copying (see `Message.toolTrace`).
+            // Failed calls included on purpose: a Blob that cannot see its own
+            // failed attempt promises the same fix again next turn, which is
+            // the reported stall.
+            //
+            // Placed before the words, because that is the order they
+            // happened in. Only on its own messages: another Blob's work is
+            // not this one's to claim.
+            const trace =
+              own && entry.toolTrace !== undefined
+                ? toolTraceMessages(entry.toolTrace, entry.id)
+                : [];
+            return [
+              // Same transcript id across the pair: whatever falls out of the
+              // window is handed to the summariser as one message's worth.
+              ...trace.map((message) => ({ id: entry.id, message })),
+              { id: entry.id, message: { role, content } },
+            ];
+          }),
+      )
+    ).flat();
     // The recap costs history bytes rather than sitting on top of them: it is
     // history, folded down, and paying for it twice would push the request past
     // the window these shares exist to respect.
@@ -1655,6 +1670,11 @@ export function App() {
       contextWindow(model),
       recap?.text.length ?? 0,
     );
+    // The trim above cuts wherever the budget runs out, including between a
+    // replayed tool_call and its result. Providers reject a tool result with no
+    // matching call outright, so a leftover half would take the whole turn down
+    // rather than merely lose context.
+    const kept = dropOrphanToolResults(split.kept);
     const aiMessages: AiMessage[] = [
       // Byte-stable across turns (no clock inside): the system prompt plus the
       // untrimmed history form the request prefix, and Ollama's KV cache only
@@ -1697,7 +1717,7 @@ export function App() {
           },
         ),
       },
-      ...split.kept,
+      ...kept,
     ];
     // Routine (and answer-to-routine) turns carry the instruction as the
     // prompt; it is not a visible transcript message — the event line is.
@@ -1834,10 +1854,10 @@ export function App() {
       });
     };
     /**
-     * Files this turn opened, attached to its last bubble when it settles so
-     * the next turn's history carries the evidence (see `Message.readFiles`).
+     * What this turn actually did, attached to its last bubble when it settles
+     * so the next turn's history carries the evidence (see `Message.toolTrace`).
      */
-    const filesRead: string[] = [];
+    const toolTrace: ToolTraceEntry[] = [];
     /** Attach a failure note to the newest bubble, or open one when nothing was said. */
     const noteStopped = (note: string) => {
       if (bubbleCount === 0) {
@@ -1943,14 +1963,20 @@ export function App() {
         },
         onCheckpoint: flushTranscript,
         onToolCall: (call) => {
-          // Only the reads, and only their paths: this is replayed into every
-          // later turn's history, so it has to stay one short line.
-          if (call.name === "read_file" && !call.isError) {
-            const path = (call.args as { path?: unknown }).path;
-            if (typeof path === "string" && !filesRead.includes(path)) {
-              filesRead.push(path);
-            }
-          }
+          // Every call, not just the reads: a Blob that cannot see its own
+          // failed attempt re-promises the same fix next turn. Arguments are
+          // kept because the reported failure was a wrong field name, and the
+          // error text because that is what says which name was right.
+          //
+          // Clipped by `trimToolTrace` at settle, before this is stored: a
+          // tool result is unbounded and the transcript is rewritten to disk on
+          // every checkpoint.
+          toolTrace.push({
+            name: call.name,
+            args: JSON.stringify(call.args),
+            result: call.result,
+            failed: call.isError,
+          });
         },
         onUsage: (usage) => {
           spent.inputTokens += usage.inputTokens;
@@ -2078,20 +2104,21 @@ export function App() {
     if (group === undefined) {
       touchActivity(target.id, text);
     }
-    // The reads go on the last bubble this turn produced — the one carrying
-    // the answer they back. Written once, at settle, rather than per bubble:
-    // the reads that justify a report can happen before or between segments.
+    // The trace goes on the last bubble this turn produced — the one carrying
+    // the answer it backs. Written once, at settle, rather than per bubble:
+    // the calls that justify a report can happen before or between segments.
     //
     // Before the flush below, not after: `mutateSent` only touches the ref and
     // state, so a write landing after the save would hold until some later
     // turn happened to flush again — and be lost outright on reload, which is
     // exactly the conversation this evidence exists to ground.
-    if (filesRead.length > 0 && bubbleCount > 0) {
+    if (toolTrace.length > 0 && bubbleCount > 0) {
       const lastId = `${replyId}-${bubbleCount}`;
+      const trimmed = trimToolTrace(toolTrace);
       mutateSent((previous) => ({
         ...previous,
         [convoId]: (previous[convoId] ?? []).map((entry) =>
-          entry.id === lastId && entry.kind === "text" ? { ...entry, readFiles: filesRead } : entry,
+          entry.id === lastId && entry.kind === "text" ? { ...entry, toolTrace: trimmed } : entry,
         ),
       }));
     }

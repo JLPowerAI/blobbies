@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { Message as AiMessage } from "@kenkaiiii/gg-ai";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -238,6 +239,34 @@ async function seedGroup() {
   store.saveGroups([{ id: GROUP_ID, name: "Launch" }]);
 }
 
+/** The first replayed tool call in a rebuilt history. */
+function firstToolCall(history: readonly AiMessage[]) {
+  for (const message of history) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    const call = message.content.find((part) => part.type === "tool_call");
+    if (call !== undefined) {
+      return call;
+    }
+  }
+  return undefined;
+}
+
+/** The replayed result paired to a call id — the half that must not go missing. */
+function resultFor(history: readonly AiMessage[], id: string | undefined) {
+  for (const message of history) {
+    if (message.role !== "tool") {
+      continue;
+    }
+    const result = message.content.find((part) => part.toolCallId === id);
+    if (result !== undefined) {
+      return result;
+    }
+  }
+  return undefined;
+}
+
 describe("turn wiring", () => {
   beforeEach(() => {
     // Drain writes the previous test left queued, THEN wipe. Without the
@@ -303,7 +332,7 @@ describe("turn wiring", () => {
     }
   });
 
-  it("replays the files a past turn read into the next turn's history", async () => {
+  it("replays what a past turn actually did into the next turn's history", async () => {
     // Measured (2026-08-25, sim/grounding.sim.ts): history was rebuilt from
     // text alone, so a turn that read a note and reported it came back as
     // "assistant stated a file's contents having called nothing". Asked about
@@ -330,12 +359,53 @@ describe("turn wiring", () => {
     await say(user, "and the trip one?");
     await waitFor(() => expect(calls.length).toBe(2));
 
+    // Replayed as the call it was, not as prose glued onto the answer.
     const history = calls[1]?.messages ?? [];
-    const past = history.find(
-      (message) =>
-        message.role === "assistant" && String(message.content).includes("standup note says"),
-    );
-    expect(String(past?.content)).toContain("(read: notes/standup.md)");
+    const call = firstToolCall(history);
+    expect(call?.name).toBe("read_file");
+    expect(call?.args).toEqual({ path: "notes/standup.md" });
+    // And its result came back paired to it, so the model sees what it read.
+    const result = resultFor(history, call?.id);
+    expect(String(result?.content)).toContain("Shipped the recap feature.");
+  });
+
+  it("replays a FAILED call — name, arguments and error — into the next turn", async () => {
+    // The reported stall (2026-08-25, YouTube Blob): a call failed on a wrong
+    // argument name, and with no trace of the attempt in history the Blob
+    // re-promised the same fix every turn — "the tool wants q not query, let
+    // me check the schema" — without ever making the call. It could not tell
+    // it had already tried. The failure is the half that has to survive.
+    script = [
+      (options) => {
+        options.onToolCall?.({
+          name: "YOUTUBE_SEARCH_YOU_TUBE",
+          args: { query: "new AI videos" },
+          result: "Invalid argument: unknown field 'query'. Did you mean 'q'?",
+          isError: true,
+        });
+        options.onSegment?.("The tool wants q not query. Let me check the schema.");
+        return "The tool wants q not query. Let me check the schema.";
+      },
+      () => "Checking.",
+    ];
+    const user = userEvent.setup();
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+    await say(user, "check what's going on with youtube");
+    await waitFor(() => expect(calls.length).toBe(1));
+    await say(user, "why did you stop?");
+    await waitFor(() => expect(calls.length).toBe(2));
+
+    const history = calls[1]?.messages ?? [];
+    const call = firstToolCall(history);
+    const result = resultFor(history, call?.id);
+    // The name it called, the arguments it used, and why they were wrong —
+    // all three are what stop it repeating the attempt. As a real failed tool
+    // result, so the model reads it as its own failure and not as a note.
+    expect(call?.name).toBe("YOUTUBE_SEARCH_YOU_TUBE");
+    expect(call?.args).toEqual({ query: "new AI videos" });
+    expect(result?.isError).toBe(true);
+    expect(String(result?.content)).toContain("Did you mean 'q'?");
   });
 
   it("animates the sidebar row's avatar while its turn runs", async () => {

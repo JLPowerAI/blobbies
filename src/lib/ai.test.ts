@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Routine } from "@/data/agents";
-import { streamBlobTurn, streamLocalChat, type ToolCallRecord } from "@/lib/ai";
+import { MAX_PROMISE_NUDGES, streamBlobTurn, streamLocalChat, type ToolCallRecord } from "@/lib/ai";
 import { ATTACHED_HEADER } from "@/lib/attachments";
 import type { PendingAsk, RoutineAccess } from "@/lib/blob-tools";
 import { memoryHome } from "@/lib/home";
@@ -1575,6 +1575,75 @@ describe("a routine that only announces the work", () => {
     expect(text).toBe("Which server should I check?");
   });
 
+  it("does not let the loop end on a promise — the stall, at its mechanism", async () => {
+    // WHY the Blob goes quiet after "I'll do that":
+    //
+    // agentLoop finishes a turn on exactly one rule — the model produced text
+    // and called no tool. It has no idea whether that text answered anything,
+    // so a promise terminates the run as cleanly as a finished report. The
+    // Blob is not being lazy; from the loop's point of view it replied.
+    //
+    // This test pins the rule and the fix together. `getFollowUpMessages` is
+    // polled at that exact stopping point, so a run that would have ended on a
+    // promise continues instead — in the SAME loop, tools still in hand.
+    let round = 0;
+    let polledWhileStopping = 0;
+    const segments: string[] = [];
+    fetchHandler = async () => {
+      round += 1;
+      // Never calls a tool. Under the old rule the run ends here, every time.
+      return round === 1
+        ? ndjson(textChunks("Let me run the scan now."))
+        : ndjson(textChunks("Scan done: two servers down."));
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "check my servers" }],
+      intent: { action: "none" },
+      memory: { list: () => [], save: () => {} },
+      onSegment: (segment) => segments.push(segment),
+      onConfigure: () => {},
+      // The host's own steering hook is consulted first at the same point;
+      // counting it proves the loop really did reach its stopping point rather
+      // than continuing for some unrelated reason.
+      getSteeringMessages: () => {
+        polledWhileStopping += 1;
+        return null;
+      },
+    });
+    // It reached the stop, was pushed past it, and the user gets the result
+    // rather than the promise.
+    expect(polledWhileStopping).toBeGreaterThan(0);
+    expect(round).toBe(2);
+    expect(text).toContain("two servers down");
+    // Two generations are two bubbles. Left in one buffer they concatenate
+    // with nothing between them and reach the user glued: "Let me run the scan
+    // now.Scan done: two servers down."
+    expect(segments).toEqual(["Let me run the scan now.", "Scan done: two servers down."]);
+    expect(text).not.toContain("now.Scan");
+  });
+
+  it("stops nudging after a capped number of promises", async () => {
+    // A model that will only ever announce must not burn the whole budget.
+    // The last reply stands: the user seeing the promise beats silence.
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      return ndjson(textChunks("Let me run it with the correct field."));
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "check what's going on with youtube" }],
+      intent: { action: "none" },
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    // The first generation plus one per nudge, and no more.
+    expect(round).toBe(MAX_PROMISE_NUDGES + 1);
+    expect(text).toContain("Let me run it");
+  });
+
   it("nudges chat too — 'I'll do that right now' then silence is a stall", async () => {
     // Reported live on Tinfoil with thinking off: the Blob promises the work
     // and stops, and the user has to type "go on" to get a turn that does it.
@@ -1707,6 +1776,35 @@ describe("a turn that talks about a file it never opened", () => {
       onConfigure: () => {},
     });
     expect(round).toBe(1);
+  });
+
+  it("leaves a turn that reached the file through some other tool alone", async () => {
+    // There is no fixed set of "file tools": `run_command` can cat a note,
+    // `app_run_tool` can pull a doc out of Notion, an MCP server can expose
+    // anything. Naming read_file and list_files accused a Blob that had
+    // genuinely gone and looked, just not through the two tools this code
+    // happened to know about — costing a round and contradicting itself on
+    // screen.
+    const home = memoryHome();
+    await home.write("notes/trip.md", "Tokyo, 12-19 March.");
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      return round === 1
+        ? ndjson(toolCallChunks("run_command", { input: "cat notes/trip.md" }, ""))
+        : ndjson(textChunks("Your trip note says: Tokyo, 12-19 March."));
+    };
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "what does my trip note say?" }],
+      intent: { action: "none" },
+      home,
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    // No third round: it looked, so it is not told that it did not.
+    expect(round).toBe(2);
   });
 
   it("leaves a turn that did read the file alone", async () => {

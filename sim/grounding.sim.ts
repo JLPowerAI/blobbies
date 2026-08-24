@@ -1,7 +1,9 @@
 import type { Message } from "@kenkaiiii/gg-ai";
 import { describe, expect, it } from "vitest";
+import type { ToolTraceEntry } from "@/data/agents";
 import { blobSystemPrompt, streamBlobTurn } from "@/lib/ai";
 import { memoryHome } from "@/lib/home";
+import { toolTraceMessages } from "@/lib/tool-trace";
 
 /**
  * Grounding: does a Blob read the file, or make its contents up?
@@ -82,33 +84,30 @@ async function secondFileTurn(warmUp: string, ask: string, must: RegExp): Promis
     onConfigure: () => {},
   };
 
-  // What the first turn actually opened. Dropped from the stored transcript
-  // today (App.tsx rebuilds history from text messages only), which is the
-  // hypothesis under test: with no trace of the read, turn 1 reads back as
+  // What the first turn actually did. Dropped from the stored transcript
+  // originally (App.tsx rebuilt history from text messages only), which is the
+  // hypothesis under test: with no trace of the call, turn 1 reads back as
   // "assistant stated a file's contents having called nothing", and turn 2
   // copies that.
-  const firstFiles: string[] = [];
+  const firstCalls: ToolTraceEntry[] = [];
   const first = await streamBlobTurn({
     ...shared,
     messages: [system, ...history],
     onToolCall: (call) => {
-      if (call.name === "read_file") {
-        const path = (call.args as { path?: string }).path;
-        if (path !== undefined) {
-          firstFiles.push(path);
-        }
-      }
+      firstCalls.push({
+        name: call.name,
+        args: JSON.stringify(call.args),
+        result: call.result,
+        failed: call.isError,
+      });
     },
   });
-  // Exactly what App.tsx now replays into history (see `Message.readFiles`):
-  // the evidence behind a past answer, so the transcript does not read as
-  // "assistant knew a file's contents having called nothing". SIM_TRACE=0
-  // reproduces the old text-only history that measured 3/6 invented.
-  const trace =
-    process.env.SIM_TRACE !== "0" && firstFiles.length > 0
-      ? `\n\n(read: ${[...new Set(firstFiles)].join(", ")})`
-      : "";
-  history.push({ role: "assistant", content: first + trace }, { role: "user", content: ask });
+  // Exactly what App.tsx replays into history (see `Message.toolTrace`) — the
+  // same builder, so this measures the shipped behaviour rather than an
+  // approximation of it. SIM_TRACE=0 reproduces the old text-only history that
+  // measured 3/6 invented.
+  const trace = process.env.SIM_TRACE === "0" ? [] : toolTraceMessages(firstCalls, "sim");
+  history.push(...trace, { role: "assistant", content: first }, { role: "user", content: ask });
 
   const tools: string[] = [];
   const reply = await streamBlobTurn({

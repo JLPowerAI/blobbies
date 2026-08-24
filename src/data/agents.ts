@@ -145,6 +145,21 @@ export interface TextSegment {
   accent?: boolean;
 }
 
+/**
+ * One tool call a Blob made, kept so a later turn can see what it already
+ * tried. Deliberately small — this is replayed into every subsequent turn's
+ * history, so it has to stay a line, not a transcript.
+ */
+export interface ToolTraceEntry {
+  name: string;
+  /** Arguments as sent, clipped. The wrong-argument case is the whole point. */
+  args?: string;
+  /** Result or error, clipped. Absent when the call returned nothing useful. */
+  result?: string;
+  /** Whether the call failed — a failed attempt is still an attempt. */
+  failed?: boolean;
+}
+
 export type Message =
   | {
       id: string;
@@ -175,18 +190,26 @@ export type Message =
        */
       attachments?: Attachment[];
       /**
-       * Files this Blob opened while producing the message. Not shown in the
+       * What this Blob actually did while producing the message: every tool
+       * it called, with its arguments and a clipped result. Not shown in the
        * UI — it is replayed into the next turn's history so a past answer
-       * carries the evidence it came from.
+       * carries the evidence behind it.
        *
-       * Measured (2026-08-25, sim/grounding.sim.ts): history was rebuilt from
-       * text alone, so a turn that read a note and reported it came back as
-       * "assistant stated a file's contents having called nothing". Asked
-       * about a second note, the model completed that pattern instead of
-       * reading — 3 of 6 turns invented contents, with no tool call at all.
-       * With the reads replayed, 5 of 6 went and looked.
+       * Measured twice. First (2026-08-25, sim/grounding.sim.ts) history was
+       * rebuilt from text alone, so a turn that read a note and reported it
+       * came back as "assistant stated a file's contents having called
+       * nothing"; asked about a second note the model completed that pattern
+       * instead of reading, inventing contents in 3 of 6 turns. Replaying the
+       * reads fixed it.
+       *
+       * That fix only covered `read_file`, and the same hole was reported
+       * again the same day with a YouTube app tool: a call failed on a wrong
+       * argument name, and with no trace of the attempt in history the Blob
+       * re-promised the same fix on every following turn — it could not tell
+       * it had already tried. Hence every tool, its arguments, and whether it
+       * failed, not just the reads.
        */
-      readFiles?: string[];
+      toolTrace?: ToolTraceEntry[];
     }
   | {
       id: string;

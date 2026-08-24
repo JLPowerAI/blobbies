@@ -521,6 +521,37 @@ export function announcesIntent(text: string): boolean {
 }
 
 /**
+ * How many times a single run will push back on a promise before letting the
+ * reply stand. A model that will only ever announce must not burn the budget;
+ * after this the user sees the promise, which beats silence.
+ */
+export const MAX_PROMISE_NUDGES = 3;
+
+/**
+ * What to say to a turn that promised instead of acted.
+ *
+ * Escalates, because the polite version was measured failing: reported live
+ * (2026-08-25, YouTube Blob) the Blob answered a wrong-argument error with
+ * "the tool wants q not query, let me check the schema" and then repeated that
+ * same promise on each following turn without ever making the call.
+ */
+export function promiseNudge(attempt: number): string {
+  return attempt <= 1
+    ? "You described what you were about to do, but you have not done it yet. " +
+        "Carry it out now using your tools, then report what you actually " +
+        "found. If it turns out you cannot, say plainly what stopped you. Do " +
+        "not describe the plan again."
+    : // The polite version has already failed once, and the measured failure
+      // mode is re-reading a schema it has just read. So name that move and
+      // take it away: the next thing it emits has to be the call itself.
+      "That is the same promise again, not the work. Stop describing, stop " +
+        "re-checking things you have already looked up, and make the call now — " +
+        "with your best guess at the arguments if you are not certain. A failed " +
+        "call you report honestly is worth more than another plan. If something " +
+        "genuinely blocks you, say what it is in one sentence and stop.";
+}
+
+/**
  * Does this reply state what a file holds — or that it is missing — when the
  * turn never opened one?
  *
@@ -825,6 +856,18 @@ export async function streamBlobTurn(options: {
 
   const runLoop = async (toolScope: "web" | "none"): Promise<{ text: string; latest: string }> => {
     let text = "";
+    /** Promises pushed back on so far, so a determined talker cannot spin. */
+    let nudges = 0;
+    /**
+     * Where `text` stood when the last promise nudge went in.
+     *
+     * `text` only resets at a tool call, so two text generations in a row —
+     * exactly what a nudge produces — accumulate into one string. Judging the
+     * whole of it would re-read the original promise forever and nudge until
+     * the cap every single time. Only what the model said SINCE the nudge
+     * answers the question "did it stop promising?".
+     */
+    let nudgeMark = 0;
     /** Everything shown for this turn: earlier segments plus the live one. */
     const full = () => [...said, text].filter((segment) => segment.trim() !== "").join("\n\n");
     const memoryTools = new Set(["remember", "update_memory", "forget"]);
@@ -900,12 +943,50 @@ export async function streamBlobTurn(options: {
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       ...(options.getSteeringMessages === undefined
         ? {}
-        : {
-            getSteeringMessages: options.getSteeringMessages,
-            // Also drain follow-ups when the loop is about to stop: steering
-            // alone is only polled after tool rounds, missing tool-less turns.
-            getFollowUpMessages: options.getSteeringMessages,
-          }),
+        : { getSteeringMessages: options.getSteeringMessages }),
+      // The stall, at its mechanism.
+      //
+      // agentLoop ends a turn on one rule: the model produced text and called
+      // no tool (`stopReason !== "tool_use" && toolCalls.length === 0`). It has
+      // no notion of whether that text answered anything — so "Let me run it
+      // with the correct field" terminates the run exactly as cleanly as a
+      // finished report. That is the whole reason a Blob says it will do
+      // something and then goes quiet: saying it counted as replying.
+      //
+      // This hook is polled at precisely that point, before the loop stops, so
+      // a promise is answered by continuing the SAME run — tools, tool results
+      // and all the context still in hand — rather than by starting a fresh
+      // one afterwards and hoping it remembers.
+      getFollowUpMessages: () => {
+        // The user's own words come first: if they typed while it worked, that
+        // is more important than anything this Blob promised itself.
+        const steered = options.getSteeringMessages?.() ?? null;
+        if (steered !== null && steered.length > 0) {
+          return steered;
+        }
+        // Only the newest generation: see `nudgeMark`.
+        const latest = text.slice(nudgeMark).trim();
+        const judged = latest === "" ? full() : latest;
+        if (!announcesIntent(judged) || nudges >= MAX_PROMISE_NUDGES) {
+          return null;
+        }
+        nudges += 1;
+        // Bank the promise as its own bubble before asking for the work, the
+        // same way a tool call banks what came before it. Two generations are
+        // two things the Blob said: left in `text` they concatenate with
+        // nothing between them and reach the user as one glued sentence —
+        // "Let me run the scan now.Scan done: two servers down." — which is
+        // also what feeds the run summary and the notification.
+        const promised = text.trim();
+        if (promised !== "" && said[said.length - 1] !== promised) {
+          said.push(promised);
+          options.onSegment(promised);
+        }
+        // `text` restarts for the answer, so the mark into it restarts too.
+        text = "";
+        nudgeMark = 0;
+        return [{ role: "user", content: promiseNudge(nudges) }];
+      },
     });
     const pending = new Map<string, { name: string; args: Record<string, unknown> }>();
     // Set by a retry that preserved partial text (stream stall/drop): the next
@@ -947,6 +1028,10 @@ export async function streamBlobTurn(options: {
           options.onSegment(segment);
         }
         text = "";
+        // `text` restarts, so the mark into it has to as well — otherwise a
+        // turn that called a tool and then promised (the reported stall) would
+        // be judged on an empty slice and wave the promise through.
+        nudgeMark = 0;
         report(activityForTool(event.name));
         pending.set(event.toolCallId, { name: event.name, args: event.args });
       }
@@ -1095,67 +1180,34 @@ export async function streamBlobTurn(options: {
       }
     }
   }
-  // A turn that only announced the work never did it. Observed live on both
-  // scopes: a scheduled Discord check replied "Let me start by finding what
-  // Discord tools are available to me." and stopped, and a chat turn with
-  // thinking off said "I'll do that right now" and stopped — the same Blob did
-  // the work correctly the moment a human asked why.
-  //
-  // Tool use during the turn deliberately does NOT excuse this. That was the
-  // first shape of this check and it missed the reported stall (2026-08-25,
-  // Tinfoil, thinking off): the Blob called a tool, then signed off with
-  // "Let me check the search schema and the current time, then run parallel
-  // searches." Tools were used, so the nudge stood down, and the searches it
-  // promised never ran. What matters is what the reply ENDS on — a promise is
-  // unfinished work whether or not something else got done first.
-  //
-  // Still bounded: only once (the round below cannot re-enter this branch),
-  // and `announcesIntent` ignores a tail that hands the turn back ("let me
-  // know", "I'll keep an eye out"), which is how a finished reply signs off.
-  if (announcesIntent(text)) {
-    conversation = [
-      ...conversation,
-      {
-        role: "user",
-        content:
-          "You described what you were about to do, but you have not done it " +
-          "yet. Carry it out now using your tools, then report what you " +
-          "actually found. If it turns out you cannot, say plainly what " +
-          "stopped you. Do not describe the plan again.",
-      },
-    ];
-    try {
-      const carried = await runLoop("web");
-      // This round carries the full catalog, so it can end by asking the user
-      // — and that question has to reach them, or the run settles as finished
-      // while actually waiting on an answer nobody was asked for.
-      const carriedAsk = handOffAsk();
-      if (carriedAsk !== null) {
-        return carriedAsk;
-      }
-      // The announcement is already a bubble on screen (`onSegment` emitted it
-      // live); this return feeds the run summary and the notification, where
-      // what the routine actually did is the useful half.
-      text = carried.latest.trim() === "" ? text : carried.text;
-    } catch (error) {
-      if (isAbortError(error)) {
-        throw error;
-      }
-      // Keep the announcement: it is still the most honest thing on screen.
-    }
-  }
+  // A promise used to be caught here, after the loop had already stopped, by
+  // running a whole second loop. That is gone: `getFollowUpMessages` above now
+  // catches it at the loop's own stopping point, in the same run, with the
+  // tools and tool results still in hand. Re-running from outside could only
+  // ever be a worse version of the same idea — and once both existed they
+  // double-fired, because the text this saw was the promise and the answer
+  // glued into one string (`text` only resets at a tool call).
 
   // Same shape, different lie: the turn did not promise the work, it claimed
   // to have done it. A reply that says what a note holds — or that there is no
   // such note — while the turn never opened one is invention, and invention
   // reads exactly like an answer (see `claimsUnreadFile`).
   //
-  // Gated on no file tool having run, so a turn that read and then summarised
-  // is untouched, and on `home` existing at all — without it there is no file
-  // to have read and the phrasing means something else entirely.
-  const openedAFile = gathered.some(
-    (call) => call.name === "read_file" || call.name === "list_files",
-  );
+  // Gated on the turn having called NOTHING, and on `home` existing at all —
+  // without it there is no file to have read and the phrasing means something
+  // else entirely.
+  //
+  // Not a list of file tools, which is what this was first. There is no fixed
+  // set: `run_command` can cat a note, `app_run_tool` can pull a doc out of
+  // Notion, and an MCP server can expose anything at all — so naming
+  // read_file and list_files accused a Blob that had genuinely gone and
+  // looked, just not through the two tools this happened to know about.
+  //
+  // Zero calls is also what the evidence actually showed: every invented reply
+  // measured (2026-08-25, sim/grounding.sim.ts) came from a turn that called
+  // nothing whatsoever. A turn that reached for something and got it wrong is
+  // a different bug, and not one a nudge fixes.
+  const usedAnyTool = gathered.length > 0;
   // An attached file arrives inlined in the user's own message (see
   // `attachmentsPrompt`) rather than through a tool, so a Blob answering about
   // one legitimately opened nothing. Without this it would be told "that is
@@ -1167,7 +1219,7 @@ export async function streamBlobTurn(options: {
       typeof message.content === "string" &&
       message.content.includes(ATTACHED_HEADER),
   );
-  if (options.home !== undefined && !openedAFile && !hasAttachedText && claimsUnreadFile(text)) {
+  if (options.home !== undefined && !usedAnyTool && !hasAttachedText && claimsUnreadFile(text)) {
     conversation = [
       ...conversation,
       {
