@@ -811,13 +811,33 @@ export function ChatPane({
    * anything is committed, so the DOM never holds the old conversation's page.
    */
   const pagedKey = useRef(conversationKey);
+  /**
+   * True from the moment a conversation is selected until its transcript has
+   * actually arrived — which is not the same render.
+   *
+   * `App` hydrates a Blob's transcript from disk in an effect, so this pane is
+   * mounted with an EMPTY `messages` and the history lands one or more renders
+   * later. Every earlier version treated the switch as one render, and so made
+   * its decisions against a transcript that was not there yet: the hydration
+   * render looked like "messages just arrived in the conversation you were
+   * already reading", which glides (and a smooth glide chases an extent
+   * measured mid-layout, sails past the end, and leaves the blank pane that
+   * only a stray scroll rescues). It also snapshotted zero ids as "already
+   * seen", so the whole loaded history popped in as if brand new.
+   *
+   * This is why it came and went with no pattern: a Blob opened once this
+   * session is already in memory and switches in a single pass, where none of
+   * that happens. Cold ones take two, and break.
+   *
+   * Set during render rather than in an effect, so the id snapshot below is
+   * taken from the same `messages` the pin will act on.
+   */
+  const openingRef = useRef(true);
   if (pagedKey.current !== conversationKey) {
     pagedKey.current = conversationKey;
+    openingRef.current = true;
     setVisibleCount(MESSAGE_PAGE_SIZE);
   }
-  /** The conversation the scroll position was last pinned for; compared in a
-      layout effect, which runs before the passive reset below. */
-  const pinnedKey = useRef(conversationKey);
 
   // Mention colours, groups only: a 1-to-1 chat has nobody to address, so
   // there is nothing to disambiguate and "@" is just a character.
@@ -838,8 +858,15 @@ export function ChatPane({
 
   // Messages already on screen when this conversation opened. Anything newer
   // is "fresh" and pops in with the jelly animation — exactly once.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot messages only when the conversation switches
-  const initialIds = useMemo(() => new Set(messages.map((entry) => entry.id)), [conversationKey]);
+  //
+  // Re-snapshotted for as long as the conversation is still opening, because
+  // until the transcript lands there is nothing to snapshot: keying this to
+  // the switch alone captured the empty pre-hydration list, and every message
+  // in the loaded history then counted as an arrival.
+  const initialIds = useRef<ReadonlySet<string>>(new Set());
+  if (openingRef.current) {
+    initialIds.current = new Set(messages.map((entry) => entry.id));
+  }
 
   // Time dividers per message id, computed over the WHOLE transcript (not the
   // visible slice) so paging older messages in keeps each divider anchored to
@@ -1031,11 +1058,18 @@ export function ChatPane({
         // clamp below). One re-pin two frames later, when layout has settled,
         // lands on the extent that actually exists. Guarded by nearBottomRef
         // so a user who scrolled up inside those two frames is not yanked.
+        //
+        // Through `settleScroll`, not a plain `scrollTo`: asking again is
+        // exactly what does not work here. WebKit hands back the same stale
+        // extent it handed back the first time, so a second write agrees with
+        // the first and the pane stays blank. Only a real 1px move makes the
+        // engine rebuild the extent — the resize path learned this already,
+        // and the switch path was still asking politely.
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
             const settled = scrollRef.current;
             if (settled !== null && nearBottomRef.current) {
-              settled.scrollTo({ top: settled.scrollHeight, behavior: "instant" });
+              settleScroll(settled, true);
             }
           }),
         );
@@ -1064,14 +1098,19 @@ export function ChatPane({
   // re-pin. A conversation opens at its bottom, instantly, always.
   // biome-ignore lint/correctness/useExhaustiveDependencies(scrollToLatest): stable helper
   useLayoutEffect(() => {
-    const switched = pinnedKey.current !== conversationKey;
-    pinnedKey.current = conversationKey;
+    // Still opening until the transcript is here — or until the user sends,
+    // which `send` treats as the end of opening on its own, so a brand new
+    // Blob with no stored history to wait for follows the ordinary send path.
+    const opening = openingRef.current;
+    if (opening && messages.length > 0) {
+      openingRef.current = false;
+    }
     const arrived = messages.length - prevMessageCount.current;
     prevMessageCount.current = messages.length;
     if (scrollRef.current === null) {
       return;
     }
-    if (switched) {
+    if (opening) {
       // Ahead of the passive reset below, which runs after this one and would
       // otherwise leave the pin reading the departed conversation's flags.
       autoScrollRef.current = false;
@@ -1091,7 +1130,10 @@ export function ChatPane({
     if (arrived > 0) {
       setUnseenCount((count) => count + arrived);
     }
-  }, [messages, conversationKey]);
+    // `messages` alone: the parent rebuilds it inline every render, so a
+    // conversation switch always brings a new array with it, and `opening` —
+    // set during render — already carries which conversation this is.
+  }, [messages]);
 
   // Auto-grow the textarea toward the cap, animating between the measured
   // heights. The transient `auto` never paints, so the height transition runs
@@ -1246,6 +1288,12 @@ export function ChatPane({
     if (text.length === 0 && attached.length === 0) {
       return;
     }
+    // Typing into a conversation means it is open, not opening — whatever the
+    // transcript looks like. A brand new Blob has no stored history to wait
+    // for, so without this its first message would arrive while the pane still
+    // considered itself mid-hydration, be snapshotted as "already on screen",
+    // and appear without the pop-in every later message gets.
+    openingRef.current = false;
     const replying = replyTo !== null && !replyClosing ? replyTo : undefined;
     const reply =
       replying === undefined ? {} : { replyTo: replying.preview, replyToId: replying.id };
@@ -1650,7 +1698,7 @@ export function ChatPane({
                 ]
               : []),
             <MessageRow
-              fresh={!initialIds.has(message.id)}
+              fresh={!initialIds.current.has(message.id)}
               key={message.id}
               message={message}
               author={

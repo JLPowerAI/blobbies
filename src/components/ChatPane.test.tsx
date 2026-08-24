@@ -497,6 +497,107 @@ describe("ChatPane", () => {
     }
   });
 
+  it("pops in the first message sent to a brand new Blob", async () => {
+    // A Blob with no history looks exactly like one whose transcript has not
+    // loaded yet — both are an empty pane. The pane waits for stored messages
+    // before deciding what counts as "already on screen", so on a new Blob it
+    // would still be waiting when the user's own first message arrived, take
+    // it for history, and skip the pop-in every later message gets. Sending is
+    // the signal that settles it: you cannot type into a conversation that has
+    // not opened.
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    const blank: Agent = { ...agent, id: "2b6e1d94-3f52-4a8b-b0c7-9d4e5f6a7b81" };
+    const paneFor = (withMessages: Message[]) => (
+      <ChatPane
+        agent={blank}
+        messages={withMessages}
+        thinking={false}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={onSend}
+        onStop={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />
+    );
+    const { rerender } = render(paneFor([]));
+
+    await user.type(screen.getByRole("textbox", { name: "Message Ken" }), "hello");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(onSend).toHaveBeenCalled();
+
+    // The app echoes the sent message back through props.
+    const sent: Message[] = [
+      { id: "s1", kind: "text", author: "user", segments: [{ text: "hello" }] },
+    ];
+    rerender(paneFor(sent));
+
+    expect(document.querySelectorAll(".message-fresh")).toHaveLength(1);
+  });
+
+  it("opens a conversation whose transcript lands a render later, still at its bottom", () => {
+    // The blank pane, and why it came and went. `App` hydrates a Blob's
+    // transcript from disk in an effect, so clicking a session renders this
+    // pane EMPTY first and the messages arrive one or more renders later — but
+    // only when that Blob is cold. Open it a second time and the transcript is
+    // already in memory, so it switches in a single pass and nothing is wrong.
+    //
+    // The switch was treated as that single pass. By the time the transcript
+    // landed the pane had stopped considering itself "opening", so a history
+    // whose last line is the user's own (sent, then clicked away) read as "the
+    // user just sent a message" and glided to it — a smooth scroll toward an
+    // extent measured while the transcript was still laying out, which sails
+    // past the end into blank and stays there until a stray scroll re-clamps.
+    const other: Agent = { ...agent, id: "1f3c9a02-77d8-4f0e-9c31-2a5b6e8d4c10", name: "Robin" };
+    const longer: Message[] = [
+      ...messages,
+      { id: "m3", kind: "text", author: "agent", segments: [{ text: "Ask away." }] },
+      { id: "m4", kind: "text", author: "user", segments: [{ text: "one sec" }] },
+    ];
+    const paneFor = (who: Agent, withMessages: Message[]) => (
+      <ChatPane
+        agent={who}
+        messages={withMessages}
+        thinking={false}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        onStop={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />
+    );
+    const { rerender } = render(pane(false, vi.fn(), messages));
+    const el = document.querySelector(".message-scroll");
+    expect(el).not.toBeNull();
+    if (el === null) return;
+    const scrollTo = vi.fn();
+    el.scrollTo = scrollTo as unknown as typeof el.scrollTo;
+    Object.defineProperty(el, "scrollHeight", { get: () => 1200, configurable: true });
+
+    // Clicked into the other session: selected, but nothing hydrated yet.
+    rerender(paneFor(other, []));
+    // Disk hands the transcript over a beat later.
+    rerender(paneFor(other, longer));
+
+    for (const call of scrollTo.mock.calls) {
+      expect(call[0]).not.toMatchObject({ behavior: "smooth" });
+    }
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 1200, behavior: "instant" });
+
+    // And the transcript it just loaded is history, not new arrivals: every
+    // row playing the pop-in animation at once is the same wrong premise
+    // showing itself visually.
+    expect(document.querySelectorAll(".message-fresh")).toHaveLength(0);
+  });
+
   it("holds the bottom when showing the sidebar reflows the transcript taller", () => {
     // The second reported repro: hiding or showing the sidebar shoots the
     // chat up out of sight, and a small scroll brings it back.
@@ -570,6 +671,129 @@ describe("ChatPane", () => {
       // Still following the conversation: the newest message is on screen, and
       // no jump arrow is offered over a chat nobody left.
       expect(top).toBe(1400 - VIEWPORT);
+      expect(screen.queryByRole("button", { name: "Scroll to bottom" })).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds the bottom when the sidebar is toggled on a cold session", () => {
+    // The two halves of the original report, together, which is how it was
+    // actually hit: click a session that has never been opened this run (its
+    // transcript arrives a render after mount), then show or hide the right
+    // sidebar. Either alone can look fine; the cold open is what poisons the
+    // resize that follows.
+    //
+    // A cold open used to glide, and a glide is *in flight* — it has not
+    // landed when the width transition starts. `autoScrollRef` is set for its
+    // duration, so every scroll event the reflow fires is swallowed as "our
+    // own animation passing through", and the pane enters the burst seated
+    // wherever the glide had got to. That is the empty chat: content below the
+    // viewport, nothing on screen, until any scroll re-clamps it.
+    vi.useFakeTimers();
+    const callbacks: (() => void)[] = [];
+    class FakeObserver {
+      constructor(callback: () => void) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeObserver);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      const cold: Agent = { ...agent, id: "5c2d8e77-41ab-4f60-9d02-8ea1b6c73f95", name: "Robin" };
+      const history: Message[] = [
+        ...messages,
+        { id: "m3", kind: "text", author: "agent", segments: [{ text: "Ask away." }] },
+        { id: "m4", kind: "text", author: "user", segments: [{ text: "one sec" }] },
+      ];
+      const paneFor = (withMessages: Message[]) => (
+        <ChatPane
+          agent={cold}
+          messages={withMessages}
+          thinking={false}
+          model=""
+          onModelChange={() => {}}
+          reasoning={false}
+          onReasoningChange={() => {}}
+          onSend={() => {}}
+          onStop={() => {}}
+          detailOpen={true}
+          onToggleDetail={() => {}}
+          onOpenSettings={() => {}}
+        />
+      );
+      // Mounted with nothing: the session is selected, the disk read is still
+      // in flight.
+      const { rerender } = render(paneFor([]));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (el === null) return;
+
+      const VIEWPORT = 200;
+      let height = VIEWPORT;
+      let top = 0;
+      const seat = (value: number) => {
+        top = Math.max(0, Math.min(value, height - VIEWPORT));
+      };
+      Object.defineProperty(el, "scrollHeight", { get: () => height, configurable: true });
+      Object.defineProperty(el, "clientHeight", { get: () => VIEWPORT, configurable: true });
+      Object.defineProperty(el, "scrollTop", { get: () => top, set: seat, configurable: true });
+      // A smooth scroll is an animation: it is asked for now and lands later,
+      // so it must not move the position within this test's frames. An instant
+      // one is a write, and lands immediately. Modelling that difference is
+      // the whole point — it is what makes a glide observable as "in flight".
+      el.scrollTo = ((options: ScrollToOptions) => {
+        if (options.behavior !== "smooth") {
+          seat(options.top ?? top);
+        }
+      }) as unknown as typeof el.scrollTo;
+
+      // The mount's own frames run first, on the empty pane — a disk read is
+      // many frames slower than the two this schedules. Draining them after
+      // the transcript arrives would let the mount's settling re-pin rescue a
+      // conversation it never measured, and the app gets no such rescue.
+      const drainFrames = () => {
+        act(() => {
+          for (let guard = 0; frames.length > 0 && guard < 10; guard += 1) {
+            for (const cb of frames.splice(0)) cb(0);
+          }
+        });
+      };
+      drainFrames();
+
+      // The transcript lands. Taller than the viewport now, and its last line
+      // is the user's own — the shape that used to read as "you just sent a
+      // message" and glide.
+      height = 1000;
+      rerender(paneFor(history));
+      drainFrames();
+      // Opened at its bottom, on a write rather than an animation.
+      expect(top).toBe(1000 - VIEWPORT);
+
+      // Now hide the right sidebar. The pane widens over 260ms; the same text
+      // re-wraps into fewer lines, so the transcript SHRINKS under a scrollTop
+      // that is already past the new end — the stale-extent case.
+      fireEvent.scroll(el);
+      height = 700;
+      fireEvent.scroll(el);
+      act(() => {
+        for (const callback of callbacks) callback();
+      });
+      act(() => {
+        vi.advanceTimersByTime(320);
+      });
+      drainFrames();
+
+      // Sitting on the newest message, on geometry that exists — not parked
+      // past the end showing blank, and no jump arrow over a chat nobody left.
+      expect(top).toBe(700 - VIEWPORT);
       expect(screen.queryByRole("button", { name: "Scroll to bottom" })).not.toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();
