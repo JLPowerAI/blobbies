@@ -140,5 +140,13 @@ opt-level = 3
 codegen-units = 1
 lto = true
 opt-level = "s"
-panic = "abort"
+# No `panic = "abort"` here, deliberately. WebKit raises an Objective-C
+# exception when a custom-protocol response lands on a WKURLSchemeTask the page
+# has already stopped (a cancelled request, a re-render mid-flight), and wry
+# guards every `didReceiveResponse:`/`didReceiveData:`/`didFinish` with
+# `objc2::exception::catch` for exactly that. `panic = "abort"` marks the
+# `extern "C-unwind"` message-send boundary nounwind, so the exception trips
+# `panic_cannot_unwind` and aborts the process before wry's `@catch` ever sees
+# it — a recoverable race became a crash report in 0.5.0 (group chat, several
+# turns in flight at once).
 strip = true
