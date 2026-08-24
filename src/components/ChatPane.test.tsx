@@ -598,6 +598,330 @@ describe("ChatPane", () => {
     expect(document.querySelectorAll(".message-fresh")).toHaveLength(0);
   });
 
+  it("rebuilds the transcript's rendering after a resize, keeping its place", () => {
+    // The paint lane, which is a different bug from every scroll fix above.
+    //
+    // A ⌘⇧D probe reading taken while the pane was blank on the reporter's
+    // machine (release build, 1080x728 @ dpr 2) showed geometry was already
+    // perfect: drift=0, gap=0, scrollTop === max, every on-screen row opaque,
+    // and the fault survived a layout flush. The rows were positioned exactly
+    // where they belong and had not been drawn.
+    //
+    // The mechanism is not a guess. The reporter tried the candidates live on
+    // a blank pane: an opacity compositing layer did nothing, `translateZ(0)`
+    // did nothing, and detaching the scroller from the render tree brought
+    // the whole transcript back. So re-compositing an existing layer is not
+    // enough — the renderer has to be destroyed and rebuilt.
+    //
+    // Two invariants here, and the second is the one that would hurt a user:
+    // `display: none` resets scrollTop, so the position must come back, and
+    // the scroll event that restore fires must not be mistaken for the user
+    // scrolling to the top (which would page in history every repair).
+    vi.useFakeTimers();
+    const callbacks: (() => void)[] = [];
+    class FakeObserver {
+      constructor(callback: () => void) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeObserver);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      render(pane(false, vi.fn(), messages));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (el === null) return;
+      if (!(el instanceof HTMLElement)) return;
+
+      const VIEWPORT = 200;
+      const HEIGHT = 1000;
+      let top = HEIGHT - VIEWPORT;
+      Object.defineProperty(el, "scrollHeight", { get: () => HEIGHT, configurable: true });
+      Object.defineProperty(el, "clientHeight", { get: () => VIEWPORT, configurable: true });
+      Object.defineProperty(el, "scrollTop", {
+        get: () => top,
+        set: (value: number) => {
+          top = Math.max(0, Math.min(value, HEIGHT - VIEWPORT));
+        },
+        configurable: true,
+      });
+      el.scrollTo = ((options: ScrollToOptions) => {
+        top = Math.max(0, Math.min(options.top ?? top, HEIGHT - VIEWPORT));
+      }) as unknown as typeof el.scrollTo;
+
+      // Every display value the element passes through, so a re-render that
+      // never happens and one that never restores both fail.
+      const seenDisplay: string[] = [];
+      const realSet = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "display");
+      Object.defineProperty(el.style, "display", {
+        get: () => realSet?.get?.call(el.style) ?? "",
+        set: (value: string) => {
+          seenDisplay.push(value);
+          realSet?.set?.call(el.style, value);
+        },
+        configurable: true,
+      });
+
+      const drainOneFrame = () => {
+        const due = frames.splice(0);
+        act(() => {
+          for (const cb of due) cb(0);
+        });
+      };
+
+      // Mounting also re-renders — opening a conversation is the other half of
+      // the report. Drain that first and assert on it separately, or the
+      // resize below is checked against the mount's work and passes even when
+      // the resize path does nothing at all.
+      for (let guard = 0; frames.length > 0 && guard < 10; guard += 1) {
+        drainOneFrame();
+      }
+      expect(seenDisplay).toContain("none");
+      expect(el.style.display).toBe("");
+      seenDisplay.length = 0;
+
+      // Now the sidebar's width transition, on its own.
+      act(() => {
+        for (const callback of callbacks) callback();
+      });
+      act(() => {
+        vi.advanceTimersByTime(320);
+      });
+      for (let guard = 0; frames.length > 0 && guard < 10; guard += 1) {
+        drainOneFrame();
+      }
+
+      // The renderer was torn down — that is the repair.
+      expect(seenDisplay).toContain("none");
+      // ...and put back. Anything else leaves the chat invisible for real.
+      expect(el.style.display).toBe("");
+      // And the reader is still where they were, not thrown to the top by the
+      // detach.
+      expect(top).toBe(HEIGHT - VIEWPORT);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not page in history when its own re-render restores the scroll", () => {
+    // The sharp edge on the re-render repair. Detaching the scroller resets
+    // scrollTop to 0, and putting it back fires a scroll event. Unguarded,
+    // that event arrives looking exactly like the user having scrolled to the
+    // very top — so every repair would page in another slab of history, and a
+    // user toggling the sidebar a few times would silently load the entire
+    // transcript.
+    vi.useFakeTimers();
+    const callbacks: (() => void)[] = [];
+    class FakeObserver {
+      constructor(callback: () => void) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeObserver);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      // More messages than one page, so there is history left to page in.
+      const many: Message[] = Array.from({ length: 90 }, (_, i) => ({
+        id: `p${i}`,
+        kind: "text",
+        author: i % 2 === 0 ? "agent" : "user",
+        segments: [{ text: `Line ${i}` }],
+      }));
+      render(pane(false, vi.fn(), many));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (el === null) return;
+      if (!(el instanceof HTMLElement)) return;
+
+      const shown = () => el.querySelectorAll(".message-row").length;
+      const before = shown();
+      expect(before).toBeGreaterThan(0);
+
+      const VIEWPORT = 200;
+      const HEIGHT = 4000;
+      let top = HEIGHT - VIEWPORT;
+      Object.defineProperty(el, "scrollHeight", { get: () => HEIGHT, configurable: true });
+      Object.defineProperty(el, "clientHeight", { get: () => VIEWPORT, configurable: true });
+      Object.defineProperty(el, "scrollTop", {
+        get: () => top,
+        set: (value: number) => {
+          top = Math.max(0, Math.min(value, HEIGHT - VIEWPORT));
+          // Every write fires a scroll event, exactly like a browser.
+          el.dispatchEvent(new Event("scroll"));
+        },
+        configurable: true,
+      });
+      // jsdom has no layout, so it does not do the one thing that makes this
+      // dangerous: a real browser drops the scroll position of an element it
+      // removes from the render tree. Without modelling that, the restore
+      // writes back the value it already had and nothing is exercised.
+      const realDisplay = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "display");
+      Object.defineProperty(el.style, "display", {
+        get: () => realDisplay?.get?.call(el.style) ?? "",
+        set: (value: string) => {
+          realDisplay?.set?.call(el.style, value);
+          if (value === "none") {
+            top = 0;
+            el.dispatchEvent(new Event("scroll"));
+          }
+        },
+        configurable: true,
+      });
+      el.scrollTo = ((options: ScrollToOptions) => {
+        el.scrollTop = options.top ?? top;
+      }) as unknown as typeof el.scrollTo;
+
+      const drain = () => {
+        for (let guard = 0; frames.length > 0 && guard < 10; guard += 1) {
+          const due = frames.splice(0);
+          act(() => {
+            for (const cb of due) cb(0);
+          });
+        }
+      };
+      drain();
+
+      // Toggle the sidebar several times: each settle triggers a re-render,
+      // and each re-render's restore passes a scrollTop of 0 through the
+      // handler on its way back up.
+      for (let round = 0; round < 4; round += 1) {
+        act(() => {
+          for (const callback of callbacks) callback();
+        });
+        act(() => {
+          vi.advanceTimersByTime(320);
+        });
+        drain();
+      }
+
+      // No extra history was revealed by the repair alone.
+      expect(shown()).toBe(before);
+      // And the reader is still at the bottom, where they were.
+      expect(top).toBe(HEIGHT - VIEWPORT);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets the re-clamping nudge actually land instead of erasing it", () => {
+    // The defect behind four failed fixes, and the reason each one looked
+    // right in tests and wrong on the machine.
+    //
+    // After a width transition WebKit can hand back a stale scroll extent
+    // together with a scrollTop produced by that same stale extent: they agree
+    // with each other and disagree with the pixels, so the pane shows blank
+    // until a stray scroll makes the engine re-clamp. Only a real scroll fixes
+    // it — forcing layout does not, because the cached scrollable overflow is
+    // not layout.
+    //
+    // The code knew that and still did nothing, because it wrote the nudge and
+    // the intended position in the SAME frame. WebKit coalesces same-frame
+    // scroll updates into one commit (verified against WebKit 26.5: that pair
+    // fires exactly one scroll event, carrying only the final value), so
+    // whenever the target was where we already were — every "already at the
+    // bottom" case, the entire reason the nudge exists — net movement was
+    // zero and nothing was ever re-clamped.
+    //
+    // So the invariant is about ORDERING, not position: the nudge must be the
+    // last scroll written in its frame.
+    vi.useFakeTimers();
+    const callbacks: (() => void)[] = [];
+    class FakeObserver {
+      constructor(callback: () => void) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeObserver);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      render(pane(false, vi.fn(), messages));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (el === null) return;
+
+      const VIEWPORT = 200;
+      const HEIGHT = 1000;
+      const bottom = HEIGHT - VIEWPORT;
+      let top = bottom; // already sitting at the bottom
+      Object.defineProperty(el, "scrollHeight", { get: () => HEIGHT, configurable: true });
+      Object.defineProperty(el, "clientHeight", { get: () => VIEWPORT, configurable: true });
+      Object.defineProperty(el, "scrollTop", {
+        get: () => top,
+        set: (value: number) => {
+          top = Math.max(0, Math.min(value, bottom));
+        },
+        configurable: true,
+      });
+
+      // Every scroll write, tagged with the frame it happened in. A frame ends
+      // when the rAF queue is drained.
+      let frame = 0;
+      const writes: { frame: number; top: number }[] = [];
+      el.scrollTo = ((options: ScrollToOptions) => {
+        const next = options.top ?? top;
+        writes.push({ frame, top: next });
+        top = Math.max(0, Math.min(next, bottom));
+      }) as unknown as typeof el.scrollTo;
+
+      // A resize burst that changes nothing: the transcript is the same height
+      // and we are already at the bottom. Nothing to correct — which is
+      // precisely when the old code's nudge cancelled itself out.
+      act(() => {
+        for (const callback of callbacks) callback();
+      });
+      act(() => {
+        vi.advanceTimersByTime(320);
+      });
+
+      const settleStart = writes.length;
+      act(() => {
+        for (let guard = 0; frames.length > 0 && guard < 10; guard += 1) {
+          frame += 1;
+          for (const cb of frames.splice(0)) cb(0);
+        }
+      });
+
+      const settleWrites = writes.slice(settleStart);
+      expect(settleWrites.length).toBeGreaterThanOrEqual(2);
+
+      // The nudge: a write that is not the final resting position.
+      const nudge = settleWrites.find((write) => write.top !== bottom);
+      expect(nudge).toBeDefined();
+      if (nudge === undefined) return;
+
+      // Nothing may follow it inside its own frame, or the engine coalesces
+      // the pair and performs no scroll at all.
+      expect(settleWrites.filter((write) => write.frame === nudge.frame)).toHaveLength(1);
+
+      // And it still ends where the reader was: at the bottom.
+      expect(settleWrites.at(-1)?.top).toBe(bottom);
+      expect(top).toBe(bottom);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("holds the bottom when showing the sidebar reflows the transcript taller", () => {
     // The second reported repro: hiding or showing the sidebar shoots the
     // chat up out of sight, and a small scroll brings it back.
@@ -855,6 +1179,11 @@ describe("ChatPane", () => {
       disconnect() {}
     }
     vi.stubGlobal("ResizeObserver", FakeObserver);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
     try {
       render(pane(false, vi.fn()));
       const el = document.querySelector(".message-scroll");
@@ -876,6 +1205,14 @@ describe("ChatPane", () => {
       });
       act(() => {
         vi.advanceTimersByTime(320);
+      });
+      // The clamp deliberately spans two frames: the nudge has to land on its
+      // own before the intended position is written, or WebKit coalesces the
+      // pair and performs no scroll at all.
+      act(() => {
+        for (let guard = 0; frames.length > 0 && guard < 10; guard += 1) {
+          for (const cb of frames.splice(0)) cb(0);
+        }
       });
       // The settle clamp ends the burst on a position that exists.
       expect(scrollTo).toHaveBeenCalledWith({ top: 800, behavior: "instant" });

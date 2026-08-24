@@ -507,39 +507,107 @@ const MAX_MENTION_OPTIONS = 6;
 const MENTION_TOKEN = /(?:^|\s)@([^@\n]*)$/u;
 
 /**
- * Re-seat `el` on the geometry it actually has, and report where it landed.
+ * Re-seat `el` on the geometry it actually has, across two frames.
  *
- * The previous version asked `scrollTop > max` and corrected only when that
- * read true. It cannot work, because after a width transition WebKit hands
- * back a *stale* scroll extent and a `scrollTop` produced by that same stale
- * extent — the two agree with each other and disagree with the pixels, so the
- * comparison reads false, the correction no-ops, and the pane keeps showing
- * blank until a stray scroll makes the engine re-clamp for us. Flushing with
- * `offsetHeight` does not help: it forces layout, not a recompute of the
- * scrollable overflow the scroller caches.
+ * After a width transition or a conversation swap WebKit can hand back a
+ * *stale* scroll extent together with a `scrollTop` produced by that same
+ * stale extent — the two agree with each other and disagree with the pixels.
+ * The pane then shows blank until a stray scroll makes the engine re-clamp.
+ * Forcing layout with `offsetHeight` does not help: that recomputes layout,
+ * not the scrollable overflow the scroller caches. Only a real scroll does.
  *
- * So this stops asking and does what the user's rescuing flick does. A real
- * 1px move is the one thing that makes WebKit rebuild the extent; after it,
- * `scrollHeight` is trustworthy and the intended position can be written
- * outright. Unconditional, because the anomaly is invisible to every test we
- * can make from inside the page — and re-writing a position that was already
- * correct costs nothing and moves nothing.
+ * The previous version knew that and still did nothing, because it wrote the
+ * nudge and the intended position in the SAME frame:
+ *
+ *     el.scrollTo({top: before - 1});   // the nudge
+ *     el.scrollTo({top: target});       // ... immediately erased
+ *
+ * WebKit coalesces same-frame scroll updates into one commit. Verified
+ * against WebKit 26.5: that pair fires exactly ONE scroll event, carrying
+ * only the final value. So whenever `target` was where we already were —
+ * every "already at the bottom" case, which is the entire reason this
+ * function exists — the net movement was zero, the engine never re-clamped,
+ * and the pane stayed blank. That is why the fix appeared to work sometimes:
+ * it only ever did anything when the target happened to differ.
+ *
+ * So the nudge is now the last scroll written in its frame, and the intended
+ * position is written on the next one. Two genuine 1px scrolls, invisible to
+ * the eye, each one a real scroll to the engine. The second measures against
+ * an extent the first forced it to rebuild.
  *
  * `pinBottom` says which position was intended: the bottom for a reader who
  * was following the conversation, otherwise wherever they had parked, capped
- * at an extent that now exists.
+ * at an extent that now exists. `done` receives the final position once it
+ * has landed. Returns the pending frame handle so a caller that is torn down
+ * — or switched to another conversation — can cancel the second half.
  */
-function settleScroll(el: HTMLElement, pinBottom: boolean): number {
+function settleScroll(el: HTMLElement, pinBottom: boolean, done?: (top: number) => void): number {
   void el.offsetHeight;
   const before = el.scrollTop;
-  // The nudge itself. 1px away from wherever we are, in whichever direction
-  // has room — at scrollTop 0 there is nothing below to borrow from.
-  el.scrollTo({ top: before < 1 ? before + 1 : before - 1, behavior: "instant" });
-  void el.offsetHeight;
   const max = Math.max(0, el.scrollHeight - el.clientHeight);
   const target = pinBottom ? max : Math.min(before, max);
-  el.scrollTo({ top: target, behavior: "instant" });
-  return target;
+  // The nudge, alone in its frame: 1px off the target, in whichever direction
+  // has room — at 0 there is nothing above to borrow from.
+  el.scrollTo({ top: target < 1 ? target + 1 : target - 1, behavior: "instant" });
+  return requestAnimationFrame(() => {
+    // Measured again, because the scroll above is what makes this trustworthy.
+    const settled = pinBottom ? Math.max(0, el.scrollHeight - el.clientHeight) : target;
+    el.scrollTo({ top: settled, behavior: "instant" });
+    done?.(el.scrollTop);
+  });
+}
+
+/**
+ * Make WebKit rebuild `el`'s rendering, then put the scroll position back.
+ *
+ * Why this exists: a ⌘⇧D probe reading taken while the pane was blank on the
+ * reporter's machine (release build, 1080x728 @ dpr 2) showed the geometry was
+ * already perfect — `drift=0`, `gap=0`, `scrollTop === max`, every on-screen
+ * row opaque, and "the fault survives a layout flush". The rows were
+ * positioned exactly where they belong and simply had not been drawn. Every
+ * fix before this one moved `scrollTop`, which was never what was wrong.
+ *
+ * Why THIS mechanism, out of the obvious candidates: the reporter tried them
+ * live, in order, on a genuinely blank pane. Setting opacity to create a
+ * throwaway compositing layer did nothing. `translateZ(0)` did nothing. This
+ * — removing the element from the render tree, forcing layout, putting it
+ * back — brought the whole transcript back at once.
+ *
+ * That result is the useful part, because it rules out a whole class of fix:
+ * asking the compositor to re-composite an existing layer is not enough, since
+ * the layer it re-composites still holds the stale tiles. Only destroying the
+ * renderer and rebuilding it produces fresh ones.
+ *
+ * The three writes happen in one task, so the browser never paints the
+ * intermediate state and there is no flash. `display: none` does reset the
+ * scroll position, hence the save and restore — and that restore fires a
+ * scroll event the pane must ignore, which is what `done` is for.
+ *
+ * simplification: a full re-layout of the transcript, which is why it runs
+ * only after a settle (≈once per resize or switch) and never per frame. The
+ * upgrade path is a narrower invalidation if WebKit ever offers one.
+ */
+function forceRerender(el: HTMLElement, done?: () => void): number {
+  const top = el.scrollTop;
+  el.style.display = "none";
+  // Read layout while it is detached: this is what forces the renderer to be
+  // torn down rather than the whole thing being coalesced away.
+  void el.offsetHeight;
+  el.style.display = "";
+  // Restoring the position is the one step that must not throw: the element
+  // is visible again by now, so failing here would strand the reader at the
+  // top of the transcript rather than where they were reading.
+  try {
+    el.scrollTop = top;
+  } catch {
+    el.scrollTo?.({ top, behavior: "instant" });
+  }
+  // Scroll events are dispatched during "update the rendering", which runs
+  // before animation-frame callbacks — so by the time this fires, the event
+  // from the restore above has already been and gone.
+  return requestAnimationFrame(() => {
+    done?.();
+  });
 }
 
 /** Cap the composer's growth at five text lines (5 × 20px + block padding). */
@@ -787,6 +855,16 @@ export function ChatPane({
   const resizingRef = useRef<boolean | null>(null);
   /** Pending double-rAF from the resize settle, so unmount can cancel it. */
   const settleFrame = useRef<number | undefined>(undefined);
+  /** Pending frame that ends a forced re-render. */
+  const repaintFrame = useRef<number | undefined>(undefined);
+  /**
+   * True while a re-render is putting the scroll position back.
+   *
+   * Detaching the scroller resets its scroll position to 0, and restoring it
+   * fires a scroll event that is not the user: unguarded it reads as "scrolled
+   * to the very top" and pages in more history on every repair.
+   */
+  const rerenderingRef = useRef(false);
   /** Pending settle *timer* from the resize burst. In a ref for the same
       reason as the frame: a conversation switch has to be able to cancel it,
       and a timer parked in the observer's closure is unreachable from there —
@@ -947,6 +1025,14 @@ export function ChatPane({
     }
     clearTimeout(settleTimer.current);
     settleTimer.current = undefined;
+    // A re-render's closing frame must never be dropped on the floor: the
+    // scroll handler would be left suppressed forever, and the pane would
+    // stop noticing that the user had scrolled at all.
+    if (repaintFrame.current !== undefined) {
+      cancelAnimationFrame(repaintFrame.current);
+      repaintFrame.current = undefined;
+      rerenderingRef.current = false;
+    }
   }, [conversationKey]);
 
   // Older page mounted above the viewport: keep what the user was looking at
@@ -1015,17 +1101,21 @@ export function ChatPane({
         // `pinBottom` is the decision made at the start of the burst, not a
         // fresh reading: every scroll event since then was fired by the reflow.
         const pinBottom = resizingRef.current === true;
-        settleScroll(el, pinBottom);
-        // Once more after the next paint. The 320ms timer clears the 260ms
-        // width transition, but the compositor can still be mid-commit when it
-        // fires; two frames put this after layout for the settled width, so a
-        // reflow that lands late is corrected too. Cheap, and idempotent when
-        // the first pass already got it right.
-        settleFrame.current = requestAnimationFrame(() => {
-          settleFrame.current = requestAnimationFrame(() => {
-            const top = settleScroll(el, pinBottom);
-            resizingRef.current = null;
-            nearBottomRef.current = el.scrollHeight - top - el.clientHeight < 80;
+        // One call, not two: `settleScroll` already spans two frames, and its
+        // second half measures against the extent its own nudge rebuilt. The
+        // previous pair ran back-to-back inside a single frame, where WebKit
+        // coalesced each nudge away with the write that followed it.
+        settleFrame.current = settleScroll(el, pinBottom, (top) => {
+          settleFrame.current = undefined;
+          resizingRef.current = null;
+          nearBottomRef.current = el.scrollHeight - top - el.clientHeight < 80;
+          // The width transition just resized this scroller's backing store,
+          // which is when its tiles can be left holding the pre-transition
+          // picture. Position is settled by now, so this cannot fight it.
+          rerenderingRef.current = true;
+          repaintFrame.current = forceRerender(el, () => {
+            rerenderingRef.current = false;
+            repaintFrame.current = undefined;
           });
         });
       }, 320);
@@ -1036,6 +1126,14 @@ export function ChatPane({
       if (settleFrame.current !== undefined) {
         cancelAnimationFrame(settleFrame.current);
         settleFrame.current = undefined;
+      }
+      if (repaintFrame.current !== undefined) {
+        cancelAnimationFrame(repaintFrame.current);
+        repaintFrame.current = undefined;
+        rerenderingRef.current = false;
+        // The re-render restores `display` synchronously, so an unmount here
+        // cannot leave the pane hidden — only the suppression flag needs
+        // clearing.
       }
       observer.disconnect();
     };
@@ -1062,15 +1160,27 @@ export function ChatPane({
         // Through `settleScroll`, not a plain `scrollTo`: asking again is
         // exactly what does not work here. WebKit hands back the same stale
         // extent it handed back the first time, so a second write agrees with
-        // the first and the pane stays blank. Only a real 1px move makes the
-        // engine rebuild the extent — the resize path learned this already,
-        // and the switch path was still asking politely.
-        requestAnimationFrame(() =>
+        // the first and the pane stays blank. Only a real scroll makes the
+        // engine rebuild the extent, which is why `settleScroll` spends a
+        // frame letting its nudge actually land instead of overwriting it.
+        settleFrame.current = requestAnimationFrame(() =>
           requestAnimationFrame(() => {
             const settled = scrollRef.current;
             if (settled !== null && nearBottomRef.current) {
-              settleScroll(settled, true);
+              settleFrame.current = settleScroll(settled, true, () => {
+                settleFrame.current = undefined;
+                // A switch refilled this scroller with a different
+                // transcript. Same tile-staleness risk as the resize above,
+                // and the same reason "open a session and it is empty".
+                rerenderingRef.current = true;
+                repaintFrame.current = forceRerender(settled, () => {
+                  rerenderingRef.current = false;
+                  repaintFrame.current = undefined;
+                });
+              });
+              return;
             }
+            settleFrame.current = undefined;
           }),
         );
       }
@@ -1629,6 +1739,15 @@ export function ChatPane({
         ref={scrollRef}
         onScroll={(event) => {
           const el = event.currentTarget;
+          // A forced re-render detaches this scroller, which resets its scroll
+          // position to 0; putting it back fires this handler. That is our own
+          // repair passing through, not the user — and it arrives looking like
+          // "scrolled to the very top", which would page in more history every
+          // single time. Nothing below should see it.
+          if (rerenderingRef.current) {
+            noteMetrics(el);
+            return;
+          }
           const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           // Near the top with older messages hidden: reveal another page.
           // The anchor guard also debounces re-entry while the page mounts.
