@@ -849,13 +849,20 @@ export function makeRosterTools(roster: RosterAccess, selfName: string): AgentTo
         'Short unique name in plain words, e.g. "YouTube Blob" — never dashes or underscores',
       ),
     title: z.string().describe('One-line job, e.g. "Inbox triage"'),
-    description: z.string().describe("What the new Blob is responsible for"),
+    description: z
+      .string()
+      .describe(
+        "What the new Blob is responsible for, addressed TO it in the second " +
+          'person: "You triage the inbox each morning", never "I triage" — this ' +
+          'is pasted verbatim under "You are <name>." in its system prompt',
+      ),
     instructions: z
       .string()
       .describe(
         "This Blob's hand-written role, used verbatim as its system " +
           "instructions: how it should behave and do the job, not just what the " +
-          "job is — the new Blob has no other setup, so this is required",
+          "job is — the new Blob has no other setup, so this is required. " +
+          'Second person throughout, like the description: "You...", never "I..."',
       ),
   });
   const spawn: AgentTool<typeof spawnParameters> = {
@@ -905,14 +912,22 @@ export function makeRosterTools(roster: RosterAccess, selfName: string): AgentTo
   const updateBlobParameters = z.object({
     name: z.string().describe("Name of the Blob to update"),
     title: z.string().optional().describe('New one-line job, e.g. "Inbox triage"'),
-    description: z.string().optional().describe("New summary of what this Blob is responsible for"),
+    description: z
+      .string()
+      .optional()
+      .describe(
+        "New summary of what this Blob is responsible for, addressed TO it in " +
+          'the second person: "You triage the inbox", never "I triage" — this is ' +
+          'pasted verbatim under "You are <name>." in its system prompt',
+      ),
     instructions: z
       .string()
       .optional()
       .describe(
         "New hand-written role, used verbatim as this Blob's system " +
           "instructions — how it should behave and do the job. Replaces the old " +
-          "role entirely, so write the complete role, not just the change",
+          "role entirely, so write the complete role, not just the change. " +
+          'Second person throughout, like the description: "You...", never "I..."',
       ),
   });
   const updateBlob: AgentTool<typeof updateBlobParameters> = {

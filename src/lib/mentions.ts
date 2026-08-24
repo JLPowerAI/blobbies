@@ -1,5 +1,5 @@
 import { BLOB_GRADIENTS } from "@/components/BlobAvatar";
-import type { Agent } from "@/data/agents";
+import type { Agent, AgentShape, AvatarTone } from "@/data/agents";
 
 /**
  * The two colours a mention can be drawn in: one legible on a light
@@ -24,10 +24,22 @@ const EVERYONE_COLORS: MentionColors = { onLight: "#0a5dc2", onDark: "#6cb2ff" }
 /** Matched case-insensitively, like a member's name. */
 const EVERYONE = "everyone";
 
+/**
+ * Which Blob a mention points at: its colour, and the avatar to draw in place
+ * of the "@". `@everyone` has colours but no avatar — it is the room, not a
+ * member, and there is no face to show for it.
+ */
+export interface MentionIdentity {
+  colors: MentionColors;
+  avatar?: { tone: AvatarTone; shape: AgentShape };
+}
+
 /** A mention, or a run of ordinary text. `colors` set means it is a mention. */
 export interface MentionPart {
   text: string;
   colors?: MentionColors;
+  /** The mentioned Blob's avatar, when it has one. */
+  avatar?: { tone: AvatarTone; shape: AgentShape };
 }
 
 /**
@@ -37,19 +49,25 @@ export interface MentionPart {
  * shorter name first would colour half of the longer one and leave the rest
  * as plain text.
  */
-export type MentionPalette = Map<string, MentionColors>;
+export type MentionPalette = Map<string, MentionIdentity>;
 
 export function mentionPalette(members: readonly Agent[]): MentionPalette {
-  const entries: [string, MentionColors][] = members
+  const entries: [string, MentionIdentity][] = members
     // A blank name would match at every "@", painting the whole transcript in
     // one Blob's colour. The roster should not hold one; this is the cheap
     // guarantee that it cannot matter if it does.
     .filter((member) => member.name.trim() !== "")
     .map((member) => {
       const [pale, deep] = BLOB_GRADIENTS[member.tone];
-      return [member.name.toLowerCase(), { onLight: deep, onDark: pale }];
+      return [
+        member.name.toLowerCase(),
+        {
+          colors: { onLight: deep, onDark: pale },
+          avatar: { tone: member.tone, shape: member.shape ?? "sphere" },
+        },
+      ];
     });
-  entries.push([EVERYONE, EVERYONE_COLORS]);
+  entries.push([EVERYONE, { colors: EVERYONE_COLORS }]);
   entries.sort((left, right) => right[0].length - left[0].length);
   return new Map(entries);
 }
@@ -113,15 +131,19 @@ export function splitMentions(
         if (at > plain) {
           parts.push({ text: text.slice(plain, at) });
         }
-        parts.push({ text: text.slice(at), colors: only[1] });
+        // Colour only, never an avatar: the sole caller of `partial` is the
+        // composer's highlight mirror, which sits behind the textarea and has
+        // to stay character-for-character identical to it. An avatar there
+        // would shift every glyph after it out from under the real caret.
+        parts.push({ text: text.slice(at), colors: only[1].colors });
         return parts;
       }
     }
-    let hit: { name: string; colors: MentionColors } | undefined;
-    for (const [name, colors] of palette) {
+    let hit: { name: string; identity: MentionIdentity } | undefined;
+    for (const [name, identity] of palette) {
       const end = at + 1 + name.length;
       if (haystack.startsWith(name, at + 1) && !isWordChar(haystack[end])) {
-        hit = { name, colors };
+        hit = { name, identity };
         break;
       }
     }
@@ -134,8 +156,16 @@ export function splitMentions(
     }
     const end = at + 1 + hit.name.length;
     // Sliced from the original, not the lowercased copy: the mention keeps the
-    // capitalisation the writer used.
-    parts.push({ text: text.slice(at, end), colors: hit.colors });
+    // capitalisation the writer used. The leading "@" stays in `text` — it is
+    // what the writer typed, and the composer mirror needs it — and is dropped
+    // at render time by whoever draws an avatar in its place.
+    parts.push({
+      text: text.slice(at, end),
+      colors: hit.identity.colors,
+      ...(options?.partial === true || hit.identity.avatar === undefined
+        ? {}
+        : { avatar: hit.identity.avatar }),
+    });
     at = end;
     plain = end;
   }

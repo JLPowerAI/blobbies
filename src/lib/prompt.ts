@@ -151,13 +151,37 @@ export function blobSystemPrompt(
   const configured =
     written !== "" || !configFieldEmpty(blob.title) || !configFieldEmpty(blob.description);
 
-  // 1. Identity: the name, and nothing else. Any persona wording here
+  // 1a. Identity: the name, and nothing else. Any persona wording here
   // ("personal assistant", "keep replies warm") is a second source of truth
   // that can contradict the Role section the configure round and the user
   // wrote — they are the source of truth, and the name is all this line owes.
+  //
+  // It opens the Role section rather than floating above the first heading:
+  // who you are and what you do are one thought, and a bare line before any
+  // heading reads as a stray fragment — the one place a small model cannot
+  // tell instruction from leftover text.
   const identity = `You are ${blob.name}.`;
 
-  // 2. Role: changes only when the Blob reconfigures itself. No tool is
+  // 2. Replies: style only, never persona — it says how much to say, never
+  // what to be, so it cannot contradict the Role section above it. Sits below
+  // Role because Role is what the Blob IS; this is only how it talks, and a
+  // reader (human or model) meeting the trim-your-preamble rule before the job
+  // description has to hold it without knowing what it applies to.
+  //
+  // The measured problem is the lead-in every turn opens with ("Great
+  // question! Let me look that up for you."): the loop banks that as its own
+  // bubble the moment a tool call starts, so preamble is not merely tokens —
+  // it is a chat bubble the user has to read before the answer.
+  const replies = section(
+    "Replies",
+    "Answer the message \u2014 do not preface it. No \u201CSure\u201D, no \u201CGreat question\u201D, " +
+      "no restating what was asked.\n" +
+      "Say something before a tool call only when the user needs that fact, and " +
+      "then in one short sentence.\n" +
+      "Stop when the answer is done: no recap of what you just said.",
+  );
+
+  // 1b. Role: changes only when the Blob reconfigures itself. No tool is
   // named here — configuration and memory writes happen automatically via
   // the intent router, not by the model choosing a tool (see runLoop).
   //
@@ -169,15 +193,15 @@ export function blobSystemPrompt(
   const role = configured
     ? section(
         "Your role",
-        written !== "" ? written : `${blob.title ?? ""}\n${blob.description ?? ""}`,
+        `${identity}\n${written !== "" ? written : `${blob.title ?? ""}\n${blob.description ?? ""}`}`,
       )
     : section(
         "Set yourself up",
-        "You are not configured yet. Ask the user what they need you to do; " +
-          "once they explain, confirm briefly what you'll be doing.",
+        `${identity}\nYou are not configured yet. Ask the user what they need you ` +
+          "to do; once they explain, confirm briefly what you'll be doing.",
       );
 
-  // 3. Capabilities: what the tool descriptions cannot say.
+  // 4. Capabilities: what the tool descriptions cannot say.
   //
   // Measured against deepseek, 3 runs per case: the previous 234-word version
   // scored *worse* than this shorter one — 1/3 vs 2/3 at answering from the
@@ -351,13 +375,18 @@ export function blobSystemPrompt(
             "the @.",
         );
 
-  // 6. The user: changes only from Settings → General.
+  // 3. The user: changes only from Settings → General. Sits right under Role
+  // and Replies — who you are, how you talk, who you are talking TO — rather
+  // than after the tool and skill inventories, where the one line about the
+  // person in the conversation was buried under machinery. Still stable
+  // enough to sit high in the cached prefix: it changes only when the user
+  // renames themselves.
   const who =
     user !== undefined && user.userName.trim() !== ""
       ? section("The user", `The user's name is ${user.userName.trim()}.`)
       : "";
 
-  // 7. Memory: last because it is the most volatile thing allowed in here.
+  // 9. Memory: last because it is the most volatile thing allowed in here.
   // Shared facts sit above the Blob's own — they belong to every Blob and
   // change less often, so more of the cached prefix survives a Blob-scope
   // write. They are budgeted first for the same reason: a trim then only ever
@@ -368,7 +397,10 @@ export function blobSystemPrompt(
   // not a wall of their own data. Real turns never redact, so the Blob always
   // sees every fact.
   if (redact) {
-    return `${identity}${role}${capabilities}${skills}${mcp}${apps}${group}${who}`;
+    // Trimmed because `section` prefixes its own blank line, and the first
+    // section is now the whole prompt's opening — without this every prompt
+    // starts with two blank lines a model has to read past.
+    return `${role}${replies}${who}${capabilities}${skills}${mcp}${apps}${group}`.trim();
   }
   // The compacted head of this conversation, beside the other volatile data:
   // it changes only when history is trimmed, and that same turn rewrites the
@@ -394,7 +426,7 @@ export function blobSystemPrompt(
   // they are always adjacent, and the duplicate spent a line of the
   // most-often-rewritten section saying what the line above it already said.
   const factsNote = shared === "" && memories === "" ? "" : `\n${MEMORY_DATA_NOTE}`;
-  return `${identity}${role}${capabilities}${skills}${mcp}${apps}${group}${who}${recap}${shared}${memories}${factsNote}`;
+  return `${role}${replies}${who}${capabilities}${skills}${mcp}${apps}${group}${recap}${shared}${memories}${factsNote}`.trim();
 }
 
 /**

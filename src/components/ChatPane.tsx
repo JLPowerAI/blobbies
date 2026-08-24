@@ -1,6 +1,7 @@
 import {
   ArrowDown,
   ArrowUp,
+  Clock,
   CornerUpRight,
   Download,
   Ellipsis,
@@ -32,6 +33,7 @@ import { type Attachment, MAX_ATTACHMENTS, type PickedFile } from "@/lib/attachm
 import { fileBadge, fileKind } from "@/lib/file-kind";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
 import { type MentionPalette, mentionPalette } from "@/lib/mentions";
+import { prefersReducedMotion } from "@/lib/motion";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
 import { imagePreview } from "@/lib/preview";
 import { revealFile } from "@/lib/tauri";
@@ -363,6 +365,21 @@ function MessageRow({
     return (
       <p className="timestamp-divider transcript-event" role="status">
         {message.text}
+        {message.subject === undefined ? null : (
+          <>
+            {" "}
+            {/* The same clock the Routines list puts beside a routine, so the
+                two read as the same object in two places. Decorative: the
+                label right next to it already says what this is. */}
+            <Clock
+              className="transcript-event-icon"
+              size={14}
+              strokeWidth={1.8}
+              aria-hidden="true"
+            />{" "}
+            <span className="transcript-event-subject">{message.subject.label}</span>
+          </>
+        )}
       </p>
     );
   }
@@ -398,11 +415,12 @@ function MessageRow({
           ))}
         </div>
       ) : null}
+      {/* Name only. The avatar belongs to the @mention, where it identifies a
+          Blob being pointed AT mid-sentence; here it would repeat down every
+          run of messages from the same speaker and compete with the bubbles
+          it is meant to label. */}
       {author === undefined || message.kind !== "text" || message.author !== "agent" ? null : (
-        <span className="message-author">
-          <BlobAvatar tone={author.tone} shape={author.shape} size={18} />
-          {author.name}
-        </span>
+        <span className="message-author">{author.name}</span>
       )}
       {/* The bubble and its hover bar share one line: the line hugs the
           bubble, so the bar can sit beside it, vertically centered — right of
@@ -590,6 +608,60 @@ export function ChatPane({
     nameDraftRef.current = value;
     setNameDraft(value);
   };
+  /**
+   * The header identity of the conversation being left, kept on screen while
+   * the new one arrives so the two slide past each other. Without it the old
+   * title is simply gone the frame the new one mounts, and the entrance plays
+   * against an empty bar — the swap reads as a flicker rather than a move.
+   *
+   * A snapshot of what to draw, not the live node: it must keep showing the
+   * OLD Blob after the props already describe the new one.
+   */
+  const identityKey = group?.id ?? agent.id;
+  const identity = useMemo(
+    () => ({
+      key: identityKey,
+      name: group?.name ?? agent.name,
+      faces: (group?.members.slice(0, 3) ?? [agent]).map((member) => ({
+        id: member.id,
+        tone: member.tone,
+        shape: member.shape,
+      })),
+      count:
+        group === undefined
+          ? null
+          : group.members.length === 1
+            ? "1 Blob"
+            : `${group.members.length} Blobs`,
+      /* A solo Blob's header is a button with its own padding; a group's is a
+         plain div. The ghost has to copy that, or the two sit at different x
+         and the straight-up travel reads as a slide to the left. */
+      solo: group === undefined,
+    }),
+    [identityKey, group, agent],
+  );
+  const [leaving, setLeaving] = useState<typeof identity | null>(null);
+  const shown = useRef(identity);
+  if (shown.current.key !== identityKey) {
+    const previous = shown.current;
+    shown.current = identity;
+    // Render-phase update, the "derive from changed props" pattern: React
+    // re-runs this render before committing, so the ghost and its replacement
+    // reach the DOM in the same frame and start together.
+    // Skipped under reduced motion, where the ghost would never animate out.
+    if (!prefersReducedMotion()) {
+      setLeaving(previous);
+    }
+  }
+  useEffect(() => {
+    if (leaving === null) return;
+    // A timer, not `animationend`: that event never fires for an element in a
+    // background tab or a hidden window, and a ghost stuck over the real
+    // title would be permanent. Comfortably past the 260ms animation.
+    const timer = setTimeout(() => setLeaving(null), 400);
+    return () => clearTimeout(timer);
+  }, [leaving]);
+
   const [replyClosing, setReplyClosing] = useState(false);
   const [reactions, setReactions] = useState<Record<string, string>>({});
   const [pickerFor, setPickerFor] = useState<string | null>(null);
@@ -1354,53 +1426,94 @@ export function ChatPane({
       <header className="chat-header" data-tauri-drag-region>
         {/* drag-region only fires on the element itself, so the header stays
             draggable around this identity button. */}
-        {group === undefined ? (
-          <button
-            type="button"
-            className="chat-header-identity identity-button"
-            aria-label={`${agent.name} settings`}
-            onClick={onOpenSettings}
-          >
-            <BlobAvatar tone={agent.tone} shape={agent.shape} size={24} />
-            <h1 className="chat-title">{agent.name}</h1>
-          </button>
-        ) : (
-          <div className="chat-header-identity">
-            <span className="chat-group-faces" aria-hidden="true">
-              {group.members.slice(0, 3).map((member) => (
-                <BlobAvatar key={member.id} tone={member.tone} shape={member.shape} size={24} />
-              ))}
-            </span>
-            {/* The title is the rename field: there is nowhere else to edit
+        {/* Both identities live in this box during a switch: the outgoing one
+            is taken out of flow and slides up and away, the incoming one keeps
+            the layout and rises into its place.
+
+            Keyed by the conversation, so switching Blobs remounts the incoming
+            identity and replays its entrance. A transition cannot do this: the
+            avatar and the name swap in the same frame with no state in
+            between, so there is nothing for CSS to interpolate. Not keyed on
+            the group's NAME — that would restart the animation on every
+            keystroke of a rename, mid-edit. */}
+        <div className="chat-header-swap">
+          {leaving === null ? null : (
+            // aria-hidden and inert: a screen reader announcing the conversation
+            // you just left, or a tab stop landing on it, is worse than no
+            // animation at all. It is a picture of the old header, nothing more.
+            <div
+              key={leaving.key}
+              className={
+                leaving.solo
+                  ? "chat-header-identity identity-button chat-header-identity-leaving"
+                  : "chat-header-identity chat-header-identity-leaving"
+              }
+              aria-hidden="true"
+            >
+              <span className="chat-group-faces">
+                {leaving.faces.map((face) => (
+                  <BlobAvatar key={face.id} tone={face.tone} shape={face.shape} size={24} />
+                ))}
+              </span>
+              {/* An h1 like the live title, not a span: a different element
+                  means a different line box, and the ghost's text would sit a
+                  pixel off its replacement's — leaving a sliver where both are
+                  visible at once instead of one clean cut. */}
+              <h1 className="chat-title">{leaving.name}</h1>
+              {leaving.count === null ? null : (
+                <span className="chat-group-count">{leaving.count}</span>
+              )}
+            </div>
+          )}
+          {group === undefined ? (
+            <button
+              key={agent.id}
+              type="button"
+              className="chat-header-identity identity-button"
+              aria-label={`${agent.name} settings`}
+              onClick={onOpenSettings}
+            >
+              <BlobAvatar tone={agent.tone} shape={agent.shape} size={24} />
+              <h1 className="chat-title">{agent.name}</h1>
+            </button>
+          ) : (
+            <div key={group.id} className="chat-header-identity">
+              <span className="chat-group-faces" aria-hidden="true">
+                {group.members.slice(0, 3).map((member) => (
+                  <BlobAvatar key={member.id} tone={member.tone} shape={member.shape} size={24} />
+                ))}
+              </span>
+              {/* The title is the rename field: there is nowhere else to edit
                 it, and a name nobody can change stays "New Group" forever.
                 Commit on blur or Enter; Escape abandons the edit. */}
-            <input
-              className="chat-title chat-title-input"
-              aria-label="Group name"
-              value={nameDraft ?? group.name}
-              maxLength={MAX_BLOB_NAME_LENGTH}
-              onChange={(event) => editName(event.currentTarget.value)}
-              onBlur={() => {
-                if (nameDraftRef.current !== null) {
-                  onRenameGroup?.(nameDraftRef.current);
-                }
-                editName(null);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  event.currentTarget.blur();
-                } else if (event.key === "Escape") {
+              <input
+                className="chat-title chat-title-input"
+                aria-label="Group name"
+                value={nameDraft ?? group.name}
+                maxLength={MAX_BLOB_NAME_LENGTH}
+                onChange={(event) => editName(event.currentTarget.value)}
+                onBlur={() => {
+                  if (nameDraftRef.current !== null) {
+                    onRenameGroup?.(nameDraftRef.current);
+                  }
                   editName(null);
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-            <span className="chat-group-count">
-              {group.members.length === 1 ? "1 Blob" : `${group.members.length} Blobs`}
-            </span>
-          </div>
-        )}
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    event.currentTarget.blur();
+                  } else if (event.key === "Escape") {
+                    editName(null);
+                    event.currentTarget.blur();
+                  }
+                }}
+              />
+              <span className="chat-group-count">
+                {group.members.length === 1 ? "1 Blob" : `${group.members.length} Blobs`}
+              </span>
+            </div>
+          )}
+        </div>
         <div className="chat-header-controls">
           <PillSelect
             id="header-thinking"

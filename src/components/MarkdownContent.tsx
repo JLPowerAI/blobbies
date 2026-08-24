@@ -2,9 +2,29 @@ import { memo, useMemo } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ExternalLink } from "@/components/ExternalLink";
-import { Mention } from "@/components/Mention";
+import { Mention, mentionLabel } from "@/components/Mention";
+import { AGENT_SHAPES, type AgentShape, AVATAR_TONES, type AvatarTone } from "@/data/agents";
 import type { MentionPalette } from "@/lib/mentions";
 import { rehypeMentions } from "@/lib/rehype-mentions";
+
+/**
+ * The avatar the plugin asked for, or nothing.
+ *
+ * Checked against the real tone and shape lists rather than cast: these arrive
+ * as loose `unknown` props off a hast node, and BlobAvatar indexes its
+ * gradient and path tables by them — an unrecognised value would index to
+ * `undefined` and throw mid-render, taking the whole transcript with it.
+ */
+function avatarFrom(
+  props: Record<string, unknown>,
+): { tone: AvatarTone; shape: AgentShape } | null {
+  const tone = props["data-mention-tone"];
+  const shape = props["data-mention-shape"];
+  if (!AVATAR_TONES.includes(tone as AvatarTone) || !AGENT_SHAPES.includes(shape as AgentShape)) {
+    return null;
+  }
+  return { tone: tone as AvatarTone, shape: shape as AgentShape };
+}
 
 const remarkPlugins = [remarkGfm];
 
@@ -47,12 +67,21 @@ export const MarkdownContent = memo(function MarkdownContent({
           // react-markdown emits none of its own, and model text can never
           // become an element.
           span: ({ children, ...props }) => {
-            const onLight = (props as Record<string, unknown>)["data-mention-on-light"];
-            const onDark = (props as Record<string, unknown>)["data-mention-on-dark"];
-            return typeof onLight === "string" && typeof onDark === "string" ? (
-              <Mention colors={{ onLight, onDark }}>{children}</Mention>
-            ) : (
-              <span>{children}</span>
+            const bag = props as Record<string, unknown>;
+            const onLight = bag["data-mention-on-light"];
+            const onDark = bag["data-mention-on-dark"];
+            if (typeof onLight !== "string" || typeof onDark !== "string") {
+              return <span>{children}</span>;
+            }
+            const avatar = avatarFrom(bag);
+            return (
+              <Mention colors={{ onLight, onDark }} {...(avatar === null ? {} : { avatar })}>
+                {/* The avatar replaces the "@", so the text loses it too. The
+                    plugin always wraps a mention in a single text child. */}
+                {avatar !== null && typeof children === "string"
+                  ? mentionLabel(children)
+                  : children}
+              </Mention>
             );
           },
         }}

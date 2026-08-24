@@ -18,7 +18,8 @@ export type AvatarTone =
   | "gold"
   | "red"
   | "pink"
-  | "gray";
+  | "gray"
+  | "cream";
 
 export type AgentShape =
   | "sphere"
@@ -27,7 +28,8 @@ export type AgentShape =
   | "egg"
   | "pebble"
   | "triangle"
-  | "squircle";
+  | "squircle"
+  | "bean";
 
 /** Every tone/shape the avatar renderer knows, in UI order. */
 export const AVATAR_TONES: AvatarTone[] = [
@@ -41,6 +43,7 @@ export const AVATAR_TONES: AvatarTone[] = [
   "red",
   "pink",
   "gray",
+  "cream",
 ];
 export const AGENT_SHAPES: AgentShape[] = [
   "sphere",
@@ -50,6 +53,7 @@ export const AGENT_SHAPES: AgentShape[] = [
   "pebble",
   "triangle",
   "squircle",
+  "bean",
 ];
 
 /**
@@ -184,6 +188,16 @@ export type Message =
       id: string;
       kind: "event";
       text: string;
+      /**
+       * A thing the line is ABOUT, shown after the text with its icon — the
+       * same clock-and-name pairing the Routines list uses, so a routine is
+       * recognisable in the transcript at a glance.
+       *
+       * Split from `text` rather than baked into it because the two are styled
+       * differently: the text is a dim caption, the subject is the name you
+       * actually read. Absent on plain status lines.
+       */
+      subject?: { icon: "routine"; label: string };
       timestampMs?: number;
     };
 

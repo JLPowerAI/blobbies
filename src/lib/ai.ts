@@ -8,6 +8,7 @@ import {
   type Tool,
 } from "@kenkaiiii/gg-ai";
 import { z } from "zod";
+import { activityForTool, type BlobActivity } from "@/lib/activity";
 import {
   type MemoryAccess,
   makeAskTool,
@@ -260,7 +261,13 @@ async function forcedConfigureCall(
         `The conversation above is everything between you and the user so far (you are ${who}). ` +
         "Write your own configuration from what they have asked of you: a short `title` (a few words), " +
         "and a `description` of what you will do for them and how you will behave " +
-        "(2-4 complete sentences). Any request to set you up, configure you, or give you " +
+        "(2-4 complete sentences). Write both addressed TO you, in the second " +
+        "person: 'You help the user rebuild their channel', never 'I help the " +
+        "user rebuild their channel'. The description is pasted verbatim under " +
+        "'You are <name>.' in your own system prompt, so a first-person line " +
+        "there contradicts the line above it and reads as something you once " +
+        "said rather than as your instructions. " +
+        "Any request to set you up, configure you, or give you " +
         "ongoing work says what they need \u2014 write the configuration from it, filling " +
         "reasonable gaps yourself. Only when they have asked for nothing at all \u2014 a bare " +
         "greeting, thanks, small talk \u2014 do you abstain: return both fields as empty " +
@@ -599,6 +606,14 @@ export async function streamBlobTurn(options: {
    * blank lines are exactly what the turn returns.
    */
   onSegment: (segment: string) => void;
+  /**
+   * What the turn is doing right now: thinking, writing its reply, or the
+   * word for the tool it is running. Fired only when the state CHANGES, so a
+   * host can put it straight into React state without a render per delta.
+   * Never fired to say "finished" — the turn ending is the caller's own
+   * `finally`, which is where the label is cleared.
+   */
+  onActivity?: (activity: BlobActivity) => void;
   onConfigure: (patch: BlobConfigPatch) => void;
   /** Observes each completed tool call: drives the sim harness and, later, UI. */
   onToolCall?: (call: ToolCallRecord) => void;
@@ -735,6 +750,18 @@ export async function streamBlobTurn(options: {
    */
   const said: string[] = [];
 
+  /**
+   * Last activity reported to the host. Kept for the whole turn, not per loop,
+   * so a retry or the rescue round does not re-announce a state the sidebar is
+   * already showing.
+   */
+  let activity: BlobActivity | null = null;
+  const report = (next: BlobActivity): void => {
+    if (next === activity) return;
+    activity = next;
+    options.onActivity?.(next);
+  };
+
   const runLoop = async (toolScope: "web" | "none"): Promise<{ text: string; latest: string }> => {
     let text = "";
     /** Everything shown for this turn: earlier segments plus the live one. */
@@ -833,6 +860,9 @@ export async function streamBlobTurn(options: {
     for await (const event of loop) {
       // No per-delta emission: a bubble appears only once its text is whole.
       if (event.type === "text_delta") {
+        // Words are landing, so the Blob is writing rather than deciding.
+        // Preamble counts: the user is about to read a bubble either way.
+        report("writing");
         const chunk =
           continuationSeam && text !== "" && !/\s$/.test(text) && !/^\s/.test(event.text)
             ? `\n\n${event.text}`
@@ -856,6 +886,7 @@ export async function streamBlobTurn(options: {
           options.onSegment(segment);
         }
         text = "";
+        report(activityForTool(event.name));
         pending.set(event.toolCallId, { name: event.name, args: event.args });
       }
       if (event.type === "tool_call_end") {
@@ -868,6 +899,12 @@ export async function streamBlobTurn(options: {
           isError: event.isError,
         };
         gathered.push(record);
+        // The result is in and the model is deciding what to do with it. Only
+        // when nothing else is running: parallel calls would otherwise flip
+        // the label back to "Thinking…" while a sibling tool is still going.
+        if (pending.size === 0) {
+          report("thinking");
+        }
         options.onToolCall?.(record);
       }
       if (event.type === "checkpoint") {

@@ -27,6 +27,7 @@ import {
 } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
 import { type Agent, MAX_BLOB_NAME_LENGTH, MAX_BLOBS } from "@/data/agents";
+import { activityLabel, type BlobActivity } from "@/lib/activity";
 import { type Group, MAX_GROUP_MEMBERS } from "@/lib/groups";
 import { readPreference, writePreference } from "@/lib/preferences";
 import { isTauri } from "@/lib/tauri";
@@ -80,6 +81,12 @@ interface SidebarProps {
   userName: string;
   /** The Blob whose turn is running; its row and pin tile animate busy. */
   thinkingId: string | null;
+  /**
+   * What each running Blob is doing, keyed by id. A row with an entry here
+   * shows that instead of its last message: while a turn runs, the snippet is
+   * stale by definition — it is the message the Blob is busy replacing.
+   */
+  activity?: Record<string, BlobActivity>;
   onSelect: (id: string) => void;
   onStartCompose: () => void;
   onOpenSettings: () => void;
@@ -225,6 +232,7 @@ export function Sidebar({
   composing,
   userName,
   thinkingId,
+  activity,
   onSelect,
   onStartCompose,
   onOpenSettings,
@@ -628,6 +636,7 @@ export function Sidebar({
    */
   const agentRow = (agent: Agent, draggable: boolean) => {
     const selected = agent.id === selectedId;
+    const busy = activity?.[agent.id];
     return (
       <li key={agent.id}>
         <button
@@ -674,7 +683,15 @@ export function Sidebar({
               </span>
             </span>
             <span className="agent-row-bottom">
-              <span className="agent-snippet">{agent.snippet}</span>
+              {busy === undefined ? (
+                <span className="agent-snippet">{agent.snippet}</span>
+              ) : (
+                // role=status so a screen reader announces the change without
+                // stealing focus; the same live status the dot only implies.
+                <span className="agent-snippet agent-snippet-busy" role="status">
+                  {activityLabel(busy)}
+                </span>
+              )}
             </span>
           </span>
         </button>
@@ -773,31 +790,44 @@ export function Sidebar({
             {pinned.length === 0 ? (
               <span className="pin-tray-hint">Drag here to pin</span>
             ) : (
-              pinned.map((agent) => (
-                <button
-                  key={agent.id}
-                  type="button"
-                  className={agent.id === selectedId ? "pin-tile pin-tile-selected" : "pin-tile"}
-                  aria-current={agent.id === selectedId ? "true" : undefined}
-                  onPointerDown={(event) => startDrag(event, agent.id)}
-                  onClick={() => {
-                    if (!consumeClick()) {
-                      onSelect(agent.id);
+              pinned.map((agent) => {
+                const busy = activity?.[agent.id];
+                return (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    className={agent.id === selectedId ? "pin-tile pin-tile-selected" : "pin-tile"}
+                    aria-current={agent.id === selectedId ? "true" : undefined}
+                    onPointerDown={(event) => startDrag(event, agent.id)}
+                    onClick={() => {
+                      if (!consumeClick()) {
+                        onSelect(agent.id);
+                      }
+                    }}
+                    onContextMenu={(event) =>
+                      openContextMenu(event, { kind: "blob", agentId: agent.id })
                     }
-                  }}
-                  onContextMenu={(event) =>
-                    openContextMenu(event, { kind: "blob", agentId: agent.id })
-                  }
-                >
-                  <BlobAvatar
-                    tone={agent.tone}
-                    shape={agent.shape}
-                    size={44}
-                    variant={thinkingId === agent.id ? "thinking" : "idle"}
-                  />
-                  <span className="pin-tile-name">{agent.name}</span>
-                </button>
-              ))
+                  >
+                    <BlobAvatar
+                      tone={agent.tone}
+                      shape={agent.shape}
+                      size={44}
+                      variant={thinkingId === agent.id ? "thinking" : "idle"}
+                    />
+                    <span className="pin-tile-name">{agent.name}</span>
+                    {/* Under the name, never instead of it: a tile has no other
+                      text, so swapping the caption would leave a running Blob
+                      identified by nothing but its avatar. The tray reserves
+                      this line's height at all times (see .pin-tile), so a
+                      turn starting does not shove the whole list down. */}
+                    {busy === undefined ? null : (
+                      <span className="pin-tile-status" role="status">
+                        {activityLabel(busy)}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
             )}
           </li>
         ) : null}

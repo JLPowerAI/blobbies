@@ -33,6 +33,7 @@ import {
   transcriptFor,
   uniqueBlobName,
 } from "@/data/agents";
+import type { BlobActivity } from "@/lib/activity";
 import {
   type Attachment,
   attachmentName,
@@ -310,6 +311,13 @@ export function App() {
   userMemoriesRef.current = userMemories;
   /** Blob currently generating a reply; drives the thinking indicator. */
   const [thinkingFor, setThinkingFor] = useState<string | null>(null);
+  /**
+   * What each running Blob is doing right now ("Thinking…", "Searching…"),
+   * keyed by Blob id — a map, not one id, because routines and group turns run
+   * several Blobs at once and every sidebar row states its own status.
+   * A Blob is absent from here exactly when it is not running.
+   */
+  const [activityByBlob, setActivityByBlob] = useState<Record<string, BlobActivity>>({});
   /** Last (or active) run per Blob; drives ask/answer routing and recovery. */
   const [runsByBlob, setRunsByBlob] = useState<Record<string, ActiveRun>>({});
   const runsRef = useRef(runsByBlob);
@@ -1199,6 +1207,19 @@ export function App() {
     list: () => routinesRef.current[agentId] ?? [],
     create: (input) => {
       const budget = input.schedule === undefined ? undefined : scheduleBudget(input.schedule);
+      // Said out loud in the transcript: a routine created by a tool call is
+      // otherwise invisible unless the user opens the details panel, and "it
+      // silently scheduled something" is exactly the surprise worth avoiding.
+      appendMessage(agentId, {
+        id: `event-${crypto.randomUUID()}`,
+        kind: "event",
+        text: "Created routine",
+        subject: {
+          icon: "routine",
+          label: input.name.trim() === "" ? "Untitled routine" : input.name.trim(),
+        },
+        timestampMs: Date.now(),
+      });
       setAgentRoutines(agentId, (current) => [
         ...current,
         {
@@ -1828,6 +1849,9 @@ export function App() {
     // no-tools retry, the rescue round) and each reports its own total.
     const spent = { inputTokens: 0, outputTokens: 0 };
     setThinkingFor(target.id);
+    // Thinking until the turn says otherwise: the router and the first model
+    // call happen before any event, and a row with no status reads as idle.
+    setActivityByBlob((previous) => ({ ...previous, [target.id]: "thinking" }));
     // First turn pays one lazy chunk fetch for the provider stack; after
     // that the memoized import resolves from the module cache.
     const [{ isAbortError, streamBlobTurn }, { reconcileMemories }] = await Promise.all([
@@ -1918,6 +1942,10 @@ export function App() {
           reconcile: (fact, existing) => reconcileMemories({ model, fact, existing }),
         },
         onSegment: (segment) => appendSegment(segment),
+        // Fires only on a change of state, so this is a handful of renders per
+        // turn rather than one per token.
+        onActivity: (activity) =>
+          setActivityByBlob((previous) => ({ ...previous, [target.id]: activity })),
         // The Blob configures itself: the same patch path the settings panel
         // uses, so title/description show up there immediately.
         onConfigure: (patch) => updateBlob(target.id, patch),
@@ -1967,6 +1995,11 @@ export function App() {
     } finally {
       activeTurn.current = null;
       setThinkingFor(null);
+      setActivityByBlob((previous) => {
+        if (previous[target.id] === undefined) return previous;
+        const { [target.id]: _done, ...rest } = previous;
+        return rest;
+      });
     }
     // A run parked on a question resumes in a later turn (trigger "answer")
     // on the SAME run record, so this turn's spend is added to what earlier
@@ -2626,6 +2659,7 @@ export function App() {
         composing={composing}
         userName={userName}
         thinkingId={thinkingFor}
+        activity={activityByBlob}
         onSelect={openConversation}
         onStartCompose={() => setMode({ kind: "palette" })}
         onOpenSettings={() => openSettingsModal("general")}

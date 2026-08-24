@@ -698,6 +698,25 @@ describe("roster tools", () => {
     );
     expect(roster.deleted).toEqual(["id-0"]);
   });
+
+  it("tells every writer of a role to address the Blob, not speak as it", () => {
+    // Both tools write into the same slot — text pasted verbatim under
+    // "You are <name>." in the target's system prompt. In first person that
+    // Blob's prompt would contradict itself on its first two lines:
+    // "You are Scout." then "I file your invoices."
+    const tools = makeRosterTools(fakeRoster(["Scout"]).access, "Ken");
+    for (const name of ["spawn_blob", "update_blob"]) {
+      const shape = (
+        tools.find((tool) => tool.name === name) as unknown as {
+          parameters: { shape: Record<string, { description?: string }> };
+        }
+      ).parameters.shape;
+      for (const field of ["description", "instructions"]) {
+        expect(shape[field]?.description).toContain("econd person");
+        expect(shape[field]?.description).toContain('never "I');
+      }
+    }
+  });
 });
 
 describe("connected-app tools", () => {

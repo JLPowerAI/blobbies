@@ -587,6 +587,25 @@ select:focus:not(:focus-visible) {
   color: var(--text-secondary);
 }
 
+/* Live status ("Thinking…") in place of the last message. Italic and
+   breathing: it is the app describing the Blob rather than the Blob's own
+   words, and the fade says the row is still working even while the label
+   itself sits on one word for a stretch. */
+.agent-snippet-busy {
+  font-style: italic;
+  animation: snippet-breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes snippet-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
 /* Anchors the unread dot to the avatar's corner. */
 .agent-row-face {
   position: relative;
@@ -1282,6 +1301,10 @@ select:focus:not(:focus-visible) {
   background: #a3a3aa;
 }
 
+.tone-swatch[data-tone="cream"] {
+  background: #f6f4ee;
+}
+
 .creator-shapes {
   display: flex;
   flex-wrap: nowrap;
@@ -1530,8 +1553,14 @@ select:focus:not(:focus-visible) {
 .pin-tile {
   display: flex;
   width: 78px;
+  /* Room for the status caption whether or not one is showing: the tray sits
+     above the whole list, so growing it when a turn starts would shove every
+     row down and back on each reply. Content is centred in the reserved box,
+     so an idle tile reads as padded rather than as a missing line. */
+  min-height: 96px;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 8px 4px;
   border-radius: 12px;
@@ -1576,6 +1605,20 @@ select:focus:not(:focus-visible) {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Same live status as the sidebar row, sized down for a 78px tile: secondary
+   colour and italics keep the name the thing you read first. */
+.pin-tile-status {
+  max-width: 100%;
+  margin-top: -2px;
+  overflow: hidden;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: snippet-breathe 1.8s ease-in-out infinite;
 }
 
 .agent-group {
@@ -2733,9 +2776,87 @@ a.modal-button {
   flex-shrink: 0;
 }
 
+/* Holds both identities during a switch. The incoming one stays in flow and
+   so keeps sizing the header; only the outgoing ghost is taken out of it, and
+   `relative` is what that ghost positions against.
+
+   Clipped, so both slide behind the bar's edges instead of drifting over the
+   messages below. The negative margins give the avatars back the few pixels
+   the clip would otherwise shave off their sides. */
+/* The window of a reel: exactly one identity tall, with the outgoing and
+   incoming ones stacked a full window apart. Clipping is what sells it — both
+   titles are always fully opaque, and simply cease to exist past the edges,
+   the way a physical reel disappears behind its frame.
+
+   No block padding, deliberately: the ghost stretches to this box's height
+   while the incoming one is sized by its own, so any padding here would make
+   their two 100%s different heights — and the pair would drift apart by that
+   difference instead of moving as one strip. The identity button's 3px of
+   vertical padding already sits inside the flow child, so its hover pill fits
+   the window exactly. */
+.chat-header-swap {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  /* The identity button's own outdent, moved out here so the button can sit
+     flush at this box's left edge. No padding to go with it: the ghost is
+     positioned from the padding edge and the live one starts at the content
+     edge, so any inline padding here would offset the two by that much and
+     the travel would read as diagonal instead of straight up. */
+  margin-inline-start: -4px;
+}
+
+/* The conversation being left. Out of flow so the incoming one still sizes the
+   header, and never interactive — it is a picture, not a control. Left edge
+   only: pinning the right edge too would re-wrap a long name mid-slide.
+
+   It carries the same classes as whatever it is replacing (see ChatPane), so
+   its padding matches to the pixel. Anything less and the two sit at
+   different x, which the eye reads as the title sliding sideways. */
+.chat-header-identity-leaving {
+  position: absolute;
+  inset: 0 auto 0 0;
+  pointer-events: none;
+}
+
+/* Switching conversations advances the reel: the old title travels up and out
+   of the window while the new one comes up into the space it vacates. Both
+   move exactly one window height, for exactly the same time, on exactly the
+   same curve — that lockstep is the whole illusion. Break any of the three
+   and it stops being one strip of film and becomes two elements animating.
+
+   Percentages, not pixels, so the travel stays one title tall whatever the
+   font or window size does to that height. */
+.chat-header-identity {
+  animation: identity-shuffle var(--duration-panel) var(--ease-standard) both;
+}
+
+.chat-header-identity-leaving {
+  animation-name: identity-shuffle-out;
+}
+
+@keyframes identity-shuffle {
+  from {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes identity-shuffle-out {
+  from {
+    transform: translateY(0);
+  }
+
+  to {
+    transform: translateY(-100%);
+  }
+}
+
 .identity-button {
   padding: 3px 8px 3px 4px;
-  margin-inline-start: -4px;
   border-radius: 8px;
   transition: background-color var(--duration-fast) var(--ease-standard);
 }
@@ -2748,6 +2869,12 @@ a.modal-button {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
+  /* Pinned, not inherited: a button resets line-height to the UA's `normal`
+     while a plain div inherits the body's, so the same title measured two
+     different heights depending on its parent — which left the outgoing and
+     incoming headers a pixel apart mid-shuffle, and a sliver of both on
+     screen at once. */
+  line-height: 16px;
   /* Never wrap in the fixed-height titlebar; ellipsize instead. */
   white-space: nowrap;
   overflow: hidden;
@@ -2839,10 +2966,9 @@ a.modal-button {
 
 /* Who is speaking, above the bubble — only in a group, where the face in the
    header is not the answer. */
+/* Who is speaking, above their bubble. Text only — a dim label, not a second
+   identity mark competing with the bubble under it. */
 .message-author {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   margin-inline-start: 2px;
   font-size: 12px;
   color: var(--text-secondary);
@@ -3170,6 +3296,26 @@ a.modal-button {
   color: var(--accent-green);
 }
 
+/* A line naming a thing ("Created routine ⏱ Nightly digest") reads as caption
+   plus subject, so it drops the green: with the name carrying the weight,
+   colouring the whole line makes the caption compete with it. */
+.transcript-event:has(.transcript-event-subject) {
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+/* Sits on the text baseline instead of the line box's, so the glyph lines up
+   with the words either side of it rather than riding high. */
+.transcript-event-icon {
+  vertical-align: -2px;
+  margin-inline-end: 1px;
+}
+
+.transcript-event-subject {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 /* Bar under the transcript while an "action" ask waits on the user. */
 .ask-action-bar {
   display: flex;
@@ -3449,6 +3595,31 @@ a.modal-button {
     color-mix(in srgb, var(--mention-on-dark) 45%, white) 50%,
     transparent 72%
   );
+}
+
+/* A mention that shows the Blob's face instead of an "@": the avatar already
+   says "this is a Blob", so the character it replaces would just be noise
+   between the icon and the name.
+
+   inline-flex, so the avatar and name travel as one unit — a name must never
+   wrap away from the face that identifies it. baseline alignment keeps the
+   text sitting on the paragraph's baseline rather than being centred against
+   the icon, which would push it off the surrounding line. */
+.mention-with-avatar {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  /* The gap is inside the box, so a mention mid-sentence keeps normal word
+     spacing on both sides instead of gaining a double gap. */
+  vertical-align: baseline;
+}
+
+/* Optically centred on the lowercase text rather than the baseline it sits
+   on, so the face lines up with the middle of the name beside it. */
+.mention-with-avatar > .blob-avatar {
+  align-self: center;
+  flex-shrink: 0;
+  transform: translateY(1px);
 }
 
 /* Decreasing background-position moves the band left-to-right across the
@@ -4318,6 +4489,161 @@ a.modal-button {
   padding: 10px 0 6px;
 }
 
+/* Full-size controls in the popover, where there is room for them: the base
+   rules are sized to shrink into the narrow settings panel. */
+.avatar-popover .shape-option {
+  inline-size: 46px;
+  border-radius: 13px;
+}
+
+/* Sized so the eleven tones wrap 6 + 5 rather than 7 + 4: a nearly-full row
+   with a stub under it reads as a mistake, an even one as a palette. */
+.avatar-popover .tone-swatch {
+  inline-size: 26px;
+}
+
+/* Anchors the popover to the avatar. */
+.avatar-field {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.avatar-edit-button {
+  position: relative;
+  display: grid;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  /* One cell, so the pencil stacks on the avatar without being positioned
+     against it — and the button keeps the avatar's exact size. */
+  place-items: center;
+}
+
+.avatar-edit-button > * {
+  grid-area: 1 / 1;
+}
+
+/* Dimming the avatar ITSELF, rather than laying a scrim over it: Blobs are
+   clouds, triangles and droplets, so any shape drawn on top covers part of
+   one and spills outside another — which reads as a stray dark patch, not as
+   a hover state. A filter follows whatever silhouette is actually there. */
+.avatar-edit-button .blob-avatar {
+  transition: filter var(--duration-fast) var(--ease-standard);
+}
+
+/* Hover and keyboard focus only — deliberately NOT while the popover is open:
+   pinning it on left the avatar dimmed under a pencil the pointer had long
+   since left, which reads as stuck rather than as "this is editable". */
+.avatar-edit-button:hover .blob-avatar,
+.avatar-edit-button:focus-visible .blob-avatar {
+  filter: brightness(0.55);
+}
+
+/* The pencil, revealed on hover. Fades rather than appears: the avatar is a
+   face, and a glyph blinking onto it reads as a glitch. */
+.avatar-edit-pencil {
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  /* Carries its own contrast, so it stays legible over the pale end of a gold
+     or gray Blob where dimming alone is not enough. */
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+  /* The avatar under it is the click target; the glyph must not swallow the
+     pointer and flicker the hover state as it fades in. */
+  pointer-events: none;
+}
+
+.avatar-edit-button:hover .avatar-edit-pencil,
+/* Keyboard users get the same affordance: without this the control looks
+   inert to anyone who never moves a mouse. */
+.avatar-edit-button:focus-visible .avatar-edit-pencil {
+  opacity: 1;
+}
+
+/* The tone and shape grids, on demand. Centred under the avatar and above the
+   fields, so opening it never pushes the form around. */
+.avatar-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  /* Two distinct questions — which shape, which colour — so they get real air
+     between them rather than reading as one nineteen-item soup. Wider than
+     the gaps inside either grid, which is what makes them two groups. */
+  gap: 26px;
+  /* Fixed, and wide enough for four full-size shapes a row — the grids inside
+     are built to shrink-to-fit the settings panel, which in a popover sized to
+     its content would lay every control out in two long lines. */
+  inline-size: 246px;
+  padding: 16px 14px;
+  border-radius: 14px;
+  /* The raised-surface token, not the chat's: this floats ABOVE the panel, so
+     it has to read as nearer than the near-black behind it — same treatment
+     as every other dialog in the app. */
+  background: var(--surface-modal);
+  border: 1px solid var(--border-hairline);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
+  /* Above the scrim that catches the click-away. */
+  z-index: 41;
+  animation: avatar-popover-in var(--duration-fast) var(--ease-entrance);
+}
+
+/* translateX is in both the base rule and the keyframes: an animation that
+   only set scale would drop the centring for its duration and the popover
+   would slide in from the right. */
+.avatar-popover {
+  transform: translateX(-50%);
+}
+
+@keyframes avatar-popover-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px) scale(0.96);
+  }
+}
+
+.avatar-popover-closing {
+  animation: avatar-popover-out 140ms var(--ease-standard) forwards;
+}
+
+@keyframes avatar-popover-out {
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px) scale(0.96);
+  }
+}
+
+/* Shapes are a SET — eight silhouettes to compare — so they get a real grid:
+   four columns, two even rows, everything aligned. A wrapping flex row would
+   centre the second line and the columns would stop lining up. */
+.avatar-popover .creator-shapes {
+  display: grid;
+  /* Tight: eight variations of one thing, so they should read as a set rather
+     than as eight separate buttons. */
+  gap: 4px 2px;
+  justify-items: center;
+}
+
+/* Tones are a PALETTE, not a set: they need no column alignment, and eleven
+   into a fixed grid would leave a lopsided gap on the last row. Wrapping and
+   centred, the short row sits under the middle of the one above it. */
+.avatar-popover .creator-swatches {
+  flex-wrap: wrap;
+  /* Wide enough that eleven break 6 + 5: a nearly-full row with a four-item
+     stub under it reads as a mistake, an even split as a palette. */
+  gap: 12px;
+}
+
+.avatar-popover .creator-shapes {
+  grid-template-columns: repeat(4, 1fr);
+}
+
 .settings-field {
   display: flex;
   flex-direction: column;
@@ -4699,7 +5025,10 @@ a.modal-button {
 .sidebar-collapsed .section-remove,
 .sidebar-collapsed .section-empty,
 .sidebar-collapsed .pin-tray-hint,
-.sidebar-collapsed .pin-tile-name {
+.sidebar-collapsed .pin-tile-name,
+/* No room for a caption beside a 44px avatar — and none needed: the avatar
+   itself animates while the turn runs. */
+.sidebar-collapsed .pin-tile-status {
   display: none;
 }
 
@@ -4713,6 +5042,9 @@ a.modal-button {
 
 .sidebar-collapsed .pin-tile {
   width: 44px;
+  /* Nothing but the avatar here, so the reserved caption line would be dead
+     space stretching the collapsed tray. */
+  min-height: 0;
   padding: 8px 0;
 }
 
@@ -5758,6 +6090,20 @@ a.modal-button {
   }
 
   .unread-dot-shimmer {
+    animation: none;
+  }
+
+  /* The word is the status; the fade only decorates it. */
+  .agent-snippet-busy,
+  .pin-tile-status {
+    animation: none;
+  }
+
+  /* The new name is the signal that the switch happened; the rise only
+     softens it. Killed outright, not shortened — a keyed remount means this
+     fires on every conversation switch. (The outgoing ghost is never even
+     mounted under reduced motion; see ChatPane.) */
+  .chat-header-identity {
     animation: none;
   }
 

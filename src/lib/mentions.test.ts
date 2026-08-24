@@ -37,7 +37,7 @@ describe("splitMentions", () => {
   it("colours @everyone, which belongs to no Blob", () => {
     const [part] = splitMentions("@everyone standup", palette);
     expect(part?.text).toBe("@everyone");
-    expect(part?.colors).not.toEqual(palette.get("ann"));
+    expect(part?.colors).not.toEqual(palette.get("ann")?.colors);
   });
 
   it("ignores an @ that addresses nobody", () => {
@@ -70,14 +70,14 @@ describe("splitMentions", () => {
     // word instead of on its final character.
     const [part] = splitMentions("@ann r", palette, { partial: true });
     expect(part?.text).toBe("@ann r");
-    expect(part?.colors).toEqual(palette.get("ann reviewer"));
+    expect(part?.colors).toEqual(palette.get("ann reviewer")?.colors);
   });
 
   it("falls back to the exact name when a partial is ambiguous", () => {
     // "@ann" could still become Ann Reviewer, but it is already a real mention
     // of Ann — so it is coloured as Ann, not left grey.
     expect(splitMentions("@ann", palette, { partial: true })[0]?.colors).toEqual(
-      palette.get("ann"),
+      palette.get("ann")?.colors,
     );
   });
 
@@ -94,7 +94,7 @@ describe("splitMentions", () => {
     // is coloured, and never the trailing prose with it.
     expect(
       splitMentions("@ann r and more", palette, { partial: true }).filter((p) => p.colors),
-    ).toEqual([{ text: "@ann", colors: palette.get("ann") }]);
+    ).toEqual([{ text: "@ann", colors: palette.get("ann")?.colors }]);
   });
 
   it("returns one plain part when there is nothing to highlight", () => {
@@ -103,8 +103,29 @@ describe("splitMentions", () => {
   });
 
   it("gives each Blob its own pair of theme colours", () => {
-    const ann = palette.get("ann");
+    const ann = palette.get("ann")?.colors;
     expect(ann?.onLight).not.toBe(ann?.onDark);
-    expect(palette.get("ann reviewer")?.onLight).not.toBe(ann?.onLight);
+    expect(palette.get("ann reviewer")?.colors.onLight).not.toBe(ann?.onLight);
+  });
+
+  it("carries each Blob's avatar, so a mention can show its face", () => {
+    // The same tone and shape the sidebar draws: one Blob, one look, rather
+    // than a second palette to keep in sync.
+    expect(palette.get("ann")?.avatar).toEqual({ tone: "pink", shape: "sphere" });
+    // @everyone is the room, not a member — no face to show, colours only.
+    expect(palette.get("everyone")?.avatar).toBeUndefined();
+    expect(palette.get("everyone")?.colors).toBeDefined();
+  });
+
+  it("attaches the avatar to a finished mention, never to one being typed", () => {
+    const [mention] = splitMentions("@Ann look", palette);
+    expect(mention?.avatar).toEqual({ tone: "pink", shape: "sphere" });
+
+    // The composer mirror sits behind the textarea and has to stay
+    // character-identical to it; an avatar there would shift every glyph after
+    // it out from under the real caret.
+    const [typing] = splitMentions("@ann r", palette, { partial: true });
+    expect(typing?.colors).toBeDefined();
+    expect(typing?.avatar).toBeUndefined();
   });
 });

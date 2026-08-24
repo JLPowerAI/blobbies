@@ -17,6 +17,9 @@ export const BLOB_GRADIENTS: Record<AvatarTone, [string, string]> = {
   red: ["#ff7a70", "#e0201c"],
   pink: ["#ff8fc8", "#ea3d8e"],
   gray: ["#c9c9cf", "#8b8b92"],
+  // Near-white, but never pure: a #fff blob loses its edge against a light
+  // theme's panel, and its deep end still has to read as a colour on dark.
+  cream: ["#fdfcf7", "#cfc7b4"],
 };
 
 /** Organic silhouettes drawn in a -88..88 box, one per agent personality. */
@@ -36,7 +39,18 @@ const SHAPES: Record<AgentShape, string> = {
     "M52,-58C70,-42,80,-16,74,8C68,32,48,50,24,62C0,74,-28,78,-48,64" +
     "C-68,50,-78,20,-72,-8C-66,-36,-46,-58,-22,-68C2,-78,34,-74,52,-58Z",
   triangle: "M-8,-74C0,-82,10,-80,16,-70L72,42C78,54,72,68,58,70L-62,72C-76,72,-84,58,-76,46Z",
-  squircle: "M0,-74C48,-74,74,-48,74,0C74,48,48,74,0,74C-48,74,-74,48,-74,0C-74,-48,-48,-74,0,-74Z",
+  // A rounded square, and genuinely squarer than a superellipse: at picker
+  // size the old curve was indistinguishable from the sphere, which made two
+  // of the eight choices the same choice.
+  squircle:
+    "M-44,-72L44,-72C66,-72,72,-66,72,-44L72,44C72,66,66,72,44,72" +
+    "L-44,72C-66,72,-72,66,-72,44L-72,-44C-72,-66,-66,-72,-44,-72Z",
+  // Wide lopsided pill: the only shape broader than it is tall, so it never
+  // reads as "the sphere again" beside the other seven.
+  bean:
+    "M-40,-46C-6,-54,34,-54,58,-40C80,-27,84,-2,76,20" +
+    "C68,42,42,54,6,56C-30,58,-62,48,-74,26" +
+    "C-86,4,-78,-34,-40,-46Z",
 };
 
 interface Eye {
@@ -113,6 +127,14 @@ const FACES: Record<AgentShape, Face> = {
     ],
     mouth: { cx: 0, cy: 14, rx: 5, ry: 6 },
   },
+  // Chatty: wide eyes off to the lean of the bean, mouth mid-sentence.
+  bean: {
+    eyes: [
+      { cx: -18, cy: -8, rx: 7, ry: 12, tilt: -6 },
+      { cx: 16, cy: -10, rx: 7, ry: 12, tilt: 6 },
+    ],
+    mouth: { cx: 0, cy: 22, rx: 8, ry: 5 },
+  },
 };
 
 const FACE_COLOR = "rgba(20, 12, 8, 0.78)";
@@ -130,6 +152,7 @@ const MOTION: Record<AgentShape, { duration: number; delay: number }> = {
   pebble: { duration: 6.5, delay: -1 },
   triangle: { duration: 7.5, delay: -4 },
   squircle: { duration: 10, delay: -6 },
+  bean: { duration: 8.5, delay: -7 },
 };
 
 /** Cheap deterministic hash → 0..1, used to de-sync same-shape instances. */

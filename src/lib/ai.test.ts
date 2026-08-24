@@ -106,6 +106,10 @@ describe("blobSystemPrompt", () => {
       { userName: "Ken Kai", timezone: "Asia/Kuala_Lumpur" },
     );
     expect(prompt).toContain("The user's name is Ken Kai.");
+    // Right under Role and Replies — who you are, how you talk, who you are
+    // talking TO — rather than buried below the tool and skill inventories.
+    expect(prompt.indexOf("## The user")).toBeGreaterThan(prompt.indexOf("## Replies"));
+    expect(prompt.indexOf("## The user")).toBeLessThan(prompt.indexOf("## Tools"));
     // Anything that changes each turn re-prefills the whole transcript.
     expect(prompt).not.toMatch(/\d{1,2}:\d{2}/);
   });
@@ -123,6 +127,37 @@ describe("blobSystemPrompt", () => {
     expect(prompt).not.toContain("leaves this machine");
     expect(prompt).not.toContain("enclave");
     expect(prompt).not.toContain("warm and helpful");
+  });
+
+  it("tells every Blob to answer without preamble, configured or not", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    // Style, not persona: it says how much to say, never what to be, so it
+    // cannot contradict the Role above it — which is why an unconfigured Blob
+    // gets it too.
+    for (const blob of [{ name: "Ken" }, { name: "Ken", title: "Coach", description: "Helps." }]) {
+      const prompt = blobSystemPrompt(blob);
+      expect(prompt).toContain("## Replies");
+      expect(prompt).toContain("do not preface it");
+      // Under the role, not above it: how to talk only means something once
+      // you know what the job is.
+      expect(prompt.indexOf("## Replies")).toBeGreaterThan(prompt.indexOf("You are Ken."));
+      // ...and still ahead of the tool guidance it shapes.
+      expect(prompt.indexOf("## Replies")).toBeLessThan(prompt.indexOf("## Tools"));
+    }
+  });
+
+  it("opens with the role, naming the Blob in its first line", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    // Who you are and what you do are one thought. Left floating above the
+    // first heading, the name was a stray fragment — the one place a small
+    // model cannot tell an instruction from leftover text.
+    expect(blobSystemPrompt({ name: "Ken", title: "Coach", description: "Helps." })).toMatch(
+      /^## Your role\nYou are Ken\.\nCoach/,
+    );
+    // Same for a Blob that has not been configured yet.
+    expect(blobSystemPrompt({ name: "Ken" })).toMatch(
+      /^## Set yourself up\nYou are Ken\.\nYou are not configured yet\./,
+    );
   });
 
   it("names connected apps and the exact route to use them", async () => {
@@ -538,6 +573,11 @@ describe("streamBlobTurn", () => {
       (configureRound?.messages ?? []) as { role: string; content: unknown }[]
     ).find((entry) => entry.role === "system");
     expect(String(configureSystem?.content)).toContain("never abstain for those");
+    // ...and it is told which voice to write in. The description is pasted
+    // verbatim under "You are <name>.", so a first-person line there
+    // contradicts the line directly above it.
+    expect(String(configureSystem?.content)).toContain("second");
+    expect(String(configureSystem?.content)).toContain("never 'I help the");
     // The streamed turn is told why nothing was configured, so it asks the
     // user rather than answering from a role it does not have.
     const streamedMessages = (requests[requests.length - 1]?.messages ?? []) as {
@@ -1527,5 +1567,35 @@ describe("announcesIntent", () => {
     expect(announcesIntent("Nothing new since yesterday.")).toBe(false);
     // Said it, then did it: the last paragraph is the report, so no nudge.
     expect(announcesIntent("I'll check now.\n\nChecked — all quiet.")).toBe(false);
+  });
+});
+
+describe("onActivity", () => {
+  it("reports what the turn is doing, on change only", async () => {
+    // The sidebar shows this word instead of the (now stale) last message, so
+    // it has to track the turn: talking, then the tool, then deciding again.
+    let asked = false;
+    fetchHandler = async () => {
+      if (!asked) {
+        asked = true;
+        return ndjson(toolCallChunks("list_files", {}, "Let me look."));
+      }
+      return ndjson(textChunks("Nothing in there."));
+    };
+    const seen: string[] = [];
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "what have I saved" }],
+      scope: "routine",
+      home: memoryHome(),
+      memory: { list: () => [], save: () => {} },
+      onActivity: (activity) => seen.push(activity),
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    // "reading", not a tool name: the row states the work in the user's words.
+    // Repeats are swallowed — a delta-per-token stream must not re-render the
+    // sidebar for a label that already says "Writing…".
+    expect(seen).toEqual(["writing", "reading", "thinking", "writing"]);
   });
 });

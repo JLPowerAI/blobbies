@@ -1,4 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
+import { BlobAvatar } from "@/components/BlobAvatar";
+import type { AgentShape, AvatarTone } from "@/data/agents";
 import type { MentionColors, MentionPalette } from "@/lib/mentions";
 import { splitMentions } from "@/lib/mentions";
 
@@ -18,13 +20,22 @@ const HEX_COLOR = /^#[0-9a-f]{3}$|^#[0-9a-f]{6}$|^#[0-9a-f]{8}$/i;
  * and a custom property is a value the stylesheet later interpolates — so the
  * choke point validates rather than trusting every future caller.
  */
-export function Mention({ colors, children }: { colors: MentionColors; children: ReactNode }) {
+export function Mention({
+  colors,
+  avatar,
+  children,
+}: {
+  colors: MentionColors;
+  /** Draws the Blob's own avatar where the "@" would be. */
+  avatar?: { tone: AvatarTone; shape: AgentShape };
+  children: ReactNode;
+}) {
   if (!HEX_COLOR.test(colors.onLight) || !HEX_COLOR.test(colors.onDark)) {
     return <span className="mention">{children}</span>;
   }
   return (
     <span
-      className="mention"
+      className={avatar === undefined ? "mention" : "mention mention-with-avatar"}
       style={
         {
           "--mention-on-light": colors.onLight,
@@ -32,9 +43,24 @@ export function Mention({ colors, children }: { colors: MentionColors; children:
         } as CSSProperties
       }
     >
+      {avatar === undefined ? null : (
+        <BlobAvatar tone={avatar.tone} shape={avatar.shape} size={14} />
+      )}
       {children}
     </span>
   );
+}
+
+/**
+ * A mention's visible label: the name without the "@" that addressed it.
+ *
+ * Only for mentions drawn with an avatar — the face already says "this is a
+ * Blob", which is the whole job the "@" was doing, and keeping both reads as a
+ * stray character wedged between the icon and the name. The stored text is
+ * untouched; this is a rendering choice.
+ */
+export function mentionLabel(text: string): string {
+  return text.startsWith("@") ? text.slice(1) : text;
 }
 
 /**
@@ -63,9 +89,13 @@ export function withMentions(
       // biome-ignore lint/suspicious/noArrayIndexKey: positional by construction
       <span key={`${index}-${part.text}`}>{part.text}</span>
     ) : (
-      // biome-ignore lint/suspicious/noArrayIndexKey: positional by construction
-      <Mention key={`${index}-${part.text}`} colors={part.colors}>
-        {part.text}
+      <Mention
+        // biome-ignore lint/suspicious/noArrayIndexKey: positional by construction
+        key={`${index}-${part.text}`}
+        colors={part.colors}
+        {...(part.avatar === undefined ? {} : { avatar: part.avatar })}
+      >
+        {part.avatar === undefined ? part.text : mentionLabel(part.text)}
       </Mention>
     ),
   );

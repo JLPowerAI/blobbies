@@ -395,6 +395,36 @@ describe("App", () => {
     expect(screen.getByRole("complementary", { name: "Kenji details" })).toBeInTheDocument();
   });
 
+  it("keeps the avatar grids folded behind the avatar until asked", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+    await user.click(screen.getByRole("button", { name: "Ken settings" }));
+    const panel = screen.getByRole("complementary", { name: "Ken settings" });
+
+    // Seventeen controls, touched once, sitting in front of the fields being
+    // edited: closed by default so Name/Title/Description stay above the fold.
+    const edit = within(panel).getByRole("button", { name: "Edit avatar" });
+    expect(edit).toHaveAttribute("aria-expanded", "false");
+    expect(within(panel).queryByLabelText("purple")).not.toBeInTheDocument();
+
+    await user.click(edit);
+    expect(edit).toHaveAttribute("aria-expanded", "true");
+    // Both grids are there, and they write through to the Blob.
+    await user.click(within(panel).getByLabelText("purple"));
+    await user.click(within(panel).getByLabelText("triangle"));
+    expect(within(panel).getByLabelText("purple")).toBeChecked();
+    expect(within(panel).getByLabelText("triangle")).toBeChecked();
+
+    // Escape closes the popover and hands focus back to what opened it — not
+    // to <body>, where the next Tab would restart from the top of the panel.
+    await user.keyboard("{Escape}");
+    expect(within(panel).queryByLabelText("purple")).not.toBeInTheDocument();
+    expect(edit).toHaveFocus();
+    // ...and Escape was consumed here, so the panel behind it stayed open.
+    expect(screen.getByRole("complementary", { name: "Ken settings" })).toBeInTheDocument();
+  });
+
   it("never lets two Blobs answer to the same name", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1148,6 +1178,8 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Ken settings" }));
     const panel = screen.getByRole("complementary", { name: "Ken settings" });
+    // The grids live behind the avatar now, so the write path starts there.
+    await user.click(within(panel).getByRole("button", { name: "Edit avatar" }));
     await user.click(within(panel).getByRole("radio", { name: "red" }));
     await user.click(within(panel).getByRole("radio", { name: "egg" }));
 

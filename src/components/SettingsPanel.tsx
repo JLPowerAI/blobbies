@@ -1,7 +1,6 @@
 import { ChevronLeft, ChevronsRight } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
-import { AvatarPicker } from "@/components/AvatarPicker";
-import { BlobAvatar } from "@/components/BlobAvatar";
+import { AvatarField } from "@/components/AvatarPicker";
 import { MemoriesModal } from "@/components/MemoriesModal";
 import { SystemPromptModal } from "@/components/SystemPromptModal";
 import { type Agent, MAX_BLOB_NAME_LENGTH } from "@/data/agents";
@@ -75,13 +74,7 @@ export function SettingsPanel({
 
       <div className="settings-body">
         <div className="settings-avatar">
-          <BlobAvatar tone={agent.tone} shape={agent.shape} size={56} />
-          <AvatarPicker
-            tone={agent.tone}
-            shape={agent.shape}
-            group="settings"
-            onChange={onUpdate}
-          />
+          <AvatarField tone={agent.tone} shape={agent.shape} group="settings" onChange={onUpdate} />
         </div>
 
         <div className="settings-field">

@@ -333,6 +333,38 @@ describe("ChatPane", () => {
     expect(onSend).toHaveBeenCalledWith("@Zed take it", {});
   });
 
+  it("labels a Blob's bubble with its name alone, no second avatar", () => {
+    const zed: Agent = { ...agent, id: "zed", name: "Zed", tone: "pink" };
+    render(
+      <ChatPane
+        agent={agent}
+        group={{ id: "g1", name: "Launch", members: [agent, zed] }}
+        messages={[
+          {
+            id: "m1",
+            kind: "text",
+            author: "agent",
+            authorId: zed.id,
+            segments: [{ text: "done" }],
+          },
+        ]}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+    const label = document.querySelector(".message-author");
+    expect(label?.textContent).toBe("Zed");
+    // The avatar is the @mention's job — pointing at a Blob mid-sentence. Here
+    // it would repeat down every run of messages from one speaker.
+    expect(label?.querySelector("svg")).toBeNull();
+  });
+
   it("colours an @mention in the mentioned Blob's own colour, both ways", () => {
     const zed: Agent = { ...agent, id: "zed", name: "Zed", tone: "pink" };
     render(
@@ -365,10 +397,17 @@ describe("ChatPane", () => {
     // markdown, and an unhighlighted mention in either would misreport who
     // is being addressed.
     const mentions = document.querySelectorAll(".mention");
-    expect([...mentions].map((node) => node.textContent)).toEqual(["@Zed", "@Zed"]);
-    // Two colours, not one: the theme flips without React re-rendering the
-    // transcript, so CSS — not JS — has to choose between them.
+    // The Blob's face replaces the "@", so the name stands alone. Kept
+    // identical across the two paths — the same mention rendering differently
+    // in a user bubble and a reply would read as two different things.
+    expect([...mentions].map((node) => node.textContent)).toEqual(["Zed", "Zed"]);
     for (const node of mentions) {
+      expect(node).toHaveClass("mention-with-avatar");
+      // Its own avatar, not a generic dot: same silhouette and tone the
+      // sidebar draws for that Blob.
+      expect(node.querySelector("svg.blob-avatar")).not.toBeNull();
+      // Two colours, not one: the theme flips without React re-rendering the
+      // transcript, so CSS — not JS — has to choose between them.
       const style = node.getAttribute("style") ?? "";
       expect(style).toContain("--mention-on-light");
       expect(style).toContain("--mention-on-dark");
@@ -978,5 +1017,107 @@ describe("ChatPane", () => {
     );
     expect(screen.getByRole("img", { name: "photo.png" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /photo.png/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("switching conversations", () => {
+  /** The header alone, with only the Blob varying. */
+  const header = (which: Agent) => (
+    <ChatPane
+      agent={which}
+      messages={[]}
+      model=""
+      onModelChange={() => {}}
+      reasoning={false}
+      onReasoningChange={() => {}}
+      onSend={() => {}}
+      detailOpen={false}
+      onToggleDetail={() => {}}
+      onOpenSettings={() => {}}
+    />
+  );
+
+  it("keeps the old title on screen so the two slide as one strip", () => {
+    // jsdom has no matchMedia, which ChatPane reads as "reduced motion" and
+    // skips the ghost entirely. Stub it to the motion-allowed answer, or this
+    // asserts the one path it is not about.
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} })),
+    );
+    const other: Agent = { ...agent, id: "b2b0f0d2-1111-4bbb-8ccc-2d3e4f5a6b7c", name: "Nova" };
+    const { rerender } = render(header(agent));
+    expect(screen.getByRole("heading", { name: "Ken" })).toBeInTheDocument();
+
+    rerender(header(other));
+    // Both titles are mounted at once: the outgoing one is what the incoming
+    // one slides up past. Drop it and the header just blinks to the new name.
+    expect(screen.getByRole("heading", { name: "Nova" })).toBeInTheDocument();
+    const ghost = document.querySelector(".chat-header-identity-leaving");
+    expect(ghost?.textContent).toContain("Ken");
+    // A picture of where you were, not a place to land: announcing it or
+    // tabbing into it would be worse than having no animation at all.
+    expect(ghost).toHaveAttribute("aria-hidden", "true");
+    // Only the live title is in the accessibility tree.
+    expect(screen.queryByRole("heading", { name: "Ken" })).not.toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it("skips the ghost under reduced motion, where it would never animate away", () => {
+    const other: Agent = { ...agent, id: "b2b0f0d2-1111-4bbb-8ccc-2d3e4f5a6b7c", name: "Nova" };
+    const { rerender } = render(header(agent));
+    rerender(header(other));
+    // A ghost that never animates is just the old title parked on top of the
+    // new one, so it is never mounted at all.
+    expect(document.querySelector(".chat-header-identity-leaving")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Nova" })).toBeInTheDocument();
+  });
+});
+
+describe("a created routine", () => {
+  it("names the routine in the transcript, with the Routines list's clock", () => {
+    render(
+      pane(false, () => {}, [
+        {
+          id: "e1",
+          kind: "event",
+          text: "Created routine",
+          subject: { icon: "routine", label: "Overnight outbound" },
+        },
+      ]),
+    );
+    const line = screen.getByRole("status");
+    expect(line).toHaveTextContent("Created routine Overnight outbound");
+
+    // The routine name is its own element, so it can carry the weight and full
+    // contrast while the caption around it stays a dim status line. Baked into
+    // one string it would all render at one weight.
+    const name = line.querySelector(".transcript-event-subject");
+    expect(name?.textContent).toBe("Overnight outbound");
+    // ...and the caption really is only the caption, not the whole line.
+    expect(line.textContent?.replace(name?.textContent ?? "", "").trim()).toBe("Created routine");
+
+    // The dimming hangs off `.transcript-event:has(.transcript-event-subject)`,
+    // so a subject inside this element IS the hook — asserted here because
+    // jsdom computes no stylesheet and the colour itself cannot be read back.
+    expect(line).toHaveClass("transcript-event");
+    expect(line.matches(".transcript-event:has(.transcript-event-subject)")).toBe(true);
+
+    // Specifically the clock the Routines list uses, not just any glyph: the
+    // point is that a routine looks the same in both places.
+    const icon = line.querySelector("svg");
+    expect(icon).toHaveClass("lucide-clock");
+    // Decorative — the label beside it already says what it means.
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("leaves a plain status line alone, with no icon and no subject", () => {
+    render(pane(false, () => {}, [{ id: "e2", kind: "event", text: "Spawned Nova" }]));
+    const line = screen.getByRole("status");
+    expect(line).toHaveTextContent("Spawned Nova");
+    // No subject, so it keeps the green "work happened" treatment rather than
+    // the dim caption — same selector, answered the other way.
+    expect(line.matches(".transcript-event:has(.transcript-event-subject)")).toBe(false);
+    expect(line.querySelector("svg")).toBeNull();
   });
 });

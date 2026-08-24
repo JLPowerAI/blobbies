@@ -62,6 +62,15 @@ export function rehypeMentions(palette: MentionPalette | undefined) {
             properties: {
               "data-mention-on-light": part.colors.onLight,
               "data-mention-on-dark": part.colors.onDark,
+              // Tone and shape ride across as data too, so the span override
+              // can draw the Blob's avatar. Both come from the roster, never
+              // from the model's text.
+              ...(part.avatar === undefined
+                ? {}
+                : {
+                    "data-mention-tone": part.avatar.tone,
+                    "data-mention-shape": part.avatar.shape,
+                  }),
             },
             children: [{ type: "text", value: part.text }],
           });
