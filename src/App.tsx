@@ -1630,7 +1630,16 @@ export function App() {
               ? undefined
               : group.members.find((member) => member.id === entry.authorId)?.name;
           const body = entry.segments.map((segment) => segment.text).join("");
-          const line = said === undefined ? body : `[${said}]: ${body}`;
+          const spoken = said === undefined ? body : `[${said}]: ${body}`;
+          // The evidence behind a past answer, replayed so the transcript does
+          // not read as "assistant knew a file's contents having called
+          // nothing" — the pattern the model was measured copying (see
+          // `readFiles`). Only on its own messages: another Blob's reads are
+          // not this one's to claim.
+          const line =
+            own && entry.readFiles !== undefined && entry.readFiles.length > 0
+              ? `${spoken}\n\n(read: ${entry.readFiles.join(", ")})`
+              : spoken;
           const block = await attachmentsPrompt(home, entry.attachments ?? []);
           // An attachment-only message has no words of its own; a leading
           // blank line in its place is noise the model has to read past.
@@ -1824,6 +1833,11 @@ export function App() {
         return { ...previous, [convoId]: [...(previous[convoId] ?? []), bubble] };
       });
     };
+    /**
+     * Files this turn opened, attached to its last bubble when it settles so
+     * the next turn's history carries the evidence (see `Message.readFiles`).
+     */
+    const filesRead: string[] = [];
     /** Attach a failure note to the newest bubble, or open one when nothing was said. */
     const noteStopped = (note: string) => {
       if (bubbleCount === 0) {
@@ -1928,6 +1942,16 @@ export function App() {
           void showCapture(convoId, speaker.id, capture, caption);
         },
         onCheckpoint: flushTranscript,
+        onToolCall: (call) => {
+          // Only the reads, and only their paths: this is replayed into every
+          // later turn's history, so it has to stay one short line.
+          if (call.name === "read_file" && !call.isError) {
+            const path = (call.args as { path?: unknown }).path;
+            if (typeof path === "string" && !filesRead.includes(path)) {
+              filesRead.push(path);
+            }
+          }
+        },
         onUsage: (usage) => {
           spent.inputTokens += usage.inputTokens;
           spent.outputTokens += usage.outputTokens;
@@ -2054,6 +2078,23 @@ export function App() {
     if (group === undefined) {
       touchActivity(target.id, text);
     }
+    // The reads go on the last bubble this turn produced — the one carrying
+    // the answer they back. Written once, at settle, rather than per bubble:
+    // the reads that justify a report can happen before or between segments.
+    //
+    // Before the flush below, not after: `mutateSent` only touches the ref and
+    // state, so a write landing after the save would hold until some later
+    // turn happened to flush again — and be lost outright on reload, which is
+    // exactly the conversation this evidence exists to ground.
+    if (filesRead.length > 0 && bubbleCount > 0) {
+      const lastId = `${replyId}-${bubbleCount}`;
+      mutateSent((previous) => ({
+        ...previous,
+        [convoId]: (previous[convoId] ?? []).map((entry) =>
+          entry.id === lastId && entry.kind === "text" ? { ...entry, readFiles: filesRead } : entry,
+        ),
+      }));
+    }
     // Persist once the reply settled; per-delta saves would thrash the store.
     flushTranscript();
     // Compaction, last: whatever fell out of the window this turn is folded
@@ -2103,6 +2144,27 @@ export function App() {
     // Any turn can have written a file now (the catalog is shared), so the
     // Files list re-reads whenever a turn settles.
     setFilesKey((key) => key + 1);
+    // A follow-up the user typed mid-turn that the loop never got to. gg-agent
+    // drains `steering` between tool rounds and once more before it stops, so
+    // anything pushed after that last drain — including an attachment message,
+    // whose push is async — was simply dropped: the message sat in the
+    // transcript with no reply, which is exactly what "I sent three prompts and
+    // it stalled" looks like. It is already in the history, so the leftovers
+    // are cleared and a fresh turn answers it.
+    //
+    // Not after a cancel ("stop" means the whole exchange), not in a group,
+    // where the next responder is the queue's business, and not while parked
+    // on a question — that run resumes as an "answer" turn on the user's next
+    // send, and starting a fresh one here would fork it. The question is on
+    // screen, so nothing is silently lost in that case.
+    if (steering.length > 0) {
+      steering.length = 0;
+      if (outcome !== "cancelled" && group === undefined && run.status !== "waiting_input") {
+        void queueTurn(() =>
+          requestReply(target, [...transcriptFor(target), ...(sentRef.current[target.id] ?? [])]),
+        );
+      }
+    }
     return run.status === "waiting_input" ? "done" : outcome;
   };
 

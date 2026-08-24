@@ -391,6 +391,14 @@ export function rejectionNote(rejected: readonly RejectedAttachment[]): string {
 }
 
 /**
+ * Opening words of an attachment block, exported so the turn loop can spot one
+ * in a message it is handed. An attached file reaches the model inlined here
+ * rather than through a file tool, so the "you never opened a file" check has
+ * to recognise this flow — see `claimsUnreadFile`'s call site.
+ */
+export const ATTACHED_HEADER = "The user attached these files.";
+
+/**
  * The prompt block for one message's attachments: file text, read back from
  * the home folder at turn time so an edited file shows its current contents.
  *
@@ -428,7 +436,7 @@ export async function attachmentsPrompt(
     blocks.push(wrapUntrusted(clipped, name));
   }
   return (
-    "The user attached these files. They are saved in your files folder under " +
+    `${ATTACHED_HEADER} They are saved in your files folder under ` +
     `these names: ${names.join(", ")}.\n\n${blocks.join("\n\n")}`
   );
 }

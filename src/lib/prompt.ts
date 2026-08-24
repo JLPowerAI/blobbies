@@ -214,6 +214,16 @@ export function blobSystemPrompt(
   // What survives is only what a single tool's description cannot know: a
   // rule that spans two tools, or one about the conversation rather than the
   // call. Add a line here only after measuring that it changes behaviour.
+  const connectedApps = extensions.connectedApps ?? [];
+  // Rendered whenever the tools exist, not only when something is connected:
+  // a signed-in user with nothing added yet still has the whole catalogue one
+  // search away, and a silent section had the Blob deny having apps at all.
+  //
+  // Declared up here rather than beside its own section: the Tools catalog
+  // below needs it too, to word web_search's line as a fallback when apps are
+  // in play (see the note there).
+  const appsReachable = extensions.appsReachable === true || connectedApps.length > 0;
+
   const capabilities = section(
     "Tools",
     // Short name-first lines, one per tool: a catalog, not a rulebook — the
@@ -222,10 +232,38 @@ export function blobSystemPrompt(
     // are dropped for group turns — the catalog withholds those tools there
     // (App.tsx), and naming a tool the model cannot see is the measured
     // misfire this list must never repeat.
-    "- web_search: look up public facts you don't know (news, docs, prices).\n" +
+    // The caveat rides on web_search's own line, not only in the Connected
+    // apps section further down. Measured (2026-08-25, sim/routing.sim.ts,
+    // deepseek): the ranking rule in that later section alone took a YouTube
+    // Blob's wrong-tool rate from 2/2 to 1/2 — real, not enough. This list is
+    // where the choice is actually made, and web_search heads it, so a Blob
+    // scanning for "which tool finds things" commits before ever reaching the
+    // rule. Said in both places it went to 0/2.
+    (appsReachable
+      ? "- web_search: public facts no connected app covers. If an app you are " +
+        "connected to owns what was asked for, that app comes first.\n"
+      : "- web_search: look up public facts you don't know (news, docs, prices).\n") +
       "- web_fetch: read one page; after a search, fetch the best result before " +
       "answering from snippets.\n" +
       "- run_subagent: one bounded research step inside this task.\n" +
+      // The file tools were missing from this catalog entirely, though every
+      // turn is given them (App.tsx always passes `home`). Measured
+      // (2026-08-25, sim/grounding.sim.ts, deepseek): asked about a second
+      // note right after a first had been read, 3 of 6 turns called no tool
+      // at all and answered anyway — "Tokyo, 12-19 March" came back as
+      // "Flight Cancelled", "milk, eggs" as "milk, eggs, bread", and one
+      // denied the file existed without looking.
+      //
+      // The pattern is why the grounding clause is attached rather than just
+      // the tool names: it does not happen on turn 1. Once earlier turns have
+      // put real file contents in the transcript, the shape of "assistant
+      // reports what a file says" is established and the model completes the
+      // pattern instead of fetching the data. So the rule is about where the
+      // words come from, not about remembering a tool exists.
+      "- list_files / read_file / write_file: your home folder — notes and drafts " +
+      "you saved before. What you say a file contains must come from reading it " +
+      "in this turn: not from earlier in the conversation, not from what it " +
+      "probably says. The same goes for saying a file is missing — look first.\n" +
       // Gated on the host actually offering it (no capture surface in the
       // browser build), because naming a tool the model cannot see is the
       // misfire this list exists to avoid — see the note above.
@@ -264,11 +302,6 @@ export function blobSystemPrompt(
     "Connected servers",
     (extensions.mcpServers ?? []).map((entry) => `- ${entry}`).join("\n"),
   );
-  const connectedApps = extensions.connectedApps ?? [];
-  // Rendered whenever the tools exist, not only when something is connected:
-  // a signed-in user with nothing added yet still has the whole catalogue one
-  // search away, and a silent section had the Blob deny having apps at all.
-  const appsReachable = extensions.appsReachable === true || connectedApps.length > 0;
   const apps = section(
     "Connected apps",
     !appsReachable
@@ -290,6 +323,38 @@ export function blobSystemPrompt(
           // rule here too would be bloat: app_run_tool already states it, and
           // it is read at the moment that matters.
           "Reach these with app_find_tool first — never guess a tool name.",
+          // The measured failure this exists for (2026-08-25, reported live,
+          // reproduced 2/2 in sim/routing.sim.ts with this line removed): a
+          // Blob whose role was a YouTube scout, with YouTube connected, was
+          // asked to find videos and ran web_search first — in the same
+          // conversation where it had already used the app.
+          //
+          // Nothing above ranked the two. `web_search` heads the Tools catalog
+          // and reads as the default for anything "look something up" shaped,
+          // which is the shape of most requests. Listing an app is not the same
+          // as saying it outranks the generic tool.
+          //
+          // Deliberately about the ROLE, not about any one app: the rule is
+          // "whatever you were set up to do, the connected app covering it is
+          // your instrument", so it holds for a Blob built around Linear,
+          // Notion, Spotify or anything added to the catalogue later. Naming
+          // example apps here would teach the pattern for those names only and
+          // go stale as the catalogue grows.
+          //
+          // Two wordings because an unconfigured Blob has no role section to
+          // point at — its heading is "Set yourself up". "Your role above"
+          // would refer to nothing on exactly the turns where the Blob is
+          // learning what it is for, which is where the confusion starts.
+          configured
+            ? "Your role above decides which of these you reach for first: the app " +
+              "covering what you were set up to do is your primary instrument, and " +
+              "requests in that area go through it — not web_search, and not from " +
+              "memory. web_search is for what no connected app covers, or for once " +
+              "the right app has come back empty."
+            : "Once you know what you are for, the app covering that work is your " +
+              "primary instrument: requests in that area go through it — not " +
+              "web_search, and not from memory. web_search is for what no connected " +
+              "app covers, or for once the right app has come back empty.",
           // The catalogue is far larger than the list above, and a Blob that
           // reads the list as exhaustive tells the user an app is
           // unavailable when it is one search away.

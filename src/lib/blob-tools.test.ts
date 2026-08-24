@@ -435,12 +435,33 @@ describe("file tools", () => {
 
     expect(await list?.execute({}, context)).toBe("Your home folder is empty.");
     await write?.execute({ path: "notes/plan.md", content: "step one" }, context);
-    expect(await list?.execute({}, context)).toBe("notes/");
+    // The folder line now carries the "look inside" hint (see the dead-end
+    // test below), so the listing starts with it rather than being only it.
+    expect(await list?.execute({}, context)).toMatch(/^notes\/\n/);
     expect(await list?.execute({ dir: "notes" }, context)).toBe("plan.md (8 bytes)");
     expect(await read?.execute({ path: "notes/plan.md" }, context)).toBe("step one");
     expect(await remove?.execute({ path: "notes/plan.md" }, context)).toBe(
       "Deleted notes/plan.md.",
     );
+  });
+
+  it("points at folders as somewhere to look, not as a dead end", async () => {
+    // Measured (2026-08-25, sim/grounding.sim.ts): asked for a note one level
+    // down, the Blob listed the top level, saw only `notes/`, and told the
+    // user no such note existed — while it sat inside. A bare folder line
+    // reads as the end of the search.
+    const home = memoryHome();
+    await home.write("notes/groceries.md", "milk, eggs");
+    const { readOnly } = makeFsTools(home);
+    const top = String(await readOnly[0]?.execute({}, context));
+    expect(top).toContain("notes/");
+    expect(top).toMatch(/list one to see what is inside/);
+
+    // Nothing to descend into, no hint: it would be noise on every listing of
+    // a flat folder, and this result is read on every single call.
+    const inner = String(await readOnly[0]?.execute({ dir: "notes" }, context));
+    expect(inner).toContain("groceries.md");
+    expect(inner).not.toMatch(/list one to see/);
   });
 
   it("split is read-only vs mutating, for subagent catalogs", () => {

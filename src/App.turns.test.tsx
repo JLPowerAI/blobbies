@@ -303,6 +303,41 @@ describe("turn wiring", () => {
     }
   });
 
+  it("replays the files a past turn read into the next turn's history", async () => {
+    // Measured (2026-08-25, sim/grounding.sim.ts): history was rebuilt from
+    // text alone, so a turn that read a note and reported it came back as
+    // "assistant stated a file's contents having called nothing". Asked about
+    // a second note the model copied that shape — 3 of 6 turns invented
+    // contents without calling anything. Replaying the reads fixed 5 of 6.
+    script = [
+      (options) => {
+        options.onToolCall?.({
+          name: "read_file",
+          args: { path: "notes/standup.md" },
+          result: "Shipped the recap feature.",
+          isError: false,
+        });
+        options.onSegment?.("Your standup note says: shipped the recap feature.");
+        return "Your standup note says: shipped the recap feature.";
+      },
+      () => "Checking.",
+    ];
+    const user = userEvent.setup();
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+    await say(user, "what's in my standup note?");
+    await waitFor(() => expect(calls.length).toBe(1));
+    await say(user, "and the trip one?");
+    await waitFor(() => expect(calls.length).toBe(2));
+
+    const history = calls[1]?.messages ?? [];
+    const past = history.find(
+      (message) =>
+        message.role === "assistant" && String(message.content).includes("standup note says"),
+    );
+    expect(String(past?.content)).toContain("(read: notes/standup.md)");
+  });
+
   it("animates the sidebar row's avatar while its turn runs", async () => {
     const user = userEvent.setup();
     let release = () => {};

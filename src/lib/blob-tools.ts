@@ -684,9 +684,19 @@ export function makeFsTools(home: HomeBackend): {
             ? "Your home folder is empty."
             : `${args.dir} is empty or does not exist.`;
         }
-        return entries
+        const listing = entries
           .map((entry) => (entry.isDir ? `${entry.name}/` : `${entry.name} (${entry.size} bytes)`))
           .join("\n");
+        // A bare `notes/` line reads as a dead end. Measured (2026-08-25,
+        // sim/grounding.sim.ts, deepseek): asked for a note that lives one
+        // level down, the Blob listed the top level, saw only `notes/`, and
+        // told the user no such note existed — while it sat inside. The
+        // folders are already on screen; what was missing is that looking
+        // inside them is the next move and not the end of the search.
+        return entries.some((entry) => entry.isDir)
+          ? `${listing}\n(Lines ending in / are folders — list one to see what is inside ` +
+              `before concluding a file is not there.)`
+          : listing;
       } catch (error) {
         return toolError(error);
       }

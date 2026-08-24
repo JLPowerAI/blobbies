@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Routine } from "@/data/agents";
 import { streamBlobTurn, streamLocalChat, type ToolCallRecord } from "@/lib/ai";
+import { ATTACHED_HEADER } from "@/lib/attachments";
 import type { PendingAsk, RoutineAccess } from "@/lib/blob-tools";
 import { memoryHome } from "@/lib/home";
 
@@ -178,6 +179,46 @@ describe("blobSystemPrompt", () => {
     // when to call it.
     expect(prompt).not.toContain("ask_user");
     expect(prompt).toContain("never guess a tool name");
+    // Naming the app is not the same as ranking it. Reported live: a Blob
+    // whose role was a YouTube scout, with YouTube connected, ran web_search
+    // for "find me videos" — web_search heads the Tools catalog and reads as
+    // the default for anything look-it-up shaped, so the prompt has to say
+    // which wins. Phrased about the role, so it holds for any app.
+    expect(prompt).toContain("not web_search");
+    expect(prompt).toContain("Your role above decides");
+    // No app is named in the rule itself: a list of examples teaches the
+    // pattern for those names only and goes stale as the catalogue grows.
+    const ranking = prompt.slice(prompt.indexOf("Your role above decides"));
+    expect(ranking).not.toMatch(/YouTube|Linear|Notion|Spotify/);
+
+    // A Blob still setting itself up has no "## Your role" heading — it has
+    // "## Set yourself up" — so pointing at a role above would refer to
+    // nothing on exactly the turns where it is learning what it is for.
+    const fresh = blobSystemPrompt({ name: "Newbie" }, undefined, {
+      connectedApps: ["YouTube"],
+    });
+    expect(fresh).toContain("## Set yourself up");
+    expect(fresh).not.toContain("Your role above");
+    expect(fresh).toContain("Once you know what you are for");
+    expect(fresh).toContain("not web_search");
+    // Said twice on purpose, and the second place is web_search's own catalog
+    // line — that list is where the tool choice is actually made, and
+    // web_search heads it. The later section alone measured 1/2 wrong-tool;
+    // both together, 0/2.
+    expect(prompt).toContain("that app comes first");
+    // The file tools were absent from this catalog while every turn was given
+    // them, and the grounding clause is the point: measured 3/6 turns
+    // reporting note contents they never read once an earlier read had
+    // established the pattern.
+    expect(prompt).toContain("list_files / read_file / write_file");
+    expect(prompt).toContain("must come from reading it in this turn");
+    expect(prompt).not.toContain("- web_search: look up public facts you don't know");
+
+    // With nothing reachable the plain wording returns: a fallback caveat
+    // pointing at apps that do not exist is noise in every turn's prefix.
+    const soloPrompt = blobSystemPrompt(blob);
+    expect(soloPrompt).toContain("- web_search: look up public facts you don't know");
+    expect(soloPrompt).not.toContain("that app comes first");
 
     // Nothing connected means no section at all: an empty heading is wasted
     // prefix on every turn.
@@ -1534,13 +1575,17 @@ describe("a routine that only announces the work", () => {
     expect(text).toBe("Which server should I check?");
   });
 
-  it("leaves chat alone — there a user can simply say 'go on'", async () => {
+  it("nudges chat too — 'I'll do that right now' then silence is a stall", async () => {
+    // Reported live on Tinfoil with thinking off: the Blob promises the work
+    // and stops, and the user has to type "go on" to get a turn that does it.
     let round = 0;
     fetchHandler = async () => {
       round += 1;
-      return ndjson(textChunks("I'll check the servers. Let me start by listing them."));
+      return round === 1
+        ? ndjson(textChunks("I'll check the servers right now."))
+        : ndjson(textChunks("Both servers are up."));
     };
-    await streamBlobTurn({
+    const text = await streamBlobTurn({
       model: "llama3.2:latest",
       messages: [{ role: "user", content: "check my servers" }],
       // Pre-classified so the intent router does not fire a request of its own.
@@ -1549,7 +1594,161 @@ describe("a routine that only announces the work", () => {
       onSegment: () => {},
       onConfigure: () => {},
     });
+    expect(round).toBe(2);
+    expect(text).toContain("Both servers are up.");
+  });
+
+  it("nudges a turn that used a tool and still signed off on a promise", async () => {
+    // The reported stall, verbatim (2026-08-25, Tinfoil, thinking off). The
+    // first shape of this check stood down whenever the turn had used any
+    // tool, so this reply — tool called, then "let me ... run parallel
+    // searches" — ended the turn and the searches never ran.
+    const promise =
+      "It's getting late, but you're asking for a scan and I've got the tool — " +
+      "let me actually run it this time and give you fresh stuff.\n\n" +
+      "Let me check the search schema and the current time, then run parallel searches.";
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      if (round === 1) {
+        return ndjson(toolCallChunks("list_files", {}, ""));
+      }
+      return round === 2 ? ndjson(textChunks(promise)) : ndjson(textChunks("Two new videos."));
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "any new vids I should look into? check it out" }],
+      intent: { action: "none" },
+      home: memoryHome(),
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    // A third round happened: the promise was sent back to be carried out.
+    expect(round).toBe(3);
+    expect(text).toContain("Two new videos.");
+  });
+
+  it("does not nudge a chat reply that hands the turn back", async () => {
+    // "Let me know" and "I'll be here" share the wording of a promise and mean
+    // the opposite. Chat ends on them constantly; a nudge there would answer a
+    // question the user never asked.
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      return ndjson(textChunks("All quiet. Let me know if you want the details."));
+    };
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "check my servers" }],
+      intent: { action: "none" },
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
     expect(round).toBe(1);
+  });
+});
+
+describe("a turn that talks about a file it never opened", () => {
+  it("is sent back to actually read it, and the reply is what it found", async () => {
+    // Measured (2026-08-25, sim/grounding.sim.ts, deepseek): asked about a
+    // second note right after a first had been read, turns called no tool and
+    // answered anyway — "Tokyo, 12-19 March" reported as "Trip to Berlin".
+    const home = memoryHome();
+    await home.write("notes/trip.md", "Tokyo, 12-19 March.");
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      if (round === 1) {
+        return ndjson(textChunks('Your trip note says: "Trip to Berlin."'));
+      }
+      return round === 2
+        ? ndjson(toolCallChunks("read_file", { path: "notes/trip.md" }, ""))
+        : ndjson(textChunks("Your trip note says: Tokyo, 12-19 March."));
+    };
+    const text = await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "what does my trip note say?" }],
+      intent: { action: "none" },
+      home,
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    expect(round).toBe(3);
+    expect(text).toContain("Tokyo");
+  });
+
+  it("leaves a turn answering about an attached file alone", async () => {
+    // An attachment arrives inlined in the user's message, not through a file
+    // tool, so the Blob legitimately opened nothing. Nudging here would spend
+    // a round telling it that text in front of it is not something it knows.
+    const home = memoryHome();
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      return ndjson(textChunks("Your policy document says: thirty days notice."));
+    };
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [
+        {
+          role: "user",
+          content:
+            `${ATTACHED_HEADER} They are saved in your files folder under these ` +
+            "names: policy.md.\n\nthirty days notice",
+        },
+      ],
+      intent: { action: "none" },
+      home,
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    expect(round).toBe(1);
+  });
+
+  it("leaves a turn that did read the file alone", async () => {
+    // The whole point is the gap between claim and evidence. Once the file has
+    // been opened, saying what it holds is a report, not invention.
+    const home = memoryHome();
+    await home.write("notes/trip.md", "Tokyo, 12-19 March.");
+    let round = 0;
+    fetchHandler = async () => {
+      round += 1;
+      return round === 1
+        ? ndjson(toolCallChunks("read_file", { path: "notes/trip.md" }, ""))
+        : ndjson(textChunks("Your trip note says: Tokyo, 12-19 March."));
+    };
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "what does my trip note say?" }],
+      intent: { action: "none" },
+      home,
+      memory: { list: () => [], save: () => {} },
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    expect(round).toBe(2);
+  });
+
+  it("knows a claim from a hedge and a file from ordinary talk", async () => {
+    const { claimsUnreadFile } = await import("@/lib/ai");
+    // Asserted as fact — the shape that reads as an answer.
+    expect(claimsUnreadFile('Your trip note says: "Berlin".')).toBe(true);
+    expect(claimsUnreadFile("The groceries list contains milk and eggs.")).toBe(true);
+    // Ruling a file out without looking was measured too, and reads just as
+    // final to the user.
+    expect(claimsUnreadFile("I don't have a groceries note.")).toBe(true);
+    expect(claimsUnreadFile("That file isn't in the notes folder.")).toBe(true);
+
+    // Hedged: invites a correction rather than standing as fact.
+    expect(claimsUnreadFile("You might have a note about that somewhere.")).toBe(false);
+    // No claim about a file at all — the common case, which must never pay a
+    // round for this check.
+    expect(claimsUnreadFile("Both servers are up.")).toBe(false);
+    expect(claimsUnreadFile("I'll file that under things to watch.")).toBe(false);
   });
 });
 
@@ -1567,6 +1766,14 @@ describe("announcesIntent", () => {
     expect(announcesIntent("Nothing new since yesterday.")).toBe(false);
     // Said it, then did it: the last paragraph is the report, so no nudge.
     expect(announcesIntent("I'll check now.\n\nChecked — all quiet.")).toBe(false);
+  });
+
+  it("does not mistake handing the turn back for a promise", async () => {
+    const { announcesIntent } = await import("@/lib/ai");
+    expect(announcesIntent("All quiet. Let me know if you want more.")).toBe(false);
+    expect(announcesIntent("Done. I'll be here if anything changes.")).toBe(false);
+    expect(announcesIntent("Sent. I'll wait for their reply.")).toBe(false);
+    expect(announcesIntent("Three new posts. I'll keep an eye out for more.")).toBe(false);
   });
 });
 

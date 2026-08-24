@@ -174,6 +174,19 @@ export type Message =
        * transcript never carries a copy of the file (see lib/attachments).
        */
       attachments?: Attachment[];
+      /**
+       * Files this Blob opened while producing the message. Not shown in the
+       * UI — it is replayed into the next turn's history so a past answer
+       * carries the evidence it came from.
+       *
+       * Measured (2026-08-25, sim/grounding.sim.ts): history was rebuilt from
+       * text alone, so a turn that read a note and reported it came back as
+       * "assistant stated a file's contents having called nothing". Asked
+       * about a second note, the model completed that pattern instead of
+       * reading — 3 of 6 turns invented contents, with no tool call at all.
+       * With the reads replayed, 5 of 6 went and looked.
+       */
+      readFiles?: string[];
     }
   | {
       id: string;

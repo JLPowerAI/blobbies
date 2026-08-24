@@ -9,6 +9,7 @@ import {
 } from "@kenkaiiii/gg-ai";
 import { z } from "zod";
 import { activityForTool, type BlobActivity } from "@/lib/activity";
+import { ATTACHED_HEADER } from "@/lib/attachments";
 import {
   type MemoryAccess,
   makeAskTool,
@@ -481,16 +482,19 @@ function isCompleteThought(text: string): boolean {
  * Does this reply promise work rather than report it? — "I'll check the
  * servers", "Let me start by finding the Discord tools."
  *
- * In chat that is fine: the model says it, calls a tool, and if it forgets the
- * user simply says "go on". A routine has no user. Nobody sees the promise,
- * nobody prompts again, and the scheduled work silently never happens — which
- * is indistinguishable, from the outside, from a routine that ran and found
- * nothing. So a routine turn that ends on one of these gets one more round.
+ * A routine has no user: nobody sees the promise, nobody prompts again, and
+ * the scheduled work silently never happens — indistinguishable, from the
+ * outside, from a routine that ran and found nothing.
  *
- * simplification: a phrase list, not a classifier. It is checked ONLY on a
- * routine turn that called no tools at all, so the worst a false positive can
- * do is spend one extra round; the alternative (another model call to judge
- * intent) costs that much every time and can be wrong too.
+ * Chat was left out originally on the theory that a user can just say "go on".
+ * Measured wrong (2026-08-25, reported live on Tinfoil): with thinking off the
+ * model announces and stops often enough that "go on" becomes the interaction,
+ * and the promise reads as a stall, not a turn. Same nudge, both scopes.
+ *
+ * simplification: a phrase list, not a classifier. It is checked once per
+ * turn, against the reply's last paragraph only, so the worst a false positive
+ * can do is spend one extra round; the alternative (another model call to
+ * judge intent) costs that much every time and can be wrong too.
  */
 export function announcesIntent(text: string): boolean {
   // The tail is what matters: a reply that says "I'll check" and then reports
@@ -500,9 +504,66 @@ export function announcesIntent(text: string): boolean {
       .trim()
       .split(/\n{2,}/)
       .pop() ?? "";
+  // Handing the turn back is the opposite of promising work, and it shares the
+  // wording — "let me know", "I'll be here", "I'll keep an eye out". Chat ends
+  // on these constantly, so without this the nudge would fire on half of all
+  // replies. Checked before the promise pattern, which they all also match.
+  if (
+    /\b(?:let me know|just (?:say|tell)|i(?:'ll| will) (?:be (?:here|around|waiting)|wait|keep (?:an eye|watching|monitoring)|let you know))\b/i.test(
+      tail,
+    )
+  ) {
+    return false;
+  }
   return /\b(?:i(?:'| a)?m going to|i(?:'ll| will)|let me|let's|i can start|starting)\b/i.test(
     tail,
   );
+}
+
+/**
+ * Does this reply state what a file holds — or that it is missing — when the
+ * turn never opened one?
+ *
+ * The measured failure (2026-08-25, sim/grounding.sim.ts, deepseek on Tinfoil):
+ * asked about a second note right after a first had been read, turns called no
+ * tool at all and answered anyway. "Tokyo, 12-19 March" came back as "Trip to
+ * Berlin"; "milk, eggs" as "milk, eggs, bread"; and a note that existed was
+ * declared absent. Confident, detailed, wrong.
+ *
+ * Worse than the stall this sits next to. A stall is visible — nothing
+ * happened, the user asks again. This is indistinguishable from an answer.
+ *
+ * Naming the file tools in the prompt with a grounding rule took it from 3/6
+ * to 2/6: real, and not a fix, because the failing turns are exactly the ones
+ * that never consult the catalog. So the loop checks the finished reply
+ * instead, the same way it catches an announced-but-undone turn.
+ *
+ * simplification: pattern matching, not comprehension. It only runs when the
+ * turn opened NO file at all, so a wrong guess costs one extra round; the
+ * alternative (a second model call to judge groundedness) costs that on every
+ * turn and can be wrong too.
+ */
+export function claimsUnreadFile(text: string): boolean {
+  // Hedged talk is not a claim. "You might have a note about that" invites a
+  // correction; "your trip note says Berlin" is asserted as fact, and that is
+  // the only shape worth spending a round on.
+  if (/\b(?:might|maybe|perhaps|probably|i think|not sure|if you)\b/i.test(text)) {
+    return false;
+  }
+  // Either half is the bug: reporting contents never read, or ruling a file
+  // out without looking — both were measured, and both read as an answer.
+  const reportsContents =
+    /\b(?:your|the)\s+[\w-]+(?:\s+[\w-]+)?\s+(?:note|file|list|doc|document)\b[^.!?\n]{0,40}\b(?:says|reads|contains|has)\b/i.test(
+      text,
+    );
+  const rulesItOut =
+    /\b(?:no|not|isn'?t|doesn'?t|don'?t have|couldn'?t find|can'?t find)\b[^.!?\n]{0,40}\b(?:note|file|list|doc|document)\b/i.test(
+      text,
+    ) ||
+    /\b(?:note|file|list|doc|document)\b[^.!?\n]{0,40}\b(?:isn'?t|is not|does not exist|doesn'?t exist)\b/i.test(
+      text,
+    );
+  return reportsContents || rulesItOut;
 }
 
 /**
@@ -1034,28 +1095,33 @@ export async function streamBlobTurn(options: {
       }
     }
   }
-  // A routine that only announced the work never did it, and there is no user
-  // sitting there to say "go on" — the whole point of a routine is that it
-  // runs unattended. Observed live: a scheduled Discord check replied "Let me
-  // start by finding what Discord tools are available to me." and stopped, and
-  // the same Blob did the work correctly the moment a human asked why.
+  // A turn that only announced the work never did it. Observed live on both
+  // scopes: a scheduled Discord check replied "Let me start by finding what
+  // Discord tools are available to me." and stopped, and a chat turn with
+  // thinking off said "I'll do that right now" and stopped — the same Blob did
+  // the work correctly the moment a human asked why.
   //
-  // Narrow on purpose. Only when the turn called NO tool at all (one that used
-  // tools and then spoke has done its job), only for routines, and only once:
-  // the round below cannot re-enter this branch. A routine whose deliverable
-  // really is text ("write today's standup note") does not match the phrasing,
-  // and if it ever did it would cost one round, not a loop.
-  if (scope === "routine" && gathered.length === 0 && announcesIntent(text)) {
+  // Tool use during the turn deliberately does NOT excuse this. That was the
+  // first shape of this check and it missed the reported stall (2026-08-25,
+  // Tinfoil, thinking off): the Blob called a tool, then signed off with
+  // "Let me check the search schema and the current time, then run parallel
+  // searches." Tools were used, so the nudge stood down, and the searches it
+  // promised never ran. What matters is what the reply ENDS on — a promise is
+  // unfinished work whether or not something else got done first.
+  //
+  // Still bounded: only once (the round below cannot re-enter this branch),
+  // and `announcesIntent` ignores a tail that hands the turn back ("let me
+  // know", "I'll keep an eye out"), which is how a finished reply signs off.
+  if (announcesIntent(text)) {
     conversation = [
       ...conversation,
       {
         role: "user",
         content:
           "You described what you were about to do, but you have not done it " +
-          "yet — and this is a scheduled task, so nobody is here to ask you to " +
-          "continue. Carry it out now using your tools, then report what you " +
+          "yet. Carry it out now using your tools, then report what you " +
           "actually found. If it turns out you cannot, say plainly what " +
-          "stopped you.",
+          "stopped you. Do not describe the plan again.",
       },
     ];
     try {
@@ -1076,6 +1142,57 @@ export async function streamBlobTurn(options: {
         throw error;
       }
       // Keep the announcement: it is still the most honest thing on screen.
+    }
+  }
+
+  // Same shape, different lie: the turn did not promise the work, it claimed
+  // to have done it. A reply that says what a note holds — or that there is no
+  // such note — while the turn never opened one is invention, and invention
+  // reads exactly like an answer (see `claimsUnreadFile`).
+  //
+  // Gated on no file tool having run, so a turn that read and then summarised
+  // is untouched, and on `home` existing at all — without it there is no file
+  // to have read and the phrasing means something else entirely.
+  const openedAFile = gathered.some(
+    (call) => call.name === "read_file" || call.name === "list_files",
+  );
+  // An attached file arrives inlined in the user's own message (see
+  // `attachmentsPrompt`) rather than through a tool, so a Blob answering about
+  // one legitimately opened nothing. Without this it would be told "that is
+  // not something you know" about text sitting in front of it — a wasted round
+  // ending in a contradiction. Matched on the fixed header that wrapper emits.
+  const hasAttachedText = options.messages.some(
+    (message) =>
+      message.role === "user" &&
+      typeof message.content === "string" &&
+      message.content.includes(ATTACHED_HEADER),
+  );
+  if (options.home !== undefined && !openedAFile && !hasAttachedText && claimsUnreadFile(text)) {
+    conversation = [
+      ...conversation,
+      {
+        role: "user",
+        content:
+          "You have not opened any file this turn, so what you just said about " +
+          "one is not something you know. Use list_files and read_file to check " +
+          "now — look inside folders before deciding a file is missing — then " +
+          "answer from what they actually return.",
+      },
+    ];
+    try {
+      const checked = await runLoop("web");
+      // Same as above: the round carries the full catalog, so a question it
+      // ends on has to reach the user rather than settling the run silently.
+      const checkedAsk = handOffAsk();
+      if (checkedAsk !== null) {
+        return checkedAsk;
+      }
+      text = checked.latest.trim() === "" ? text : checked.text;
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      // Keep the original: a failed re-check is no reason to lose the reply.
     }
   }
   // Whitespace-only is empty as far as the user is concerned; returning it
