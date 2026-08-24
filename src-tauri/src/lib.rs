@@ -72,14 +72,14 @@ pub fn run() {
             Ok(())
         });
 
-    // macOS only, both of them: this exists to disarm ⌘Q, and elsewhere Tauri
-    // gives a window no menu bar at all. Attaching one everywhere would hang a
-    // File/Edit/View strip across the top of the Windows and Linux builds that
-    // nobody asked for.
+    // macOS only, both of them: this exists to route ⌘Q through Tauri's own
+    // exit, and elsewhere Tauri gives a window no menu bar at all. Attaching
+    // one everywhere would hang a File/Edit/View strip across the top of the
+    // Windows and Linux builds that nobody asked for.
     #[cfg(target_os = "macos")]
     let builder = builder.menu(tray::app_menu).on_menu_event(|app, event| {
-        if event.id().as_ref() == tray::HIDE_ID {
-            tray::hide_main_window(app);
+        if event.id().as_ref() == tray::APP_QUIT_ID {
+            app.exit(0);
         }
     });
 
@@ -87,8 +87,8 @@ pub fn run() {
         // Closing the window puts Blobbies in the tray rather than ending it:
         // routines run on a schedule and finished runs raise notifications, so
         // a red X that killed the process would silently switch those off.
-        // ⌘Q lands on the menu item above, and the dock's Quit on the run loop
-        // below; the tray's Quit Blobbies is the one way out.
+        // Quitting — ⌘Q, the dock's Quit, the tray's Quit Blobbies — is the way
+        // out, and really does end the process.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
                 && window.label() == "main"
@@ -100,21 +100,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| match event {
-            // ⌘Q, the dock's Quit, "Quit" in the app menu: all of them mean
-            // "get this off my screen", and none of them should stop the
-            // schedule. Hide instead, exactly like the window's close button.
-            //
-            // `code` is what separates the two intents — Tauri leaves it
-            // `None` for a user gesture and sets it for a programmatic
-            // `exit()`, which is what the tray's Quit calls. So the tray item
-            // falls straight through here and really does end the process, and
-            // it stays the only thing that can.
-            tauri::RunEvent::ExitRequested {
-                code: None, api, ..
-            } => {
-                api.prevent_exit();
-                tray::hide_main_window(app);
-            }
+            // Clicking the dock icon of a running-but-windowless app has to put
+            // the window back: after a close the app is still there, and the
+            // tray icon should not be the only way to find it again.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => tray::show_main_window(app),
             // Release the model's memory (weights + KV-cache snapshots, gigabytes)
             // as soon as the app closes, instead of waiting out keep_alive.
             tauri::RunEvent::Exit => commands::ollama_unload_on_exit(app),

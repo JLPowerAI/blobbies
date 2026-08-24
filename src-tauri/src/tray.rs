@@ -29,15 +29,15 @@ const QUIT_ID: &str = "tray-quit";
 
 /// The ⌘Q item that replaces the standard macOS Quit.
 #[cfg(target_os = "macos")]
-pub(crate) const HIDE_ID: &str = "app-hide-to-tray";
+pub(crate) const APP_QUIT_ID: &str = "app-quit";
 
-/// The standard menu, with macOS's Quit swapped for "Hide to Menu Bar".
+/// The standard menu, with macOS's predefined Quit swapped for our own.
 ///
-/// ⌘Q has to be caught here rather than in the run loop: the predefined Quit
-/// item is the macOS `terminate:` action, which tears the process down without
-/// ever raising `ExitRequested`, so there is nothing to prevent by the time
-/// Tauri hears about it. A plain menu item with the same shortcut gives the
-/// keystroke somewhere to land.
+/// ⌘Q must really end the process — closing the window only hides it, so quit
+/// is the deliberate way out. The predefined item is the macOS `terminate:`
+/// action, which tears the process down without raising `ExitRequested` or
+/// `Exit`, skipping shutdown work (unloading the model's gigabytes). A plain
+/// item on the same shortcut routes ⌘Q through `AppHandle::exit` instead.
 ///
 /// Everything else about the menu is left alone — replacing it wholesale would
 /// take Edit with it, and a chat app without ⌘C is not a trade worth making.
@@ -57,8 +57,8 @@ pub(crate) fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>>
         }
         // Named for what it does. Calling it "Quit" while it declines to quit
         // is how an app earns a reputation for ignoring its own menus.
-        let hide = MenuItem::with_id(app, HIDE_ID, "Hide to Menu Bar", true, Some("CmdOrCtrl+Q"))?;
-        app_menu.append(&hide)?;
+        let quit = MenuItem::with_id(app, APP_QUIT_ID, "Quit Blobbies", true, Some("CmdOrCtrl+Q"))?;
+        app_menu.append(&quit)?;
     }
 
     Ok(menu)
@@ -124,27 +124,15 @@ pub(crate) fn init<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Put the main window away without ending the process — what ⌘Q does now.
-///
-/// The app itself is hidden too on macOS, or it would keep the menu bar and
-/// stay frontmost with nothing on screen, which reads as a hang.
-pub(crate) fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-    #[cfg(target_os = "macos")]
-    let _ = app.hide();
-}
-
 /// Bring the main window back: un-hide, un-minimise, focus.
 ///
 /// All three, because the window can be in any of those states and each one
 /// alone leaves a case where the menu item appears to do nothing — hidden
 /// windows ignore `set_focus`, minimised ones ignore `show`.
 pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
-    // Un-hide the *app* first. ⌘Q hides the whole application, and while it is
+    // Un-hide the *app* first. ⌘H hides the whole application, and while it is
     // hidden macOS ignores requests to show or focus its windows — do this the
-    // other way round and the first reopen after a ⌘Q does nothing.
+    // other way round and the first reopen after a hide does nothing.
     #[cfg(target_os = "macos")]
     let _ = app.show();
     let Some(window) = app.get_webview_window("main") else {
