@@ -388,7 +388,7 @@ pub(crate) fn acp_relay_path() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_FRAME_BYTES, read_frame, secret_eq, write_config};
+    use super::{MAX_FRAME_BYTES, read_frame, secret_eq};
     use std::io::Cursor;
 
     #[test]
@@ -433,6 +433,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rewrites_a_world_readable_token_file_as_owner_only() {
+        // Imported here rather than at module scope: the test is unix-only,
+        // and an unused import is an error under `-D warnings` on Windows.
+        use super::write_config;
         use std::os::unix::fs::PermissionsExt;
 
         let dir = std::env::temp_dir().join(format!("acp-mode-{}", std::process::id()));
