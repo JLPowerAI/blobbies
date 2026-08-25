@@ -57,8 +57,11 @@ fn entry_for(name: &str) -> Result<keyring::Entry> {
 /// the keychain. **On by default**, because the alternative is a password
 /// prompt on every hot rebuild and no amount of developer discipline avoids
 /// it — an opt-in switch is just a prompt waiting for someone to forget.
-/// `TINFOIL_API_KEY` (see `.env.local`) seeds the map so Tinfoil still works;
-/// unset, dev simply starts without a key, exactly like a fresh install.
+/// The map is seeded from `.env.local` (see `DEV_ENV_SEEDS`), so a debug
+/// build starts with the same credentials a real install has: a Tinfoil key
+/// to answer with, and a Composio session so app tools are actually connected
+/// — without which none of that can be exercised in dev at all. Unset, dev
+/// simply starts without them, exactly like a fresh install.
 ///
 /// Set `BLOBBIES_DEV_KEYCHAIN=1` to exercise the real keychain path in a
 /// debug build — and accept the prompts that come with it.
@@ -70,11 +73,25 @@ mod dev {
     use std::collections::HashMap;
     use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-    /// Optional seed: the Tinfoil key the developer exported for this session.
-    fn env_api_key() -> Option<String> {
-        std::env::var("TINFOIL_API_KEY")
-            .ok()
-            .filter(|key| !key.is_empty())
+    /// Which environment variable seeds which secret.
+    ///
+    /// Every name here must be in `ALLOWED_NAMES`; the test below enforces
+    /// that, since a typo would otherwise seed an entry no command can read.
+    /// `tinfoil-cache-secret` is deliberately absent: it is regenerated each
+    /// launch, costing dev one server-side prompt-cache miss and nothing else.
+    pub(super) const DEV_ENV_SEEDS: [(&str, &str); 3] = [
+        ("tinfoil-api-key", "TINFOIL_API_KEY"),
+        // Composio's hosted MCP takes either credential. The OAuth session is
+        // what `composio link` writes and what the app prefers; the pasted key
+        // is the fallback, and dev mirrors that order rather than inventing a
+        // third path.
+        ("composio-oauth", "COMPOSIO_OAUTH"),
+        ("composio-api-key", "COMPOSIO_API_KEY"),
+    ];
+
+    /// A seed value, if the developer exported one for this session.
+    fn env_secret(variable: &str) -> Option<String> {
+        std::env::var(variable).ok().filter(|key| !key.is_empty())
     }
 
     /// True unless the developer explicitly asked for the real keychain.
@@ -89,8 +106,10 @@ mod dev {
         static SCRATCH: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
         SCRATCH.get_or_init(|| {
             let mut seeded = HashMap::new();
-            if let Some(key) = env_api_key() {
-                seeded.insert("tinfoil-api-key".to_owned(), key);
+            for (name, variable) in DEV_ENV_SEEDS {
+                if let Some(value) = env_secret(variable) {
+                    seeded.insert(name.to_owned(), value);
+                }
             }
             Mutex::new(seeded)
         })
@@ -192,6 +211,19 @@ mod tests {
     fn accepts_allowlisted_names() {
         for name in ALLOWED_NAMES {
             assert!(entry_for(name).is_ok());
+        }
+    }
+
+    /// A seed aimed at a name no command accepts would sit in the map unread,
+    /// and dev would look credential-less for no visible reason.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn every_dev_seed_names_a_real_secret() {
+        for (name, variable) in dev::DEV_ENV_SEEDS {
+            assert!(
+                ALLOWED_NAMES.contains(&name),
+                "{variable} seeds {name}, which is not on the allowlist"
+            );
         }
     }
 
