@@ -8,6 +8,7 @@ import {
 } from "@/lib/blob-tools";
 import { OLLAMA_URL } from "@/lib/ollama";
 import { OLLAMA_KEEP_ALIVE, OLLAMA_NUM_CTX } from "@/lib/ollama-native";
+import { configFieldEmpty } from "@/lib/prompt";
 import { isTinfoilModel, tinfoilStructuredCall } from "@/lib/tinfoil";
 
 /**
@@ -178,6 +179,12 @@ const MEMORY_WORDS = /\b(remember|memory|memories|forget|forgot|recall)\b/i;
  */
 const GROUP_CONTEXT_LINES = 4;
 const GROUP_CONTEXT_CHARS = 200;
+/**
+ * How much of a member's stated job the router reads. Long enough for a
+ * written role's opening lines, which is where the job is; short enough that
+ * six of them cannot bury the message being routed.
+ */
+const ROSTER_JOB_CHARS = 320;
 
 /** Grammar for the reconcile call: only a list of positions is legal. */
 const RECONCILE_SCHEMA = {
@@ -400,7 +407,20 @@ export async function applyGroupIntent(
 export async function pickResponders(options: {
   model: string;
   text: string;
-  members: { name: string; title?: string; description?: string }[];
+  members: {
+    name: string;
+    title?: string;
+    description?: string;
+    /**
+     * The hand-written role, which REPLACES title + description for a Blob
+     * that has one (see buildSystemPrompt). Omitting it here was the whole
+     * failure: a Blob set up entirely through instructions — “fetch the news
+     * each morning”, “watch these GitHub repos” — reached the router as “no
+     * stated job”, so a room of well-configured Blobs looked identical and
+     * unemployed, and routing a message by job was guesswork.
+     */
+    instructions?: string;
+  }[];
   /**
    * The few lines before this message, oldest first, already labelled
    * ("Ken: …", "Scout: …"). "and what did that cost?" is unroutable on its
@@ -428,16 +448,32 @@ export async function pickResponders(options: {
     .slice(-GROUP_CONTEXT_LINES)
     .map((line) => `- ${line.replace(/\s+/g, " ").slice(0, GROUP_CONTEXT_CHARS)}`)
     .join("\n");
-  const roster = options.members
-    .map(
-      (member) =>
-        `- ${member.name}: ${
-          [member.title, member.description]
+  // Same precedence the Blob's own system prompt uses — instructions replace
+  // title + description — so the router judges a Blob by the job it was
+  // actually given. Clipped: six roles at full length would drown the message
+  // being routed, and the first line of a role is what states the job.
+  const jobOf = (member: (typeof options.members)[number]): string => {
+    const written = (member.instructions ?? "").trim();
+    const stated =
+      written !== ""
+        ? written
+        : [member.title, member.description]
+            .filter((part) => !configFieldEmpty(part))
             .map((part) => (part ?? "").trim())
-            .filter((part) => part !== "")
-            .join(" \u2014 ") || "no stated job"
-        }`,
-    )
+            .join(" \u2014 ");
+    return stated.replace(/\s+/g, " ").slice(0, ROSTER_JOB_CHARS);
+  };
+  const jobs = options.members.map(jobOf);
+  // Nobody stated a job, so there is nothing to route BY. Asking anyway is a
+  // model call whose answer can only be arbitrary — and an arbitrary pick is
+  // how a message to a room of unconfigured Blobs ends with one reply and the
+  // rest “staying out”. Everyone answers, which is this function's own
+  // documented fallback.
+  if (jobs.every((job) => job === "")) {
+    return names;
+  }
+  const roster = options.members
+    .map((member, index) => `- ${member.name}: ${jobs[index] || "no stated job"}`)
     .join("\n");
   const messages = [
     {

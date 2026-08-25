@@ -507,6 +507,61 @@ describe("pickResponders", () => {
     }
   });
 
+  it("routes on the written role, which is where a configured Blob's job lives", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        body = JSON.parse(String(init?.body));
+        return reply({ responders: ["Scout"] });
+      }),
+    );
+    try {
+      await pickResponders({
+        model: base.model,
+        text: "anything new in the repos?",
+        members: [
+          // Configured entirely through instructions, as the Settings screen
+          // writes them — and as they reached the router before this, invisible.
+          { name: "Scout", instructions: "Watch the GitHub repos I follow." },
+          // A placeholder title is not a job: it must not out-rank the role.
+          { name: "Quill", title: "New Blob", instructions: "Write the weekly digest." },
+          { name: "Ledger", title: "Bookkeeper", description: "Tracks spend." },
+        ],
+      });
+      const system = String(
+        (body.messages as { role: string; content: string }[])[0]?.content ?? "",
+      );
+      expect(system).toContain("Watch the GitHub repos I follow.");
+      expect(system).toContain("Write the weekly digest.");
+      expect(system).not.toContain("New Blob");
+      // Nobody is jobless here, so nobody is described as such.
+      expect(system).not.toContain("no stated job");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("lets everyone answer when no member states a job at all", async () => {
+    const fetchSpy = vi.fn(async () => reply({ responders: ["Scout"] }));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      // Fresh Blobs: nothing to route BY, so any pick is arbitrary — and an
+      // arbitrary pick is how a question to the room comes back as one reply
+      // and the rest staying out. Not worth a model call either.
+      expect(
+        await pickResponders({
+          model: base.model,
+          text: "anything cool I should know?",
+          members: [{ name: "Scout" }, { name: "Quill", title: "none" }, { name: "Ledger" }],
+        }),
+      ).toEqual(["Scout", "Quill", "Ledger"]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("honours a pick of nobody \u2014 silence is a real answer in a group", async () => {
     vi.stubGlobal(
       "fetch",

@@ -689,12 +689,16 @@ describe("turn wiring", () => {
       release = resolve;
     });
     script = [
-      async (options) => {
-        // Hand off to Writer, then hold this turn open so Writer's wake-up
-        // sits in the queue — the window an update_blob lands in.
-        await callRosterTool("message_blob", { name: "Writer", message: "Draft the post" });
+      // Writer's own chat, held open — this is what occupies Writer's lane, so
+      // the hand-off below genuinely queues instead of starting at once.
+      // Turns are serial within one conversation and parallel across them, so
+      // holding the RECEIVER is what makes a queued hand-off possible now.
+      async () => {
         await held;
-        options.onSegment?.("Sent it over.");
+        return "Busy already.";
+      },
+      async () => {
+        await callRosterTool("message_blob", { name: "Writer", message: "Draft the post" });
         return "Sent it over.";
       },
       () => "On it.",
@@ -703,9 +707,15 @@ describe("turn wiring", () => {
     mountWithModel();
 
     const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(await within(conversations).findByRole("button", { name: /Writer/ }));
+    await user.type(screen.getByLabelText(/^Message Writer/), "stay busy{Enter}");
+    await waitFor(() => expect(calls.length).toBe(1));
+
     await user.click(await within(conversations).findByRole("button", { name: /Researcher/ }));
     await user.type(screen.getByLabelText("Message Researcher"), "draft it{Enter}");
-    await waitFor(() => expect(calls.length).toBe(1));
+    // Researcher runs in parallel with Writer and hands off; Writer's wake-up
+    // then waits behind Writer's own held turn.
+    await waitFor(() => expect(calls.length).toBe(2));
 
     // The update lands AFTER the hand-off was queued but BEFORE Writer runs.
     await callRosterTool("update_blob", {
@@ -714,21 +724,22 @@ describe("turn wiring", () => {
     });
 
     release();
-    await waitFor(() => expect(calls.length).toBe(2));
+    await waitFor(() => expect(calls.length).toBe(3));
     // The woken turn's system prompt was built at turn START from live state,
     // not from the Writer object captured when the hand-off was queued — so it
     // carries the new role, verbatim.
     const system = String(
-      calls[1]?.messages.find((entry) => entry.role === "system")?.content ?? "",
+      calls[2]?.messages.find((entry) => entry.role === "system")?.content ?? "",
     );
     expect(system).toContain("Reply only in haiku.");
   });
 
-  it("Stop cancels a hand-off that has not started yet", async () => {
+  it("Stop reaches a hand-off running in its own lane", async () => {
     const user = userEvent.setup();
-    // The sender hands off and then holds the turn open, so Stop lands while
-    // the receiver's turn is still queued behind it — which is the only
-    // window in which cancelling it is a decision at all.
+    // The receiver runs in parallel with the sender — its own conversation,
+    // its own lane — so Stop has nothing queued to drop and must abort it
+    // outright. Without that, the user stops an exchange and another Blob
+    // carries on with the work they stopped, in a chat they are not looking at.
     let release = () => {};
     const held = new Promise<void>((resolve) => {
       release = resolve;
@@ -740,7 +751,14 @@ describe("turn wiring", () => {
         await held;
         return "Handed it over.";
       },
-      (options) => {
+      // Honours the abort signal, as the real model path does.
+      async (options) => {
+        await new Promise<void>((resolve, reject) => {
+          options.signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+          void held.then(resolve);
+        });
         options.onSegment?.("On it.");
         return "On it.";
       },
@@ -755,14 +773,15 @@ describe("turn wiring", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop replying" }));
     release();
-    // Waited out properly: the sender's turn has to finish and the queue drain
-    // before "the receiver never ran" means anything.
+    // Waited out properly: the sender's turn has to finish and both lanes
+    // drain before "the receiver said nothing" means anything.
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Stop replying" })).not.toBeInTheDocument(),
     );
     // Stop means the whole exchange: another Blob must not pick up the work
     // the user just stopped, in a conversation they are not even looking at.
-    expect(calls.length).toBe(1);
+    expect(screen.queryByText("On it.")).not.toBeInTheDocument();
+    await user.click(within(conversations).getByRole("button", { name: /Writer/ }));
     expect(screen.queryByText("On it.")).not.toBeInTheDocument();
   });
 
@@ -1433,6 +1452,98 @@ describe("turn wiring", () => {
     // between them, an exchange always ends.
     expect(calls.length).toBe(2);
     expect(speakerName(calls[1])).toBe("Writer");
+  });
+
+  it("answers in its own chat while the same Blob is still talking in a group", async () => {
+    const user = userEvent.setup();
+    responderPick = (names) => names.filter((name) => name === "Researcher");
+    let release = () => {};
+    const groupTurn = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    script = [
+      // The room's turn, held open for the whole test: the private message
+      // below must not wait on it. One model serves both, but a conversation
+      // is what a person waits on, so a conversation is what runs.
+      async (options) => {
+        await groupTurn;
+        options.onSegment?.("Sources gathered.");
+        return "Sources gathered.";
+      },
+      (options) => {
+        options.onSegment?.("Answered privately.");
+        return "Answered privately.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText("Message Launch"), "where are we?{Enter}");
+    await waitFor(() => expect(calls.length).toBe(1));
+
+    await user.click(within(conversations).getByRole("button", { name: /^Researcher/ }));
+    await user.type(screen.getByLabelText(/^Message Researcher/), "just between us{Enter}");
+
+    // The reported bug: this reply only appeared once the group was done — the
+    // room's turn is STILL running here, and the private answer has landed.
+    expect(await screen.findAllByText("Answered privately.")).not.toHaveLength(0);
+    expect(calls.length).toBe(2);
+    expect(screen.queryByText("Sources gathered.")).toBeNull();
+
+    // And the room's own reply still lands when it finishes.
+    release();
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    expect(await screen.findByText("Sources gathered.")).toBeInTheDocument();
+  });
+
+  it("keeps a Blob's group turn out of its own chat", async () => {
+    const user = userEvent.setup();
+    responderPick = (names) => names.filter((name) => name === "Researcher");
+    let release = () => {};
+    const speaking = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    script = [
+      async (options) => {
+        // Held open, so the private message below is sent while the room's
+        // turn is genuinely mid-flight — the state the bug lived in.
+        await speaking;
+        options.onSegment?.("Sources gathered.");
+        return "Sources gathered.";
+      },
+      (options) => {
+        options.onSegment?.("Answered privately.");
+        return "Answered privately.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText("Message Launch"), "where are we?{Enter}");
+    await waitFor(() => expect(calls.length).toBe(1));
+
+    // Its own chat, while it is busy in the room.
+    await user.click(within(conversations).getByRole("button", { name: /^Researcher/ }));
+    // Nothing was asked here, so nothing is thinking here. The indicator was
+    // keyed by Blob alone, so a Blob talking in a group put a thinking blob
+    // in a private conversation that had said nothing.
+    expect(screen.queryByLabelText("Researcher is thinking")).toBeNull();
+
+    await user.type(screen.getByLabelText(/^Message Researcher/), "just between us{Enter}");
+    // A private message is NOT steering for the room's turn: folded in there,
+    // it was answered in front of everyone and the private chat stayed empty.
+    expect(calls[0]?.getSteeringMessages?.()).toBeNull();
+
+    release();
+    await waitFor(() => expect(calls.length).toBe(2));
+    // It answers here, in its own turn, once the room's turn is done.
+    expect(await screen.findAllByText("Answered privately.")).not.toHaveLength(0);
+    // The room's reply stayed in the room.
+    expect(screen.queryByText("Sources gathered.")).toBeNull();
   });
 
   it("asks only the mentioned member of a group", async () => {

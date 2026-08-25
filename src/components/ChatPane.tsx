@@ -21,6 +21,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -335,6 +336,8 @@ interface MessageRowProps {
   pickerOpen: boolean;
   /** Arrived after mount: plays the in-place jelly pop exactly once. */
   fresh: boolean;
+  /** Called when this row's pop has played, so it is never dressed for it again. */
+  onPopped: () => void;
   /** The cursor is known to be elsewhere: suppresses a latched :hover. */
   stale: boolean;
   /** This message's attachments are still being extracted. */
@@ -353,6 +356,7 @@ function MessageRow({
   reaction,
   pickerOpen,
   fresh,
+  onPopped,
   stale,
   reading,
   onEnter,
@@ -394,6 +398,23 @@ function MessageRow({
       className={`message-row message-row-${side}${fresh ? " message-fresh" : ""}${
         stale ? " message-row-stale" : ""
       }`}
+      // The pop is the row's arrival, so it belongs to the row's first moment
+      // and nothing after it. A CSS animation replays whenever its element is
+      // re-inserted into the DOM, and a class left on forever means every
+      // later reflow — a divider appearing above, a re-layout mid-turn — pops
+      // every row still wearing it: the whole live part of the transcript
+      // jiggling for as long as the agent kept working. Dropping the class the
+      // moment it has played makes "exactly once" true of the DOM itself,
+      // rather than of one code path that had to remember not to disturb it.
+      //
+      // With motion reduced the animation is `none`, so this never fires and
+      // the class stays — which is exactly right: there is no pop to replay.
+      onAnimationEnd={(event) => {
+        // Animations bubble: a child's ending is not this row's arrival.
+        if (event.target === event.currentTarget && event.animationName === "message-jelly") {
+          onPopped();
+        }
+      }}
       data-message-id={message.id}
       // pointerover, not pointerenter: it bubbles from the markdown children,
       // so entering the row anywhere claims it in one delegated listener.
@@ -941,10 +962,25 @@ export function ChatPane({
   // until the transcript lands there is nothing to snapshot: keying this to
   // the switch alone captured the empty pre-hydration list, and every message
   // in the loaded history then counted as an arrival.
-  const initialIds = useRef<ReadonlySet<string>>(new Set());
+  const initialIds = useRef<Set<string>>(new Set());
   if (openingRef.current) {
     initialIds.current = new Set(messages.map((entry) => entry.id));
   }
+  /**
+   * Retire a row from "fresh" once its pop has played.
+   *
+   * A ref and a forced render, not state: this fires once per arriving row and
+   * must not make the pane re-render for rows nobody is looking at. The bump
+   * is what re-renders the row without its animation class, so a later DOM
+   * re-insertion cannot replay it.
+   */
+  const [, bumpPopped] = useReducer((count: number) => count + 1, 0);
+  const markPopped = useCallback((id: string) => {
+    if (!initialIds.current.has(id)) {
+      initialIds.current.add(id);
+      bumpPopped();
+    }
+  }, []);
 
   // Time dividers per message id, computed over the WHOLE transcript (not the
   // visible slice) so paging older messages in keeps each divider anchored to
@@ -1139,14 +1175,23 @@ export function ChatPane({
     };
   }, []);
 
-  const scrollToLatest = (behavior: ScrollBehavior = "smooth") => {
+  /**
+   * `repair` runs the stale-extent settle and the renderer rebuild below.
+   * Opening a conversation only: it is a full re-layout of the transcript, and
+   * `display: none` restarts every CSS animation inside it — so running it on
+   * each streamed arrival replayed the jelly pop on the newest bubbles (the
+   * only rows carrying `.message-fresh`) for the whole length of a turn.
+   * Ordinary growth needs none of it: the extent it pins to is one the engine
+   * just rebuilt for the message that arrived.
+   */
+  const scrollToLatest = (behavior: ScrollBehavior = "smooth", repair = false) => {
     const el = scrollRef.current;
     if (el !== null) {
       autoScrollRef.current = behavior === "smooth";
       nearBottomRef.current = true;
       el.scrollTo({ top: el.scrollHeight, behavior });
       noteMetrics(el);
-      if (behavior === "instant") {
+      if (behavior === "instant" && repair) {
         // WebKit can report a stale scroll extent at pin time: a conversation
         // switch measures scrollHeight mid-swap (old messages tearing down,
         // new ones with async layout still settling), so the pin lands past
@@ -1225,7 +1270,7 @@ export function ChatPane({
       // otherwise leave the pin reading the departed conversation's flags.
       autoScrollRef.current = false;
       nearBottomRef.current = true;
-      scrollToLatest("instant");
+      scrollToLatest("instant", true);
       return;
     }
     const latest = messages.at(-1);
@@ -1818,6 +1863,7 @@ export function ChatPane({
               : []),
             <MessageRow
               fresh={!initialIds.current.has(message.id)}
+              onPopped={() => markPopped(message.id)}
               key={message.id}
               message={message}
               author={

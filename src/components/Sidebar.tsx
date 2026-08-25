@@ -80,7 +80,12 @@ interface SidebarProps {
   composing: boolean;
   userName: string;
   /** The Blob whose turn is running; its row and pin tile animate busy. */
-  thinkingId: string | null;
+  /**
+   * Blobs generating a reply right now, anywhere. A set, not one id: turns run
+   * in parallel across conversations, so several Blobs can be speaking at once
+   * — and a Blob answering in a group is busy on its own row too.
+   */
+  thinkingIds: ReadonlySet<string>;
   /**
    * What each running Blob is doing, keyed by id. A row with an entry here
    * shows that instead of its last message: while a turn runs, the snippet is
@@ -231,7 +236,7 @@ export function Sidebar({
   onRenameGroup,
   composing,
   userName,
-  thinkingId,
+  thinkingIds,
   activity,
   onSelect,
   onStartCompose,
@@ -667,7 +672,7 @@ export function Sidebar({
             <BlobAvatar
               tone={agent.tone}
               shape={agent.shape}
-              variant={thinkingId === agent.id ? "thinking" : "idle"}
+              variant={thinkingIds.has(agent.id) ? "thinking" : "idle"}
             />
             {agent.unread === true ? (
               <span className="unread-dot" role="status" aria-label="Unread messages" />
@@ -812,7 +817,7 @@ export function Sidebar({
                       tone={agent.tone}
                       shape={agent.shape}
                       size={44}
-                      variant={thinkingId === agent.id ? "thinking" : "idle"}
+                      variant={thinkingIds.has(agent.id) ? "thinking" : "idle"}
                     />
                     <span className="pin-tile-name">{agent.name}</span>
                     {/* Under the name, never instead of it: a tile has no other

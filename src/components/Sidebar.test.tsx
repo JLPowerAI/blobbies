@@ -25,7 +25,7 @@ const rail = (activity?: Record<string, BlobActivity>, pinned = false) => (
     onRenameGroup={() => {}}
     composing={false}
     userName="Ken Kai"
-    thinkingId={activity === undefined ? null : ken.id}
+    thinkingIds={new Set(activity === undefined ? [] : [ken.id])}
     {...(activity === undefined ? {} : { activity })}
     onSelect={() => {}}
     onStartCompose={() => {}}

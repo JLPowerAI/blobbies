@@ -311,8 +311,24 @@ export function App() {
   // group's shared-memory write must see what the previous exchange saved.
   const userMemoriesRef = useRef(userMemories);
   userMemoriesRef.current = userMemories;
-  /** Blob currently generating a reply; drives the thinking indicator. */
-  const [thinkingFor, setThinkingFor] = useState<string | null>(null);
+  /**
+   * Who is speaking where: conversation id → the Blob generating a reply in
+   * it. Drives every thinking indicator.
+   *
+   * Keyed by CONVERSATION, and a map rather than one entry, because both are
+   * load-bearing. Keyed by Blob alone, a Blob speaking in a group showed as
+   * thinking in its own chat, which had asked nothing. A single entry cannot
+   * express the thing this app actually does: the same Blob answering in a
+   * group and in its own chat at once.
+   */
+  const [thinkingFor, setThinkingFor] = useState<Record<string, string>>({});
+  /**
+   * Conversations with a turn queued behind another IN THE SAME conversation
+   * — one entry per queued turn, so two sends to one chat clear independently.
+   * Rendered exactly like thinking: from the user's side “queued” and
+   * “running” are one state, “it has my message and is getting to it”.
+   */
+  const [waitingTurns, setWaitingTurns] = useState<string[]>([]);
   /**
    * What each running Blob is doing right now ("Thinking…", "Searching…"),
    * keyed by Blob id — a map, not one id, because routines and group turns run
@@ -321,9 +337,9 @@ export function App() {
    */
   const [activityByBlob, setActivityByBlob] = useState<Record<string, BlobActivity>>({});
   /** Last (or active) run per Blob; drives ask/answer routing and recovery. */
-  const [runsByBlob, setRunsByBlob] = useState<Record<string, ActiveRun>>({});
-  const runsRef = useRef(runsByBlob);
-  runsRef.current = runsByBlob;
+  const [runsByConversation, setRunsByConversation] = useState<Record<string, ActiveRun>>({});
+  const runsRef = useRef(runsByConversation);
+  runsRef.current = runsByConversation;
   /** Routines mirror for the scheduler (reads outside the render cycle). */
   const routinesRef = useRef<Record<string, Routine[]>>({});
   /**
@@ -333,23 +349,50 @@ export function App() {
    */
   const recapsRef = useRef<Record<string, Recap | null>>({});
   /**
-   * The one in-flight turn app-wide. Turns are serial — a single local model
-   * serves them — so user sends and routine fires share this slot and the
-   * FIFO `turnQueue`. Steering carries mid-run follow-up messages.
+   * The in-flight turn in each conversation, keyed by conversation id.
+   *
+   * One per conversation, not one app-wide. A single app-wide slot made every
+   * turn wait for every other: message a Blob while it answers in a group and
+   * its own chat sat silent until the room was done, and a routine firing at
+   * the wrong moment could mute a whole group behind it. A conversation is
+   * the unit a person actually waits on, so it is the unit that runs.
    */
-  const activeTurn = useRef<{
-    blobId: string;
-    abort: AbortController;
-    steering: AiMessage[];
-  } | null>(null);
-  const turnQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const activeTurns = useRef(
+    new Map<
+      string,
+      {
+        blobId: string;
+        abort: AbortController;
+        steering: AiMessage[];
+        /** Conversation whose Stop also cancels this turn (see `stopWith`). */
+        stopWith?: string;
+      }
+    >(),
+  );
   /**
-   * Bumped by Stop. A turn can queue more turns behind it — one per member of
-   * a group, or a Blob's hand-off to another — and each drops out when this
-   * has moved since it was queued. The abort signal only reaches whoever is
-   * already speaking, so without this, Stop leaves the queue running.
+   * Per-conversation turn lane: a FIFO promise chain, and a Stop epoch.
+   *
+   * Serial WITHIN a conversation, because two replies interleaving in one
+   * transcript is nonsense; parallel ACROSS them, because they are separate
+   * pieces of work the user waits on separately.
+   *
+   * `epoch` is bumped by Stop. A turn can queue more turns behind it — one
+   * per member of a group, or a Blob's hand-off — and each drops out when
+   * its lane's epoch has moved since it was queued. The abort signal only
+   * reaches whoever is already speaking, so without this Stop leaves the
+   * queue running. Per lane, so stopping one conversation never silences
+   * work the user did not stop.
    */
-  const queuedTurnEpoch = useRef(0);
+  const lanes = useRef(new Map<string, { queue: Promise<unknown>; epoch: number }>());
+  const laneFor = (conversationId: string) => {
+    const found = lanes.current.get(conversationId);
+    if (found !== undefined) {
+      return found;
+    }
+    const fresh = { queue: Promise.resolve() as Promise<unknown>, epoch: 0 };
+    lanes.current.set(conversationId, fresh);
+    return fresh;
+  };
   /** Drop an identical double-send within this window (fat-finger guard). */
   const lastSend = useRef<{ text: string; at: number } | null>(null);
   const [pluginsOpen, setPluginsOpen] = useState(false);
@@ -574,7 +617,7 @@ export function App() {
         if (entry.run.status === "running" || entry.run.status === "queued") {
           const failed: ActiveRun = { ...entry.run, status: "failed" };
           void store.saveBlobRun(entry.id, failed);
-          setRunsByBlob((previous) => ({ ...previous, [entry.id]: failed }));
+          setRunsByConversation((previous) => ({ ...previous, [entry.id]: failed }));
           const transcript = (await store.loadBlobTranscript(entry.id)) ?? [];
           const note: Message = {
             id: `event-${Date.now()}`,
@@ -589,7 +632,10 @@ export function App() {
               : previous,
           );
         } else {
-          setRunsByBlob((previous) => ({ ...previous, [entry.id]: entry.run as ActiveRun }));
+          setRunsByConversation((previous) => ({
+            ...previous,
+            [entry.id]: entry.run as ActiveRun,
+          }));
         }
       }
     })();
@@ -623,8 +669,11 @@ export function App() {
           ),
         );
       },
-      busy: () => activeTurn.current !== null,
-      fire: (blobId: string, routine: Routine) => queueTurn(() => fireRoutine(blobId, routine)),
+      // Only that Blob's own conversation — the transcript the routine writes
+      // into. A routine has no business waiting on an unrelated group.
+      busy: (blobId: string) => activeTurns.current.has(blobId),
+      fire: (blobId: string, routine: Routine) =>
+        queueTurn(() => fireRoutine(blobId, routine), blobId),
     };
     return startScheduler(host);
   }, []);
@@ -1068,6 +1117,13 @@ export function App() {
 
   const selectedGroup = groups.find((candidate) => candidate.id === selectedGroupId);
   /**
+   * Every Blob speaking right now, wherever it is speaking. `thinkingFor` is
+   * keyed by conversation because that is what an indicator answers for; the
+   * sidebar asks the other question — is this Blob busy — and a Blob mid-turn
+   * in a group is busy on its own row too.
+   */
+  const thinkingBlobIds = new Set(Object.values(thinkingFor));
+  /**
    * The Blobs in a group, in roster order — which is also the order they
    * answer in. Hidden Blobs are not participants: a group chat with an
    * invisible member would be a conversation the user cannot audit.
@@ -1437,6 +1493,8 @@ export function App() {
    */
   const handOff = (
     from: Agent,
+    /** The lane the sender is speaking in — whose Stop cancels this hand-off. */
+    fromConversationId: string,
     targetId: string,
     message: { text: string; prompt: string },
     hop: number,
@@ -1448,12 +1506,16 @@ export function App() {
     if (target === undefined) {
       return "That Blob no longer exists.";
     }
-    const epoch = queuedTurnEpoch.current;
+    // Watched on the SENDER's lane, not the target's: this hand-off exists
+    // because of the sender's turn, so the Stop that cancels it is the one
+    // pressed on the conversation the sender is speaking in.
+    const senderLane = laneFor(fromConversationId);
+    const epoch = senderLane.epoch;
     void queueTurn(async () => {
       // Stop, pressed while the sender was still speaking, means this never
       // starts — otherwise another Blob picks up the work the user just
       // stopped, in a conversation they are not even looking at.
-      if (queuedTurnEpoch.current !== epoch) {
+      if (senderLane.epoch !== epoch) {
         return "cancelled" as const;
       }
       // A hand-off can reach a Blob whose transcript was never opened this
@@ -1490,8 +1552,9 @@ export function App() {
         trigger: "routine",
         prompt: message.prompt,
         hop: hop + 1,
+        stopWith: fromConversationId,
       });
-    });
+    }, target.id);
     return `Sent to ${target.name}. They will answer in their own conversation.`;
   };
 
@@ -1515,11 +1578,28 @@ export function App() {
     });
   };
 
-  /** Record a run transition in state and on disk (fire-and-forget write). */
-  const patchRun = (run: ActiveRun, status: ActiveRun["status"], extra?: Partial<ActiveRun>) => {
+  /**
+   * Record a run transition in state and on disk (fire-and-forget write).
+   *
+   * `conversationId` keys the in-memory record. A Blob can be mid-turn in a
+   * group and in its own chat at once, and one record per Blob meant those
+   * two turns overwrote each other's status — including `waiting_input`, the
+   * state that decides whether the user's next message answers a question or
+   * starts a turn. Only a Blob's OWN conversation is persisted: that is what
+   * `store.saveBlobRun` is keyed by, and a group's unfinished turn is already
+   * visible in the group's transcript.
+   */
+  const patchRun = (
+    conversationId: string,
+    run: ActiveRun,
+    status: ActiveRun["status"],
+    extra?: Partial<ActiveRun>,
+  ) => {
     const next: ActiveRun = { ...run, ...extra, status: assertTransition(run.status, status) };
-    setRunsByBlob((previous) => ({ ...previous, [run.blobId]: next }));
-    void store.saveBlobRun(run.blobId, next);
+    setRunsByConversation((previous) => ({ ...previous, [conversationId]: next }));
+    if (conversationId === run.blobId) {
+      void store.saveBlobRun(run.blobId, next);
+    }
     return next;
   };
 
@@ -1549,6 +1629,17 @@ export function App() {
       mustAnswer?: boolean;
       /** Hand-offs deep this turn already is; caps Blob → Blob ping-pong. */
       hop?: number;
+      /**
+       * The conversation whose Stop also cancels this turn.
+       *
+       * A hand-off runs in its OWN lane, in parallel with the sender — that
+       * is the point — so it is not behind the sender in any queue for a
+       * Stop to catch. But it only exists because of the sender's turn, so
+       * Stop there still has to reach it: otherwise the user stops an
+       * exchange and another Blob carries on with the work they stopped, in a
+       * conversation they are not even looking at.
+       */
+      stopWith?: string;
       /** Pre-made classification (groups): skips this turn's router and write. */
       intent?: Intent;
     },
@@ -1787,10 +1878,10 @@ export function App() {
 
     // The run record exists on disk BEFORE the model runs, so a crash mid-turn
     // is visible on the next launch instead of silently vanishing.
-    const waiting = runsRef.current[target.id];
+    const waiting = runsRef.current[convoId];
     let run: ActiveRun =
       trigger === "answer" && waiting !== undefined && waiting.status === "waiting_input"
-        ? patchRun(waiting, "running", { trigger, prompt: turn?.prompt ?? "" })
+        ? patchRun(convoId, waiting, "running", { trigger, prompt: turn?.prompt ?? "" })
         : (() => {
             const fresh: ActiveRun = {
               id: `run-${Date.now()}`,
@@ -1801,14 +1892,22 @@ export function App() {
               startedAt: Date.now(),
               status: "running",
             };
-            setRunsByBlob((previous) => ({ ...previous, [target.id]: fresh }));
-            void store.saveBlobRun(target.id, fresh);
+            setRunsByConversation((previous) => ({ ...previous, [convoId]: fresh }));
+            // Only a Blob's own turn is persisted; see `patchRun`.
+            if (convoId === target.id) {
+              void store.saveBlobRun(target.id, fresh);
+            }
             return fresh;
           })();
 
     const abort = new AbortController();
     const steering: AiMessage[] = [];
-    activeTurn.current = { blobId: target.id, abort, steering };
+    activeTurns.current.set(convoId, {
+      blobId: target.id,
+      abort,
+      steering,
+      ...(turn?.stopWith === undefined ? {} : { stopWith: turn.stopWith }),
+    });
 
     let text = "";
     // Boxed, not a bare let: TS ignores assignments made inside the onAsk
@@ -1882,7 +1981,7 @@ export function App() {
     // Summed, not assigned: a turn can run the loop more than once (the
     // no-tools retry, the rescue round) and each reports its own total.
     const spent = { inputTokens: 0, outputTokens: 0 };
-    setThinkingFor(target.id);
+    setThinkingFor((previous) => ({ ...previous, [convoId]: target.id }));
     // Thinking until the turn says otherwise: the router and the first model
     // call happen before any event, and a row with no status reads as idle.
     setActivityByBlob((previous) => ({ ...previous, [target.id]: "thinking" }));
@@ -1916,7 +2015,7 @@ export function App() {
               roster: {
                 access: {
                   ...rosterAccess,
-                  message: (id, message) => handOff(speaker, id, message, turn?.hop ?? 0),
+                  message: (id, message) => handOff(speaker, convoId, id, message, turn?.hop ?? 0),
                   // Roster writes pill into THIS conversation, short by design:
                   // the tool call's full arguments live in the details panel,
                   // so the transcript carries a status word, not a text dump.
@@ -2005,7 +2104,7 @@ export function App() {
         // The reply IS the question; the run parks until the user answers.
         // Its tokens ride along, so the answer turn resumes from this total
         // instead of from zero — the settle block below adds to them.
-        run = patchRun(run, "waiting_input", {
+        run = patchRun(convoId, run, "waiting_input", {
           question: asked.question,
           askKind: asked.kind,
           inputTokens: (run.inputTokens ?? 0) + spent.inputTokens,
@@ -2043,8 +2142,12 @@ export function App() {
         }
       }
     } finally {
-      activeTurn.current = null;
-      setThinkingFor(null);
+      activeTurns.current.delete(convoId);
+      setThinkingFor((previous) => {
+        if (previous[convoId] === undefined) return previous;
+        const { [convoId]: _done, ...rest } = previous;
+        return rest;
+      });
       setActivityByBlob((previous) => {
         if (previous[target.id] === undefined) return previous;
         const { [target.id]: _done, ...rest } = previous;
@@ -2060,9 +2163,9 @@ export function App() {
       outputTokens: (run.outputTokens ?? 0) + spent.outputTokens,
     };
     if (run.status === "running") {
-      run = patchRun(run, outcome, runTotal);
+      run = patchRun(convoId, run, outcome, runTotal);
     } else if (run.status === "waiting_input" && outcome === "cancelled") {
-      run = patchRun(run, "cancelled", runTotal);
+      run = patchRun(convoId, run, "cancelled", runTotal);
     }
     // Lifetime total, folded in once — at the run's terminal state, counting
     // every leg. A run still parked on a question is not counted yet.
@@ -2187,30 +2290,66 @@ export function App() {
     if (steering.length > 0) {
       steering.length = 0;
       if (outcome !== "cancelled" && group === undefined && run.status !== "waiting_input") {
-        void queueTurn(() =>
-          requestReply(target, [...transcriptFor(target), ...(sentRef.current[target.id] ?? [])]),
+        void queueTurn(
+          () =>
+            requestReply(target, [...transcriptFor(target), ...(sentRef.current[target.id] ?? [])]),
+          convoId,
         );
       }
     }
     return run.status === "waiting_input" ? "done" : outcome;
   };
 
-  /** FIFO for turns: one model serves everything, so turns never overlap. */
-  const queueTurn = <T,>(work: () => Promise<T>): Promise<T> => {
-    const next = turnQueue.current.then(work);
-    turnQueue.current = next.catch(() => {});
+  /**
+   * Queue one turn in its conversation's lane.
+   *
+   * `conversationId` is the transcript this work owes a reply to, and it is
+   * required: it decides both what this turn waits for (only the turns ahead
+   * of it in the SAME conversation) and where the waiting shows. A queued
+   * turn used to render as nothing at all — message a Blob mid-group-turn and
+   * its own chat sat blank, no bubble, no indicator, indistinguishable from a
+   * dropped message, so people sent it again.
+   */
+  const queueTurn = <T,>(work: () => Promise<T>, conversationId: string): Promise<T> => {
+    setWaitingTurns((previous) => [...previous, conversationId]);
+    const lane = laneFor(conversationId);
+    const next = lane.queue.then(work);
+    lane.queue = next.catch(() => {});
+    // `finally`, so a cancelled or failed turn clears it too — an indicator
+    // that never stops is worse than none.
+    void next
+      .catch(() => {})
+      .finally(() => {
+        setWaitingTurns((previous) => {
+          const at = previous.indexOf(conversationId);
+          // One entry per queued turn: two sends to the same conversation are
+          // two waits, and the second must survive the first clearing.
+          return at === -1 ? previous : previous.filter((_, index) => index !== at);
+        });
+      });
     return next;
   };
 
   /**
-   * Stop the in-flight turn (keeps any partial text) and everything queued
-   * behind it — the rest of a group's members, a hand-off waiting to wake
-   * another Blob. "Stop" has to mean the whole exchange, not just whoever
-   * happens to be speaking.
+   * Stop one conversation's in-flight turn (keeps any partial text) and
+   * everything queued behind it in that same conversation — the rest of a
+   * group's members, a hand-off waiting to wake another Blob. “Stop” has to
+   * mean the whole exchange, not just whoever happens to be speaking.
+   *
+   * Scoped to the conversation whose Stop button was pressed: turns in other
+   * conversations are work the user did not stop and must not lose.
    */
-  const stopTurn = () => {
-    queuedTurnEpoch.current += 1;
-    activeTurn.current?.abort.abort();
+  const stopTurn = (conversationId: string) => {
+    laneFor(conversationId).epoch += 1;
+    activeTurns.current.get(conversationId)?.abort.abort();
+    // ...and anything this exchange set running elsewhere: a hand-off runs in
+    // its own lane, so it is not queued behind the turn being stopped.
+    for (const [id, running] of activeTurns.current) {
+      if (running.stopWith === conversationId) {
+        laneFor(id).epoch += 1;
+        running.abort.abort();
+      }
+    }
   };
 
   /** The user's message, as it goes into the transcript. */
@@ -2300,13 +2439,19 @@ export function App() {
   const startTurn = (target: Agent, message: Extract<Message, { kind: "text" }>) => {
     const text = message.segments.map((segment) => segment.text).join("");
     const attachments = message.attachments ?? [];
-    // Follow-up: this Blob is mid-turn, so the message steers the running
-    // loop (gg-agent folds it in between tool rounds) — no second turn.
-    // The running loop never re-reads history, so a steering message has to
-    // carry its own attachment text; with no files the push stays synchronous,
-    // so a plain follow-up still reaches the very next tool round.
-    if (activeTurn.current?.blobId === target.id) {
-      const turn = activeTurn.current;
+    // Follow-up: this Blob is mid-turn IN ITS OWN CHAT, so the message steers
+    // the running loop (gg-agent folds it in between tool rounds) — no second
+    // turn. The running loop never re-reads history, so a steering message has
+    // to carry its own attachment text; with no files the push stays
+    // synchronous, so a plain follow-up still reaches the very next tool round.
+    //
+    // Looked up by conversation, so only the turn running HERE can be steered.
+    // A group turn by the same Blob is a different piece of work: folded in
+    // there, the private message was answered in front of the whole room and
+    // this chat stayed empty.
+    const running = activeTurns.current.get(target.id);
+    if (running !== undefined && running.blobId === target.id) {
+      const turn = running;
       if (attachments.length === 0) {
         turn.steering.push({ role: "user", content: text });
         return;
@@ -2342,7 +2487,7 @@ export function App() {
             }
           : undefined,
       );
-    });
+    }, target.id);
   };
 
   /**
@@ -2396,12 +2541,13 @@ export function App() {
     // Addressed by name, by @everyone, or by a reply — those must answer.
     // Only a Blob the router *chose* may stay out.
     const spokenTo = namedResponders(members, addressing);
-    const epoch = queuedTurnEpoch.current;
+    const lane = laneFor(convoId);
+    const epoch = lane.epoch;
     // One queued task for the whole exchange, not one per member: the router
     // has to run before the first speaker is known, and a later speaker may
     // only be added once an earlier one has spoken.
     void queueTurn(async () => {
-      if (queuedTurnEpoch.current !== epoch) {
+      if (lane.epoch !== epoch) {
         return "cancelled" as const;
       }
       // One classification for the whole exchange, applied to the SHARED
@@ -2496,7 +2642,7 @@ export function App() {
           continue;
         }
         spoken.add(member.id);
-        if (queuedTurnEpoch.current !== epoch) {
+        if (lane.epoch !== epoch) {
           return "cancelled" as const;
         }
         // Membership re-read per speaker, never the list captured at send
@@ -2594,7 +2740,7 @@ export function App() {
         nobodySpoke();
       }
       return outcome;
-    });
+    }, convoId);
   };
 
   const sendMessage = (
@@ -2747,7 +2893,7 @@ export function App() {
         onRenameGroup={renameGroup}
         composing={composing}
         userName={userName}
-        thinkingId={thinkingFor}
+        thinkingIds={thinkingBlobIds}
         activity={activityByBlob}
         onSelect={openConversation}
         onStartCompose={() => setMode({ kind: "palette" })}
@@ -2780,7 +2926,15 @@ export function App() {
       {activeMode.kind === "chat" && selectedGroup !== undefined && agent !== undefined ? (
         (() => {
           const members = membersOf(selectedGroup);
-          const speaking = members.find((member) => member.id === thinkingFor);
+          const convoId = groupConversationId(selectedGroup.id);
+          const speaking =
+            thinkingFor[convoId] === undefined
+              ? undefined
+              : members.find((member) => member.id === thinkingFor[convoId]);
+          // A group turn is queued before the router has picked anyone, so
+          // there is no speaker to name yet — but the room must still show it
+          // is working, or a message sent behind another turn looks dropped.
+          const busy = speaking !== undefined || waitingTurns.includes(convoId);
           return (
             <ChatPane
               agent={members[0] ?? agent}
@@ -2790,14 +2944,14 @@ export function App() {
               notSaving={unsavedKeys.has(
                 store.conversationSliceKey(groupConversationId(selectedGroup.id)),
               )}
-              thinking={speaking !== undefined}
+              thinking={busy}
               {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
               model={model}
               onModelChange={changeModel}
               reasoning={reasoning}
               onReasoningChange={changeReasoning}
               onSend={sendMessage}
-              onStop={stopTurn}
+              onStop={() => stopTurn(convoId)}
               detailOpen={false}
               onToggleDetail={() => {}}
               onOpenSettings={openSettings}
@@ -2812,17 +2966,20 @@ export function App() {
           agent={agent}
           messages={[...transcriptFor(agent), ...(sentByAgent[agent.id] ?? [])]}
           notSaving={unsavedKeys.has(store.conversationSliceKey(agent.id))}
-          thinking={thinkingFor === agent.id}
+          // A Blob's own conversation id IS its id, so this is "thinking here"
+          // — or queued here, which the user cannot tell apart and should not
+          // have to: both mean “it has my message”.
+          thinking={thinkingFor[agent.id] !== undefined || waitingTurns.includes(agent.id)}
           model={model}
           onModelChange={changeModel}
           reasoning={reasoning}
           onReasoningChange={changeReasoning}
           onSend={sendMessage}
-          onStop={stopTurn}
+          onStop={() => stopTurn(agent.id)}
           readingMessages={readingMessages}
-          {...(runsByBlob[agent.id]?.status === "waiting_input" &&
-          runsByBlob[agent.id]?.askKind !== undefined
-            ? { waitingAsk: runsByBlob[agent.id]?.askKind }
+          {...(runsByConversation[agent.id]?.status === "waiting_input" &&
+          runsByConversation[agent.id]?.askKind !== undefined
+            ? { waitingAsk: runsByConversation[agent.id]?.askKind }
             : {})}
           detailOpen={detailOpen}
           onToggleDetail={() => setDetailOpen((open) => !open)}
@@ -2857,7 +3014,7 @@ export function App() {
                     routine={routine}
                     onUpdate={(patch) => updateRoutine(agent.id, routine.id, patch)}
                     onDelete={() => deleteRoutine(agent.id, routine.id)}
-                    onTestRun={() => queueTurn(() => fireRoutine(agent.id, routine))}
+                    onTestRun={() => queueTurn(() => fireRoutine(agent.id, routine), agent.id)}
                     onBack={() => setDetailView({ kind: "info" })}
                     onClose={() => setDetailOpen(false)}
                   />
@@ -2869,8 +3026,8 @@ export function App() {
                 agent={agent}
                 routines={agentRoutines}
                 lastRunTokens={
-                  (runsByBlob[agent.id]?.inputTokens ?? 0) +
-                  (runsByBlob[agent.id]?.outputTokens ?? 0)
+                  (runsByConversation[agent.id]?.inputTokens ?? 0) +
+                  (runsByConversation[agent.id]?.outputTokens ?? 0)
                 }
                 filesKey={filesKey}
                 onClose={() => setDetailOpen(false)}

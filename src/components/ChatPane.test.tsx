@@ -51,6 +51,24 @@ const pane = (
   />
 );
 
+/**
+ * End the jelly pop on a row, the way the browser does.
+ *
+ * jsdom implements no `AnimationEvent`, so React's feature detection falls
+ * back to the prefixed `webkitAnimationEnd` there while a real browser fires
+ * `animationend`. Both are dispatched so this asserts the app's behaviour
+ * rather than jsdom's.
+ */
+const endPop = (target: Element, animationName = "message-jelly") => {
+  for (const type of ["animationend", "webkitAnimationEnd"]) {
+    const event = new Event(type, { bubbles: true });
+    Object.defineProperty(event, "animationName", { value: animationName });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+  }
+};
+
 describe("ChatPane", () => {
   it("turns the send circle into Stop while replying, and takes Escape", async () => {
     const user = userEvent.setup();
@@ -707,6 +725,125 @@ describe("ChatPane", () => {
     } finally {
       vi.unstubAllGlobals();
       vi.useRealTimers();
+    }
+  });
+
+  it("stops dressing a row for the jelly pop once it has popped", () => {
+    // The pop is the row's arrival, so it belongs to the row's first moment.
+    // A CSS animation replays whenever its element is re-inserted into the
+    // DOM, so a class left on forever means every later reflow — a divider
+    // appearing above, any re-layout while the agent works — re-pops every row
+    // still wearing it: the whole live part of the transcript jiggling for as
+    // long as the turn ran.
+    const { rerender } = render(pane(false, vi.fn(), messages));
+    const rowOf = (id: string) => document.querySelector(`[data-message-id="${id}"]`);
+    const arrived: Message[] = [
+      ...messages,
+      { id: "m3", kind: "text", author: "agent", segments: [{ text: "Working on it." }] },
+    ];
+    rerender(pane(true, vi.fn(), arrived));
+
+    const row = rowOf("m3");
+    expect(row).toHaveClass("message-fresh");
+    // Rows already on screen when it opened never claimed the animation.
+    expect(rowOf("m1")).not.toHaveClass("message-fresh");
+
+    // The pop plays out.
+    if (row !== null) {
+      endPop(row);
+    }
+    expect(rowOf("m3")).not.toHaveClass("message-fresh");
+
+    // And it stays retired as the turn goes on — the state the bug lived in.
+    rerender(
+      pane(true, vi.fn(), [
+        ...arrived,
+        { id: "m4", kind: "text", author: "agent", segments: [{ text: "Done." }] },
+      ]),
+    );
+    expect(rowOf("m3")).not.toHaveClass("message-fresh");
+    // The genuinely new one still gets its pop.
+    expect(rowOf("m4")).toHaveClass("message-fresh");
+  });
+
+  it("ignores a child's animation ending \u2014 only the row's own arrival retires it", () => {
+    // Animations bubble. A reaction badge or an avatar finishing its own
+    // animation is not this row arriving, and treating it as one would cut the
+    // pop short on a row that had only just appeared.
+    const { rerender } = render(pane(false, vi.fn(), messages));
+    const arrived: Message[] = [
+      ...messages,
+      { id: "m3", kind: "text", author: "agent", segments: [{ text: "Working on it." }] },
+    ];
+    rerender(pane(true, vi.fn(), arrived));
+    const bubble = document.querySelector('[data-message-id="m3"] .bubble');
+    expect(bubble).not.toBeNull();
+    if (bubble !== null) {
+      endPop(bubble);
+    }
+    expect(document.querySelector('[data-message-id="m3"]')).toHaveClass("message-fresh");
+  });
+
+  it("does not rebuild the transcript's rendering for each message a turn produces", () => {
+    // Why the repair has to be opening-only. Detaching the scroller destroys
+    // the renderer of everything inside it, and a rebuilt renderer restarts
+    // every CSS animation it holds. The only rows carrying one are the newest
+    // — `.message-fresh`, the jelly pop — so running the repair on each
+    // arrival made exactly the last user prompt and the Blob's replies pop
+    // again on every bubble of a working turn: a transcript flickering for as
+    // long as the agent kept talking.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      const { rerender } = render(pane(false, vi.fn(), messages));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (!(el instanceof HTMLElement)) return;
+      Object.defineProperty(el, "scrollHeight", { get: () => 1200, configurable: true });
+      el.scrollTo = (() => {}) as unknown as typeof el.scrollTo;
+
+      const seenDisplay: string[] = [];
+      const realSet = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "display");
+      Object.defineProperty(el.style, "display", {
+        get: () => realSet?.get?.call(el.style) ?? "",
+        set: (value: string) => {
+          seenDisplay.push(value);
+          realSet?.set?.call(el.style, value);
+        },
+        configurable: true,
+      });
+      const drain = () => {
+        for (let guard = 0; frames.length > 0 && guard < 10; guard += 1) {
+          const due = frames.splice(0);
+          act(() => {
+            for (const cb of due) cb(0);
+          });
+        }
+      };
+      // Opening is allowed its repair; the turn below is measured on its own.
+      drain();
+      seenDisplay.length = 0;
+
+      // A turn talking: one finished bubble after another, user at the bottom.
+      const spoken: Message[] = ["Working on it.", "Read the file.", "Done."].map(
+        (text, position) => ({
+          id: `b${position}`,
+          kind: "text",
+          author: "agent",
+          segments: [{ text }],
+        }),
+      );
+      for (let count = 1; count <= spoken.length; count += 1) {
+        rerender(pane(true, vi.fn(), [...messages, ...spoken.slice(0, count)]));
+        drain();
+      }
+
+      expect(seenDisplay).not.toContain("none");
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 

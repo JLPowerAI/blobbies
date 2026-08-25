@@ -224,6 +224,29 @@ describe("addressedResponders", () => {
   it("expands @everyone back to all members", () => {
     expect(addressedResponders(members, { text: "@everyone ship it" })).toEqual(members);
   });
+
+  it("treats a question asked of the room as addressing all of it, @ or not", () => {
+    // The reported failure: "anything cool I should know about everyone?" went
+    // to the router as an ordinary question, which picks a few — and then the
+    // group prompt's first PASS rule ("a colleague already answered it")
+    // silenced every one of them but the first. A question asked of the room
+    // came back as one reply and a "stayed out" note naming the rest.
+    expect(
+      addressedResponders(members, { text: "anything cool I should know about everyone?" }),
+    ).toEqual(members);
+    expect(addressedResponders(members, { text: "what's each of you working on?" })).toEqual(
+      members,
+    );
+    expect(addressedResponders(members, { text: "any updates from you all?" })).toEqual(members);
+  });
+
+  it("leaves a room word that is not addressing the room to the router", () => {
+    // Six serial turns on one local model is what a false positive costs, so
+    // the word alone is not enough — it has to be the room being spoken to.
+    expect(addressedResponders(members, { text: "everyones invited" })).toBeNull();
+    expect(addressedResponders(members, { text: "does anyone know the price?" })).toBeNull();
+    expect(addressedResponders(members, { text: "mail everyone@example.com" })).toBeNull();
+  });
 });
 
 describe("namedResponders", () => {
@@ -240,6 +263,13 @@ describe("namedResponders", () => {
     // the prompt telling each to add what the others did not — not the app
     // deciding the user did not mean what they typed.
     expect(namedResponders(members, { text: "@everyone ship it" }).size).toBe(members.length);
+  });
+
+  it("obliges every member when the room was asked without an @", () => {
+    // Being brought in is an invitation; being asked is not. Without this the
+    // members the router picked may each answer PASS — which is how a question
+    // put to the room ends in one reply and three Blobs staying out.
+    expect(namedResponders(members, { text: "what is everyone up to?" }).size).toBe(members.length);
   });
 
   it("names nobody when the message addresses nobody", () => {

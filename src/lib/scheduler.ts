@@ -25,8 +25,14 @@ export interface SchedulerHost {
     routineId: string,
     patch: Omit<Partial<Routine>, "nextRunAt"> & { nextRunAt?: number | undefined },
   ): void;
-  /** True while any turn is running app-wide (one model, serial turns). */
-  busy(): boolean;
+  /**
+   * True while this Blob's own conversation is already running a turn.
+   *
+   * Per Blob, not app-wide: turns run in parallel across conversations, and a
+   * routine writes into its Blob's own transcript — so an unrelated group
+   * chat is no reason to skip it.
+   */
+  busy(blobId: string): boolean;
   /** Run the routine's instruction as a turn for its Blob. */
   fire(blobId: string, routine: Routine): Promise<"done" | "failed" | "cancelled">;
 }
@@ -42,10 +48,12 @@ export const TICK_MS = 30_000;
  * loses the claim. The next tick picks up the next due routine.
  */
 export async function tick(host: SchedulerHost, now: number = Date.now()): Promise<boolean> {
-  if (host.busy()) {
-    return false;
-  }
   for (const [blobId, routines] of host.routines()) {
+    // Its own chat is mid-turn, so its routine waits for the next tick rather
+    // than queueing behind work the user is watching.
+    if (host.busy(blobId)) {
+      continue;
+    }
     for (const routine of routines) {
       if (!routine.active || routine.schedule === undefined) {
         continue;

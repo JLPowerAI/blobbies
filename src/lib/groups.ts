@@ -100,6 +100,35 @@ export function parseMentions(
 }
 
 /**
+ * A message addressing the whole room in plain English, with no `@`.
+ *
+ * “@everyone” is the explicit form and already routes to every member. But
+ * people do not type it: “anything cool I should know about everyone?”,
+ * “what's each of you working on?” and “any updates from you all?” are the
+ * same request, and without this they went to the router as an ordinary
+ * question — which picks a few, and then rule 1 of the group prompt (“a
+ * colleague already answered it”) silenced all but the first. A question the
+ * user asked the room came back as one answer and “Scout, Quill and Nova
+ * stayed out”.
+ *
+ * Second person only, and that is what keeps it safe. The room word has to be
+ * addressed TO the members (“each of you”, “you all”) or stand as the bare
+ * collective the user is talking to (“everyone”, “the team”) — so “everyone
+ * at the office says hi” still routes normally rather than waking six Blobs.
+ * “anyone” is deliberately absent: “does anyone know X?” wants one answer,
+ * not six. Neither side of the word may be `@`, so a handle (“@everyone”,
+ * which `parseMentions` owns) and an address (“everyone@example.com”) both
+ * fall through to the code that already knows what they are.
+ */
+const ROOM_ADDRESS =
+  /(?:^|[^\p{L}\p{N}_@])(?:everyone|everybody|each of (?:you|ya)|all of you|you all|y'all|the team)(?![\p{L}\p{N}_@])/iu;
+
+/** True when the message speaks to the whole room without naming anyone. */
+export function addressesRoom(text: string): boolean {
+  return ROOM_ADDRESS.test(text);
+}
+
+/**
  * The word a Blob says when it has nothing worth adding.
  *
  * A picked Blob is *invited* to speak, not obliged to. Colleagues in a room
@@ -244,7 +273,7 @@ export function addressedResponders(
   message: { text: string; replyToAuthorId?: string | undefined },
 ): Agent[] | null {
   const mentions = parseMentions(message.text, members);
-  if (mentions.everyone) {
+  if (mentions.everyone || addressesRoom(message.text)) {
     return [...members];
   }
   if (mentions.ids.length > 0) {
@@ -273,7 +302,7 @@ export function namedResponders(
   message: { text: string; replyToAuthorId?: string | undefined },
 ): Set<string> {
   const mentions = parseMentions(message.text, members);
-  if (mentions.everyone) {
+  if (mentions.everyone || addressesRoom(message.text)) {
     return new Set(members.map((member) => member.id));
   }
   const ids = new Set(mentions.ids);
