@@ -1128,6 +1128,16 @@ export function ChatPane({
       return;
     }
     const observer = new ResizeObserver(() => {
+      // A glide this pane started is already in flight — the user just sent,
+      // and the view is easing down onto their own message. Sending is also
+      // what collapses the composer back to one line, so this scroller is
+      // resized on the same frame the glide begins; pinning scrollTop to the
+      // extent here overrides that glide outright, which is the bubble landing
+      // and then snapping into place. The glide is already aimed at the
+      // bottom, so there is nothing to hold: let it finish.
+      if (autoScrollRef.current) {
+        return;
+      }
       // First frame of the burst: was the user following the conversation
       // before any of this reflow happened?
       if (resizingRef.current === null) {
@@ -1476,6 +1486,26 @@ export function ChatPane({
     // Cleared first, so the composer empties on this frame however long the
     // thumbnails take.
     const sending = attached;
+    // The composer's collapse has to land *before* the message does, not after.
+    // Clearing the draft leaves the auto-grow effect below to shrink the
+    // textarea — but that effect runs after the scroll pin, and animates, so
+    // the new bubble popped in and then rode 160ms of the transcript growing
+    // into the ~80px the composer was giving back: the insert-then-reposition
+    // stutter. Snapped here, inside the handler, the whole collapse is part of
+    // the layout the message arrives into, and the pin measures a final
+    // extent. The effect still runs and simply re-sets the height it finds.
+    const field = textareaRef.current;
+    if (field !== null) {
+      field.style.transition = "none";
+      field.style.height = `${COMPOSER_LINE_HEIGHT}px`;
+      field.style.overflowY = "hidden";
+      void field.offsetHeight; // land the collapse before transitions return
+      field.style.transition = "";
+    }
+    // Same commit, same reason: the expanded layout's second button row is
+    // composer height too, and dropping it a render later moves the ground
+    // under a bubble that has already drawn.
+    setMultiline(false);
     setDraft("");
     setAttached([]);
     setMention(null);

@@ -1696,6 +1696,50 @@ describe("ChatPane", () => {
     expect(top).toBe(bottom);
   });
 
+  it("collapses the composer as it sends, not after the bubble has landed", async () => {
+    // The insert-then-reposition stutter (measured live in Chromium: the new
+    // bubble appeared with the composer still 140px tall, then slid ~80px over
+    // the next 16 frames). Clearing the draft alone leaves the collapse to the
+    // auto-grow effect, which runs *after* the scroll pin and animates — so
+    // the bubble popped in and then rode the transcript growing into the room
+    // the composer was giving back. The collapse has to be part of the layout
+    // the message arrives into, which means inside the send handler.
+    //
+    // jsdom has no layout, so the field reports the heights a browser would:
+    // a wrapped draft is at the five-line cap, an empty one is a single line.
+    const user = userEvent.setup();
+    let dispatched: { height: string; expanded: boolean } | undefined;
+    render(
+      pane(false, vi.fn(), messages, () => {
+        dispatched = {
+          height: textarea.style.height,
+          expanded:
+            document.querySelector(".composer")?.classList.contains("composer-expanded") === true,
+        };
+      }),
+    );
+    const textarea = screen.getByRole("textbox", { name: "Message Ken" });
+    Object.defineProperty(textarea, "scrollHeight", {
+      get: () => ((textarea as HTMLTextAreaElement).value.length > 0 ? 112 : 32),
+      configurable: true,
+    });
+
+    await user.type(textarea, "one{Shift>}{Enter}{/Shift}two{Shift>}{Enter}{/Shift}three");
+    // Grown to the cap, with the buttons dropped to their own row.
+    expect(textarea.style.height).toBe("112px");
+    expect(document.querySelector(".composer")).toHaveClass("composer-expanded");
+
+    await user.type(textarea, "{Enter}");
+
+    // The moment the message goes up: one line already, so the pin that
+    // follows measures the extent the bubble will actually live in.
+    expect(dispatched?.height).toBe("32px");
+    // And the wrapped layout is gone by the commit that draws the bubble,
+    // rather than a render later.
+    expect(textarea.style.height).toBe("32px");
+    expect(document.querySelector(".composer")).not.toHaveClass("composer-expanded");
+  });
+
   it("says so when the conversation has stopped saving", () => {
     // Silence is the dangerous case here: every message is still on screen,
     // so nothing looks wrong until a restart drops the unsaved tail.
