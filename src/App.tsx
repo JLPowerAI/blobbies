@@ -1,5 +1,5 @@
 import type { Message as AiMessage } from "@kenkaiiii/gg-ai";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ChatPane } from "@/components/ChatPane";
 import { ComposePane } from "@/components/ComposePane";
 import { CreatorPane } from "@/components/CreatorPane";
@@ -34,6 +34,7 @@ import {
   transcriptFor,
   uniqueBlobName,
 } from "@/data/agents";
+import { useAcpBridge } from "@/lib/acp/useAcpBridge";
 import type { BlobActivity } from "@/lib/activity";
 import {
   type Attachment,
@@ -46,6 +47,7 @@ import {
 import type { BlobMemory, RosterAccess, RoutineAccess } from "@/lib/blob-tools";
 import { composioSignedIn, connectedAppNames, setComposioToolkits } from "@/lib/composio";
 import { contextWindow } from "@/lib/context-window";
+import { publishConversation } from "@/lib/conversation-bus";
 import {
   addressedResponders,
   type Group,
@@ -79,6 +81,15 @@ import { isTinfoilModel } from "@/lib/tinfoil-model";
 import { dropOrphanToolResults, toolTraceMessages, trimToolTrace } from "@/lib/tool-trace";
 import { checkForUpdates, onTrayUpdateCheck } from "@/lib/updater";
 import "./App.css";
+
+// Both only exist behind the Editors (ACP) toggle, which most users never
+// touch — so they stay out of the startup chunk (scripts/bundle-budget.mjs).
+const AcpPairingDialog = lazy(() =>
+  import("@/components/AcpPairingDialog").then((module) => ({ default: module.AcpPairingDialog })),
+);
+const AcpSettings = lazy(() =>
+  import("@/components/AcpSettings").then((module) => ({ default: module.AcpSettings })),
+);
 
 // The provider stack (`@/lib/ai` → gg-ai + the OpenAI SDK + zod + Tinfoil,
 // several hundred KB minified) is only needed once a turn actually runs;
@@ -440,6 +451,10 @@ export function App() {
   // notification banner's own sound stays under macOS's control in System
   // Settings.
   const [sounds, setSounds] = useState(() => readPreference("pref:sounds", "on") === "on");
+  // The editor bridge (ACP). Off until the user says otherwise — it is a local
+  // control surface, so the default has to be the closed one, and it is loaded
+  // from disk rather than a preference key the webview alone can write.
+  const [acp, setAcp] = useState<store.AcpSettings>({ enabled: false, pairedClients: [] });
   // Ollama model tag (e.g. "llama3.2:latest"); empty until one is chosen.
   const [model, setModel] = useState(() => readPreference("pref:model", ""));
   // Chain-of-thought toggle; off by default because it multiplies reply time.
@@ -504,15 +519,17 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [roster, settings, shared, savedGroups] = await Promise.all([
+      const [roster, settings, shared, savedGroups, acpSettings] = await Promise.all([
         store.loadRoster(),
         store.loadSettings(),
         store.loadUserMemories(),
         store.loadGroups(),
+        store.loadAcpSettings(),
       ]);
       if (cancelled) {
         return;
       }
+      setAcp(acpSettings);
       if (roster !== null && roster.length > 0) {
         commitAgents(() => roster);
       }
@@ -1589,6 +1606,9 @@ export function App() {
       store.saveConversation(conversationId, next);
       return { ...previous, [conversationId]: next };
     });
+    // Anything watching this conversation from outside React (an attached ACP
+    // editor) sees the same message the transcript just gained.
+    publishConversation(conversationId, { type: "message", message });
   };
 
   /** Reflect the newest message in the sidebar (timestamp + snippet). */
@@ -1618,6 +1638,7 @@ export function App() {
   ) => {
     const next: ActiveRun = { ...run, ...extra, status: assertTransition(run.status, status) };
     setRunsByConversation((previous) => ({ ...previous, [conversationId]: next }));
+    publishConversation(conversationId, { type: "run_status", status: next.status, run: next });
     if (conversationId === run.blobId) {
       void store.saveBlobRun(run.blobId, next);
     }
@@ -1705,6 +1726,7 @@ export function App() {
       });
       if (group === undefined) {
         touchActivity(target.id, text);
+        publishConversation(convoId, { type: "exchange_end", outcome: "failed" });
       }
       return "failed";
     }
@@ -1972,6 +1994,9 @@ export function App() {
         };
         return { ...previous, [convoId]: [...(previous[convoId] ?? []), bubble] };
       });
+      // Streamed out to an attached editor as it lands, not at settle: an ACP
+      // client shows a reply arriving the same way the transcript does.
+      publishConversation(convoId, { type: "segment", blobId: target.id, text: content });
     };
     /**
      * What this turn actually did, attached to its last bubble when it settles
@@ -2077,6 +2102,12 @@ export function App() {
         getSteeringMessages: () => (steering.length === 0 ? null : steering.splice(0)),
         onAsk: (pending) => {
           askBox.value = pending;
+          publishConversation(convoId, {
+            type: "ask",
+            blobId: target.id,
+            question: pending.question,
+            kind: pending.kind,
+          });
         },
         onCapture: (capture, caption) => {
           void showCapture(convoId, speaker.id, capture, caption);
@@ -2097,6 +2128,14 @@ export function App() {
             result: call.result,
             failed: call.isError,
           });
+          publishConversation(convoId, {
+            type: "tool_call",
+            blobId: target.id,
+            name: call.name,
+            args: JSON.stringify(call.args),
+            ...(call.result === undefined ? {} : { result: call.result }),
+            ...(call.isError === undefined ? {} : { failed: call.isError }),
+          });
         },
         onUsage: (usage) => {
           spent.inputTokens += usage.inputTokens;
@@ -2114,8 +2153,10 @@ export function App() {
         onSegment: (segment) => appendSegment(segment),
         // Fires only on a change of state, so this is a handful of renders per
         // turn rather than one per token.
-        onActivity: (activity) =>
-          setActivityByBlob((previous) => ({ ...previous, [target.id]: activity })),
+        onActivity: (activity) => {
+          setActivityByBlob((previous) => ({ ...previous, [target.id]: activity }));
+          publishConversation(convoId, { type: "activity", blobId: target.id, activity });
+        },
         // The Blob configures itself: the same patch path the settings panel
         // uses, so title/description show up there immediately.
         onConfigure: (patch) => updateBlob(target.id, patch),
@@ -2318,7 +2359,13 @@ export function App() {
         );
       }
     }
-    return run.status === "waiting_input" ? "done" : outcome;
+    const settled = run.status === "waiting_input" ? "done" : outcome;
+    // One turn IS the exchange in a 1:1 chat. In a group the exchange runs on
+    // through the next responder, so `sendToGroup` says when it is over.
+    if (group === undefined) {
+      publishConversation(convoId, { type: "exchange_end", outcome: settled });
+    }
+    return settled;
   };
 
   /**
@@ -2547,6 +2594,9 @@ export function App() {
         text: "No Blobs in this group yet \u2014 drag some into it in the sidebar.",
         timestampMs: Date.now(),
       });
+      // Nobody is going to answer, so the exchange is already over. Without
+      // this an attached editor waits on a turn that will never be queued.
+      publishConversation(convoId, { type: "exchange_end", outcome: "failed" });
       return;
     }
     const repliedTo = (sentRef.current[convoId] ?? []).find(
@@ -2567,7 +2617,7 @@ export function App() {
     // One queued task for the whole exchange, not one per member: the router
     // has to run before the first speaker is known, and a later speaker may
     // only be added once an earlier one has spoken.
-    void queueTurn(async () => {
+    const exchange = queueTurn(async () => {
       if (lane.epoch !== epoch) {
         return "cancelled" as const;
       }
@@ -2762,6 +2812,69 @@ export function App() {
       }
       return outcome;
     }, convoId);
+    // Said once the whole room is done — every responder and every hand-off —
+    // which is when an attached editor's prompt has actually been answered.
+    void exchange.then(
+      (settled) => publishConversation(convoId, { type: "exchange_end", outcome: settled }),
+      () => publishConversation(convoId, { type: "exchange_end", outcome: "failed" }),
+    );
+  };
+
+  /**
+   * Send plain text to one Blob's own chat, whoever is on screen.
+   *
+   * `sendMessage` below is the composer's path and always addresses the
+   * *selected* conversation; an attached ACP editor addresses the Blob its
+   * session names, which may be one nobody has open.
+   */
+  const sendToBlob = (
+    target: Agent,
+    text: string,
+    reply?: { replyTo?: string; replyToId?: string },
+  ) => {
+    const message = userMessage(text, reply, []);
+    appendMessage(target.id, message);
+    touchActivity(target.id, text);
+    startTurn(target, message);
+  };
+
+  /**
+   * The editor bridge, given the same send paths the composer uses.
+   *
+   * An ACP session gets no capability the app's own chat does not have: it
+   * goes through `sendToBlob`/`sendToGroup`, so the turn queue, the run
+   * records and the Blob-home sandbox all apply unchanged.
+   */
+  const acpBridge = useAcpBridge(
+    acp.enabled,
+    {
+      roster: () => agentsRef.current,
+      groups: () => groupsRef.current,
+      transcript: (conversationId) => sentRef.current[conversationId] ?? [],
+      sendToBlob: (target, text) => sendToBlob(target, text),
+      sendToGroup: (group, text) => sendToGroup(group, text, {}),
+      stop: stopTurn,
+      defaultBlob: () => agentsRef.current.find((candidate) => candidate.id === selectedId),
+    },
+    (name) => acp.pairedClients.includes(name),
+    (name) => {
+      setAcp((previous) => {
+        if (previous.pairedClients.includes(name)) {
+          return previous;
+        }
+        const next = { ...previous, pairedClients: [...previous.pairedClients, name] };
+        store.saveAcpSettings(next);
+        return next;
+      });
+    },
+  );
+
+  const changeAcp = (patch: Partial<store.AcpSettings>) => {
+    setAcp((previous) => {
+      const next = { ...previous, ...patch };
+      store.saveAcpSettings(next);
+      return next;
+    });
   };
 
   const sendMessage = (
@@ -2791,10 +2904,7 @@ export function App() {
     }
     const target = agent;
     if (!attaching) {
-      const message = userMessage(text, reply, []);
-      appendMessage(target.id, message);
-      touchActivity(target.id, text);
-      startTurn(target, message);
+      sendToBlob(target, text, reply);
       return;
     }
     // The message goes up straight away, carrying the files it came with.
@@ -3111,12 +3221,45 @@ export function App() {
           model={model}
           onModelChange={changeModel}
           onReplayOnboarding={replayOnboarding}
+          acp={
+            <Suspense fallback={null}>
+              <AcpSettings
+                enabled={acp.enabled}
+                onEnabledChange={(on) => changeAcp({ enabled: on })}
+                bridge={acpBridge}
+                pairedClients={acp.pairedClients}
+                onForgetClient={(name) => {
+                  changeAcp({
+                    pairedClients: acp.pairedClients.filter((entry) => entry !== name),
+                  });
+                  // Forgetting the name alone would leave a session admitted
+                  // under it running until its editor happened to quit.
+                  acpBridge.revoke(name);
+                }}
+                // A fresh token means a fresh listener: every client holding the
+                // old one is dropped, which is what "rotate" has to mean.
+                onRotateToken={() => {
+                  changeAcp({ enabled: false });
+                  setTimeout(() => changeAcp({ enabled: true }), 0);
+                }}
+              />
+            </Suspense>
+          }
           onClose={() => {
             setSettingsOpen(false);
             // Plugins lives in here, and so does the Composio Log in button.
             refreshComposio();
           }}
         />
+      ) : null}
+      {acpBridge.pairing !== null ? (
+        <Suspense fallback={null}>
+          <AcpPairingDialog
+            request={acpBridge.pairing}
+            onApprove={() => acpBridge.approve(acpBridge.pairing?.id ?? -1)}
+            onDeny={() => acpBridge.deny(acpBridge.pairing?.id ?? -1)}
+          />
+        </Suspense>
       ) : null}
       {onboarding ? (
         <Onboarding

@@ -1,3 +1,4 @@
+mod acp;
 mod capture;
 mod commands;
 mod error;
@@ -58,7 +59,12 @@ pub fn run() {
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,
-            skills::skills_list
+            skills::skills_list,
+            acp::acp_start,
+            acp::acp_stop,
+            acp::acp_send,
+            acp::acp_close,
+            acp::acp_relay_path
         ])
         .setup(|app| {
             store::startup_maintenance(app.handle());
@@ -107,7 +113,12 @@ pub fn run() {
             tauri::RunEvent::Reopen { .. } => tray::show_main_window(app),
             // Release the model's memory (weights + KV-cache snapshots, gigabytes)
             // as soon as the app closes, instead of waiting out keep_alive.
-            tauri::RunEvent::Exit => commands::ollama_unload_on_exit(app),
+            tauri::RunEvent::Exit => {
+                // The ACP token names a port that dies with this process;
+                // leaving it on disk only invites a stale editor to retry.
+                acp::acp_stop();
+                commands::ollama_unload_on_exit(app);
+            }
             _ => {}
         });
 }

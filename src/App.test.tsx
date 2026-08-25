@@ -531,6 +531,27 @@ describe("App", () => {
     expect(await within(dialog).findByText(/No skills yet/)).toBeInTheDocument();
   });
 
+  it("keeps the editor bridge off until it is switched on", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /Ken Kai/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Settings" });
+    await user.click(within(dialog).getByRole("button", { name: "Plugins" }));
+
+    // A local control surface that can run a Blob's shell tools must not be
+    // reachable by default, and nothing about it is shown until it is on.
+    const toggle = within(dialog).getByRole("switch", {
+      name: "Let editors talk to your Blobs",
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(within(dialog).queryByText("Command")).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+  });
+
   it("lists downloaded Ollama models and frees the outgoing one on switch", async () => {
     // Deterministic local server: version probe succeeds, two models pulled.
     const unloads: unknown[] = [];

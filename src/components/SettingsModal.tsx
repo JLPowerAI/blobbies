@@ -1,5 +1,5 @@
 import { CircleArrowDown, Cpu, Plug, Settings, X } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink } from "@/components/ExternalLink";
 import { PillSelect } from "@/components/PillSelect";
 import { COMPOSIO_DASHBOARD_URL, composioSignedIn, forgetComposioSession } from "@/lib/composio";
@@ -73,6 +73,8 @@ interface SettingsModalProps {
   onModelChange: (model: string) => void;
   /** Dev action: replay the first-run flow once, right now. */
   onReplayOnboarding: () => void;
+  /** The Editors (ACP) section, rendered under Plugins by the app. */
+  acp: ReactNode;
   onClose: () => void;
 }
 
@@ -288,6 +290,7 @@ export function SettingsModal({
   model,
   onModelChange,
   onReplayOnboarding,
+  acp,
   onClose,
 }: SettingsModalProps) {
   const [tab, setTab] = useState<SettingsTab>(initialTab);
@@ -730,6 +733,8 @@ export function SettingsModal({
                   </>
                 ) : null}
               </div>
+
+              {acp}
 
               <p className="modal-section-label">Skills</p>
               <div className="modal-card">

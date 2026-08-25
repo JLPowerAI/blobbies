@@ -39,6 +39,7 @@ They remember you. They work in your apps. And **your data never touches an AI c
 - **Search and read the web.** DuckDuckGo Lite, falling back to Bing. No setup.
 - **Run local commands.** Allowlisted programs only, argv never a shell string, sandboxed to that Blob's folder.
 - **Learn skills and MCP servers.** Drop a folder in `~/.blobbies/skills/`, or connect loopback MCP servers for more tools.
+- **Live in your editor.** Zed, JetBrains and other ACP editors can chat with the same Blobs, memories and tools. Off by default; every editor asks first.
 
 ---
 
@@ -197,6 +198,14 @@ pnpm tauri:dev   # loads .env.local on every OS
 pnpm tauri:build   # production bundle (dmg / deb+AppImage / NSIS exe)
 pnpm check         # everything CI runs: lint, types, tests, clippy
 ```
+
+### Talking to Blobs from your editor
+
+Blobbies speaks the [Agent Client Protocol](https://agentclientprotocol.com), so an ACP editor can chat with the same Blobs — same memories, same homes, same tools, same transcripts — rather than a second copy of them.
+
+Turn it on in **Settings → Plugins → Editors (ACP)**. It is off until you do, it listens on `127.0.0.1` only, and every new editor has to be approved in the app before it can say anything. That panel shows the exact `blobbies-acp` command path for your install (it differs per platform) and copy-ready snippets for Zed's `settings.json` and JetBrains' `~/.jetbrains/acp.json`.
+
+Blobbies must be running — the app *is* the agent, and the shipped command is a relay to it. Two things to expect: a group's replies arrive as one stream with each Blob's name prefixed, because the protocol's stable version renders a single agent voice; and a second prompt waits its turn, since turns are serialized against one local model.
 
 CI builds and tests on macOS, Windows and Linux every push, and a [release workflow](.github/workflows/release.yml) ships installers for each.
 

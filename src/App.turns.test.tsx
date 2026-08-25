@@ -5,6 +5,7 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_SHAPES, type Agent, AVATAR_TONES } from "@/data/agents";
 import type { streamBlobTurn as StreamBlobTurn } from "@/lib/ai";
+import { subscribeConversation } from "@/lib/conversation-bus";
 import type { SchedulerHost } from "@/lib/scheduler";
 import type { Settings } from "@/lib/store";
 
@@ -1350,6 +1351,37 @@ describe("turn wiring", () => {
     expect(
       await screen.findByText(/Researcher and Writer stayed out \u2014 @ a Blob/),
     ).toBeInTheDocument();
+  });
+
+  it("closes the exchange when a group has nobody in it to answer", async () => {
+    const user = userEvent.setup();
+    // The group exists but every member left it — other Blobs are still on the
+    // roster, they are just not in this room. Nothing will be queued, so the
+    // only thing that can end the exchange is the empty-membership branch, and
+    // an attached ACP editor waits on exactly that event to answer its prompt:
+    // skipping it hangs the editor rather than the app.
+    const ghosts = "7c2d1e0f-3a4b-4c5d-9e8f-1a2b3c4d5e6f";
+    await seedGroup();
+    store.saveGroups([
+      { id: GROUP_ID, name: "Launch" },
+      { id: ghosts, name: "Ghosts" },
+    ]);
+    mountWithModel();
+
+    const ended: string[] = [];
+    const stop = subscribeConversation(`group:${ghosts}`, (event) => {
+      if (event.type === "exchange_end") {
+        ended.push(event.outcome);
+      }
+    });
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Ghosts" }));
+    await user.type(screen.getByLabelText("Message Ghosts"), "anyone there?{Enter}");
+
+    await waitFor(() => expect(ended).toEqual(["failed"]));
+    expect(calls.length).toBe(0);
+    stop();
   });
 
   it("flags a group unread when a reply lands while you are elsewhere", async () => {

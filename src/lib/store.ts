@@ -31,6 +31,14 @@ export interface Settings {
   mcpServers?: McpServerConfig[];
 }
 
+/** State of the ACP editor bridge (see lib/acp/host.ts). */
+export interface AcpSettings {
+  /** Off by default: the listener does not exist until the user says so. */
+  enabled: boolean;
+  /** Client names approved to connect, as they identified themselves. */
+  pairedClients: string[];
+}
+
 export interface UiLayout {
   sidebarWidth: number;
   sidebarCollapsed: boolean;
@@ -273,6 +281,32 @@ export async function loadUserMemories(): Promise<BlobMemory[] | null> {
 
 export function saveUserMemories(memories: BlobMemory[]): void {
   queueWrite("user", memories);
+}
+
+/**
+ * Whether the editor bridge is on, and which clients the user has paired.
+ *
+ * Its own slice rather than a field on `Settings`: this is the on/off state of
+ * a local control surface, and a corrupt or half-written settings blob must
+ * never be able to turn it on. Read defensively for the same reason — anything
+ * that is not plainly `true` leaves the bridge off.
+ */
+export async function loadAcpSettings(): Promise<AcpSettings> {
+  const value = await rawRead("acp");
+  if (value === null || typeof value !== "object") {
+    return { enabled: false, pairedClients: [] };
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    enabled: record.enabled === true,
+    pairedClients: Array.isArray(record.pairedClients)
+      ? record.pairedClients.filter((name): name is string => typeof name === "string")
+      : [],
+  };
+}
+
+export function saveAcpSettings(settings: AcpSettings): void {
+  queueWrite("acp", settings);
 }
 
 export async function loadUiLayout(): Promise<Partial<UiLayout> | null> {

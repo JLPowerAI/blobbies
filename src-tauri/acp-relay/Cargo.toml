@@ -1,0 +1,37 @@
+[package]
+# The stdio relay an ACP editor spawns. Its own crate, not a second [[bin]] in
+# the app: the app's build script validates that this binary already exists as
+# a bundled `externalBin`, so building it from inside that package could never
+# succeed the first time.
+name = "blobbies-acp"
+version = "0.1.0"
+description = "Relay between an ACP editor's stdio and a running Blobbies app"
+edition = "2024"
+rust-version = "1.90"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "blobbies-acp"
+path = "src/main.rs"
+
+# No dependencies, deliberately: this ships as a separate executable that a
+# local editor spawns, and every crate it pulled in would widen that surface.
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"
+indexing_slicing = "warn"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
