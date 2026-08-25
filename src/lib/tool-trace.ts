@@ -36,7 +36,7 @@ function clip(text: string, limit: number): string {
 export function trimToolTrace(entries: readonly ToolTraceEntry[]): ToolTraceEntry[] {
   return entries.slice(-MAX_ENTRIES).map((entry) => ({
     name: entry.name,
-    ...(entry.args === undefined ? {} : { args: clip(entry.args, ARGS_CHARS) }),
+    ...(entry.args === undefined ? {} : { args: clipArgsText(entry.args) }),
     ...(entry.result === undefined ? {} : { result: clip(entry.result, RESULT_CHARS) }),
     ...(entry.failed === true ? { failed: true } : {}),
   }));
@@ -95,19 +95,43 @@ export function toolTraceMessages(
   ];
 }
 
+/**
+ * Shorten stored arguments without breaking the JSON they are.
+ *
+ * Slicing the raw text was the bug: `{"tool":"YOUTUBE_SEARCH_YOU_TUBE",…` cut
+ * at 120 characters no longer parses, so replay fell back to wrapping the
+ * fragment as `{ value: "{\"tool\":…" }` — and a Blob reading its own history
+ * copied that shape into the next call, which is the reported `value.value`
+ * nesting. Only the values are clipped, so field names — the thing a wrong-
+ * argument error is about — survive intact and the object still parses.
+ */
+function clipArgsText(args: string): string {
+  const parsed = parseObject(args);
+  return parsed === null ? clip(args, ARGS_CHARS) : JSON.stringify(clipArgs(parsed));
+}
+
+/** The arguments as an object, or null when they were never one. */
+function parseObject(args: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(args);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Stored as JSON text; a malformed one must not lose the call that was made. */
 function parseArgs(args: string | undefined): Record<string, unknown> {
   if (args === undefined) {
     return {};
   }
-  try {
-    const parsed: unknown = JSON.parse(args);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? clipArgs(parsed as Record<string, unknown>)
-      : { value: clip(args, ARGS_CHARS) };
-  } catch {
-    return { value: clip(args, ARGS_CHARS) };
-  }
+  const parsed = parseObject(args);
+  // `value` is the last resort for text that was never a JSON object — a
+  // trace stored before `clipArgsText` existed, or a model that sent a bare
+  // string. Anything parseable keeps its own field names.
+  return parsed === null ? { value: clip(args, ARGS_CHARS) } : clipArgs(parsed);
 }
 
 /** Keep argument names exact — the wrong-field case is the point — but cap values. */

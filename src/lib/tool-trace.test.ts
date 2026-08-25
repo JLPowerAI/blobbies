@@ -123,6 +123,42 @@ describe("clipping the trace before it is stored", () => {
     expect(entry?.args?.length).toBeLessThan(200);
   });
 
+  it("keeps clipped arguments parseable, so replay does not nest them under value", () => {
+    // The reported failure: a long app_run_tool call was stored as sliced raw
+    // JSON, which no longer parsed, so replay wrapped the fragment as
+    // { value: "{\"tool\":…" } and the Blob copied that shape into its next
+    // call — the value.value nesting it kept getting "Invalid arguments" for.
+    const args = JSON.stringify({
+      tool: "YOUTUBE_SEARCH_YOU_TUBE",
+      arguments: JSON.stringify({
+        q: "ai tools",
+        order: "viewCount",
+        publishedAfter: "2026-08-22T00:00:00Z",
+        relevanceLanguage: "en",
+        maxResults: 25,
+        part: "snippet",
+      }),
+    });
+    const trimmed = trimToolTrace([{ name: "app_run_tool", args, result: "ok" }]);
+    expect(() => JSON.parse(trimmed[0]?.args ?? "")).not.toThrow();
+
+    const [assistant] = toolTraceMessages(trimmed, "m1");
+    const replayed = callsIn(assistant).at(0)?.args ?? {};
+    expect(replayed.tool).toBe("YOUTUBE_SEARCH_YOU_TUBE");
+    expect(replayed).not.toHaveProperty("value");
+    // Field names survive; only the values are shortened.
+    expect(Object.keys(replayed)).toEqual(["tool", "arguments"]);
+    expect(String(replayed.arguments)).toContain("[truncated]");
+  });
+
+  it("still keeps a non-object argument string, wrapped", () => {
+    // Nothing to preserve field names from, so `value` remains the fallback.
+    const [entry] = trimToolTrace([{ name: "app_run_tool", args: "not json at all" }]);
+    expect(entry?.args).toBe("not json at all");
+    const [assistant] = toolTraceMessages([{ name: "app_run_tool", args: "nope" }], "m2");
+    expect(callsIn(assistant).at(0)?.args).toEqual({ value: "nope" });
+  });
+
   it("keeps only the most recent calls", () => {
     const many = Array.from({ length: 30 }, (_, index) => ({ name: `tool_${index}` }));
     const names = trimToolTrace(many).map((entry) => entry.name);

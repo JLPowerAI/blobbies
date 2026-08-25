@@ -289,3 +289,38 @@ describe("store (browser fallback)", () => {
     }
   });
 });
+
+describe("slice keys", () => {
+  // Storage is split across two languages: this module names a slice key, and
+  // `src-tauri/src/store.rs` decides whether that key is allowed to exist. The
+  // ACP bridge added `acp` here and not there, so in the packaged app every
+  // launch rejected `store_read("acp")` with "unknown storage slice" — which
+  // took the startup Promise.all down with it, leaving roster, settings and
+  // groups unhydrated. The browser fallback used by the rest of this file has
+  // no allowlist, so nothing here could have caught it.
+  it("only uses root slices the Rust allowlist accepts", async () => {
+    const [{ readFile }, { fileURLToPath }] = await Promise.all([
+      import("node:fs/promises"),
+      import("node:url"),
+    ]);
+    const from = (path: string) => fileURLToPath(new URL(path, import.meta.url));
+    const rust = await readFile(from("../../src-tauri/src/store.rs"), "utf8");
+    const allowed = new Set(
+      [
+        ...(/const ROOT_SLICES: \[&str; \d+\] = \[([^\]]*)\]/.exec(rust)?.[1] ?? "").matchAll(
+          /"([^"]+)"/g,
+        ),
+      ].map((match) => match[1]),
+    );
+    expect(allowed.size).toBeGreaterThan(0);
+
+    const ts = await readFile(from("./store.ts"), "utf8");
+    // Every literal key handed to a read or write, minus the per-Blob and
+    // per-group ones (template literals, checked by their own Rust tests).
+    const used = [...ts.matchAll(/(?:rawRead|rawWrite|queueWrite|flushWrite)\("([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(used.length).toBeGreaterThan(0);
+    expect(used.filter((key) => !allowed.has(key))).toEqual([]);
+  });
+});

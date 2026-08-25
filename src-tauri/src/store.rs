@@ -40,8 +40,16 @@ struct TrashMarker {
 
 /// Slices that live at the data root. `user` holds memories shared by every
 /// Blob (per-Blob memories live in that Blob's `config`); `groups` holds the
-/// group-chat list (names and ids only — transcripts are their own slices).
-const ROOT_SLICES: [&str; 5] = ["settings", "ui-layout", "roster", "user", "groups"];
+/// group-chat list (names and ids only — transcripts are their own slices);
+/// `acp` is the editor bridge's on/off state, deliberately its own slice so a
+/// half-written settings blob can never switch it on.
+///
+/// This list is the frontend's contract: `lib/store.ts` names these keys, and
+/// a key it uses but this array omits is rejected at the IPC boundary — the
+/// read rejects, the startup `Promise.all` that hydrates roster, settings and
+/// groups rejects with it, and the app comes up empty. Adding a slice means
+/// adding it here in the same change (`store.test.ts` fails the drift).
+const ROOT_SLICES: [&str; 6] = ["settings", "ui-layout", "roster", "user", "groups", "acp"];
 
 /// Slices that live inside a Blob directory. `recap` is the rolling summary of
 /// the conversation's compacted head (see `lib/recap.ts`).
@@ -563,6 +571,22 @@ mod tests {
         // ...and the old copy is still there to fall back on.
         assert!(legacy.join("roster.json").is_file());
         assert!(!staging.exists());
+    }
+
+    #[test]
+    fn accepts_every_root_slice_the_app_writes() {
+        // The `acp` slice shipped with the editor bridge but never reached this
+        // allowlist, so every launch rejected `store_read("acp")` — an
+        // unhandled "unknown storage slice" that took the whole startup
+        // hydration down with it.
+        let root = Path::new("/data");
+        for key in ROOT_SLICES {
+            assert_eq!(
+                resolve_slice_path(root, key).ok(),
+                Some(root.join(format!("{key}.json"))),
+                "expected {key} to resolve"
+            );
+        }
     }
 
     #[test]

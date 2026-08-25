@@ -1361,8 +1361,10 @@ export function makeComposioTools(): AgentTool[] {
       "free — fetch, list, search away. Anything that leaves a trace (sending, " +
       "replying, deleting, creating, updating) needs the user's word first: " +
       "say exactly what you are about to do and wait for them to agree. " +
-      "If the result looks cut off, ask for fewer items rather than repeating " +
-      "the same call.",
+      "If the result looks cut off, or the app parks a big answer in a file " +
+      "you cannot open, run the call again for fewer items \u2014 you can only " +
+      "read what comes back inline. Say which part you could not see rather " +
+      "than repeating the same call or working from the preview alone.",
     parameters: runParams,
     // Sequential: these have side effects — sending mail, creating events —
     // and must not be fired in parallel batches.

@@ -610,6 +610,20 @@ function settleScroll(el: HTMLElement, pinBottom: boolean, done?: (top: number) 
  * scroll position, hence the save and restore — and that restore fires a
  * scroll event the pane must ignore, which is what `done` is for.
  *
+ * That restore must not go through `el.scrollTop = top`. This pane sets
+ * `scroll-behavior: smooth`, which the scrollTop setter obeys, so the
+ * assignment did not put the reader back — it launched a glide from the top
+ * of the transcript down to where they had been, and the repair became the
+ * bug it was written to fix. `rerenderingRef` clears after one frame while
+ * the glide runs for hundreds of milliseconds, so its scroll events landed as
+ * "the user scrolled up" (the pane stops holding the bottom, the jump pill
+ * appears over a conversation nobody left); on the way down it crosses the
+ * paging threshold and mounts another 50 messages, growing the content under
+ * an animation already aimed at the old extent; and it lands against that
+ * stale extent — blank, until a real scroll re-clamps it. A longer transcript
+ * means a longer glide, which is why this came back after a long
+ * back-and-forth and then on every session opened after it.
+ *
  * simplification: a full re-layout of the transcript, which is why it runs
  * only after a settle (≈once per resize or switch) and never per frame. The
  * upgrade path is a narrower invalidation if WebKit ever offers one.
@@ -621,13 +635,13 @@ function forceRerender(el: HTMLElement, done?: () => void): number {
   // torn down rather than the whole thing being coalesced away.
   void el.offsetHeight;
   el.style.display = "";
-  // Restoring the position is the one step that must not throw: the element
-  // is visible again by now, so failing here would strand the reader at the
-  // top of the transcript rather than where they were reading.
-  try {
+  // `scrollTo` with an explicit behaviour, so the CSS smooth scrolling cannot
+  // turn this into a glide. The assignment is kept only for environments with
+  // no `scrollTo` at all, where an instant restore is not on offer anyway.
+  if (typeof el.scrollTo === "function") {
+    el.scrollTo({ top, behavior: "instant" });
+  } else {
     el.scrollTop = top;
-  } catch {
-    el.scrollTo?.({ top, behavior: "instant" });
   }
   // Scroll events are dispatched during "update the rendering", which runs
   // before animation-frame callbacks — so by the time this fires, the event

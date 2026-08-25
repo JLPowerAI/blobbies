@@ -728,6 +728,85 @@ describe("ChatPane", () => {
     }
   });
 
+  it("puts the transcript back instantly after a repair, never on a glide", () => {
+    // Why the blank pane kept coming back after the repair shipped.
+    //
+    // `.message-scroll` sets `scroll-behavior: smooth` in CSS, and per spec an
+    // *assignment* to `scrollTop` obeys it — every other correction in this
+    // file goes through `scrollTo({ behavior: "instant" })` for exactly that
+    // reason. The repair's restore did not, so detaching the scroller (which
+    // resets scrollTop to 0) started a smooth glide from the top of the
+    // transcript back down to where the reader was:
+    //
+    //   • the glide outlives `rerenderingRef`, which clears after one frame,
+    //     so its scroll events land as "the user scrolled up" — the pane stops
+    //     pinning the bottom and raises the jump pill on its own,
+    //   • it passes `scrollTop < 200` on the way down and pages in another 50
+    //     messages, growing the content under an animation already aimed at
+    //     the old extent,
+    //   • and it lands against an extent measured before that growth — the
+    //     stale-extent blank the repair exists to cure, re-created by the
+    //     repair itself. Longer transcript, longer glide, more damage, which
+    //     is why it returned after a long back-and-forth and on every session
+    //     opened afterwards.
+    //
+    // The old test modelled `scrollTop = x` as landing instantly, so it could
+    // not see any of this. Here the setter animates, like the browser's.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      render(pane(false, vi.fn(), messages));
+      const el = document.querySelector(".message-scroll");
+      expect(el).not.toBeNull();
+      if (!(el instanceof HTMLElement)) return;
+
+      const VIEWPORT = 200;
+      const HEIGHT = 1000;
+      const clamp = (value: number) => Math.max(0, Math.min(value, HEIGHT - VIEWPORT));
+      let top = HEIGHT - VIEWPORT;
+      // Set by the smooth path: a position the pane asked for that has NOT
+      // arrived, and will crawl there over the coming frames.
+      let gliding: number | null = null;
+      Object.defineProperty(el, "scrollHeight", { get: () => HEIGHT, configurable: true });
+      Object.defineProperty(el, "clientHeight", { get: () => VIEWPORT, configurable: true });
+      Object.defineProperty(el, "scrollTop", {
+        get: () => top,
+        // The CSS behaviour: an assignment animates.
+        set: (value: number) => {
+          gliding = clamp(value);
+        },
+        configurable: true,
+      });
+      el.scrollTo = ((options: ScrollToOptions) => {
+        if (options.behavior === "smooth") {
+          gliding = clamp(options.top ?? top);
+          return;
+        }
+        gliding = null;
+        top = clamp(options.top ?? top);
+      }) as unknown as typeof el.scrollTo;
+
+      // Opening the conversation runs the repair; drain its frames.
+      for (let guard = 0; frames.length > 0 && guard < 10; guard += 1) {
+        const due = frames.splice(0);
+        act(() => {
+          for (const cb of due) cb(0);
+        });
+      }
+
+      // Detaching reset the position to 0 in a real browser; by the time the
+      // repair returns, the reader must already be back where they were — not
+      // watching the whole transcript slide past.
+      expect(gliding).toBeNull();
+      expect(top).toBe(HEIGHT - VIEWPORT);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("stops dressing a row for the jelly pop once it has popped", () => {
     // The pop is the row's arrival, so it belongs to the row's first moment.
     // A CSS animation replays whenever its element is re-inserted into the
