@@ -179,7 +179,7 @@ export type Message =
       timestampMs?: number;
       /**
        * Set when this agent message is a mid-run question: "question" renders
-       * a highlighted card, "action" an amber "needs you" card with a Done
+       * a blue-tinted card, "action" a violet "needs you" card with a Done
        * button. The next user message answers it.
        */
       ask?: "question" | "action";

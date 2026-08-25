@@ -631,6 +631,27 @@ export function App() {
               ? { ...previous, [entry.id]: [...transcript, note] }
               : previous,
           );
+        } else if (entry.run.status === "waiting_input") {
+          // Only if the question is actually in THIS transcript. Runs are
+          // persisted per Blob, so a build that keyed them by Blob rather
+          // than by conversation saved a group's ask under the asker's own
+          // chat — parking a conversation that had never been asked anything,
+          // with a "needs you" bar for a question living in another room, and
+          // routing the user's next message here as its answer.
+          //
+          // The ask marker on the last message is what makes the pairing
+          // checkable, so it is checked rather than trusted.
+          const transcript = (await store.loadBlobTranscript(entry.id)) ?? [];
+          const said = transcript.filter((message) => message.kind === "text");
+          const asked = said[said.length - 1];
+          const run: ActiveRun =
+            asked?.kind === "text" && asked.ask !== undefined
+              ? (entry.run as ActiveRun)
+              : { ...(entry.run as ActiveRun), status: "cancelled" };
+          if (run.status === "cancelled") {
+            void store.saveBlobRun(entry.id, run);
+          }
+          setRunsByConversation((previous) => ({ ...previous, [entry.id]: run }));
         } else {
           setRunsByConversation((previous) => ({
             ...previous,
@@ -2935,6 +2956,16 @@ export function App() {
           // there is no speaker to name yet — but the room must still show it
           // is working, or a message sent behind another turn looks dropped.
           const busy = speaking !== undefined || waitingTurns.includes(convoId);
+          // An ask belongs to the conversation it was asked in. This pane was
+          // reading nothing, so a Blob that stopped to ask the room for a
+          // login showed no "needs you" bar and no Done here — while the run
+          // sat parked, waiting for an answer the room could not give it.
+          const groupRun = runsByConversation[convoId];
+          const groupAsk = groupRun?.status === "waiting_input" ? groupRun : undefined;
+          const groupAsker =
+            groupAsk === undefined
+              ? undefined
+              : members.find((member) => member.id === groupAsk.blobId);
           return (
             <ChatPane
               agent={members[0] ?? agent}
@@ -2946,6 +2977,8 @@ export function App() {
               )}
               thinking={busy}
               {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
+              {...(groupAsk?.askKind === undefined ? {} : { waitingAsk: groupAsk.askKind })}
+              {...(groupAsker === undefined ? {} : { waitingAskAgent: groupAsker })}
               model={model}
               onModelChange={changeModel}
               reasoning={reasoning}

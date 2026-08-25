@@ -92,6 +92,12 @@ interface ChatPaneProps {
   onStop?: () => void;
   /** The Blob paused mid-task and waits on the user (ask_user). */
   waitingAsk?: "question" | "action" | undefined;
+  /**
+   * Which Blob is waiting. In a group the pane's `agent` is only the first
+   * member — naming it would credit the ask to whoever happens to head the
+   * roster rather than to whoever actually asked.
+   */
+  waitingAskAgent?: Agent | undefined;
   detailOpen: boolean;
   onToggleDetail: () => void;
   onOpenSettings: () => void;
@@ -653,6 +659,7 @@ export function ChatPane({
   onSend,
   onStop,
   waitingAsk,
+  waitingAskAgent,
   readingMessages = [],
   detailOpen,
   onToggleDetail,
@@ -1900,8 +1907,8 @@ export function ChatPane({
         </div>
         {waitingAsk === "action" ? (
           <div className="ask-action-bar" role="status">
-            <span>{agent.name} needs you to do something above.</span>
-            <button type="button" className="modal-button" onClick={() => onSend("Done.")}>
+            <span>{(waitingAskAgent ?? agent).name} needs you to do something above.</span>
+            <button type="button" className="ask-action-done" onClick={() => onSend("Done.")}>
               Done
             </button>
           </div>

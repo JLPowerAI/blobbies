@@ -18,6 +18,12 @@
   --accent-link: #0a5dc2;
   --accent-blue: #0a84ff;
   --accent-green: #1d9b53;
+  /* Straight off the Blob palette (BLOB_GRADIENTS.purple), because a bubble
+     wearing a colour should wear one of ours. Warm hues cannot do this job:
+     amber and orange have no dark form — darkened, they are brown — so any
+     tint of them against a bubble reads as mud rather than as a Blob colour.
+     Violet stays violet all the way down. */
+  --accent-violet: #7130e6;
 
   --status-warn: #a87400;
   --status-err: #d13c3c;
@@ -86,6 +92,9 @@
   --accent-link: #6cb2ff;
   --accent-blue: #409cff;
   --accent-green: #30c860;
+  /* The palette's pale end here, its deep end on light — the same way each
+     Blob's gradient is read from whichever end stands off the surface. */
+  --accent-violet: #b18cfe;
 
   --status-warn: #ffb340;
   --status-err: #ff6b6b;
@@ -711,6 +720,10 @@ select:focus:not(:focus-visible) {
   font-weight: 600;
   text-align: start;
   cursor: pointer;
+  /* The same hover fade as `.footer-row` directly below it. Without this it
+     was the one control in the footer that snapped between states while
+     Plugins and the account row eased. */
+  transition: background-color var(--duration-fast) var(--ease-standard);
 }
 
 .update-card:disabled {
@@ -718,14 +731,25 @@ select:focus:not(:focus-visible) {
   opacity: 0.7;
 }
 
+/* Solid green with white text, like `.plugin-added` — this app states a
+   positive action by filling it, not by outlining it. White in both themes
+   for the same reason as there: the text sits on the green fill, not on the
+   surface, so it cannot follow a theme token.
+
+   Solid #178044 rather than --accent-green, the same trade `.new-messages-pill`
+   makes with blue: white 13px text on the light (#1d9b53) and dark (#30c860)
+   accents is 3.6:1 / 2.2:1, under WCAG AA's 4.5:1. #178044 passes in both
+   themes (5.0:1) and keeps its 3:1 boundary against either sidebar. */
 .update-card-green {
-  color: var(--accent-green);
-  border-color: color-mix(in srgb, var(--accent-green) 45%, transparent);
-  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+  color: #ffffff;
+  border-color: transparent;
+  background: #178044;
 }
 
-.update-card-green:hover {
-  background: color-mix(in srgb, var(--accent-green) 20%, transparent);
+/* Deepens rather than brightens: on a fill this dark, lightening is what
+   would push the white label back under AA. */
+.update-card-green:hover:not(:disabled) {
+  background: #146f3b;
 }
 
 /* Not green while downloading/installing: no longer news, just work. */
@@ -3278,14 +3302,26 @@ a.modal-button {
   color: #ffffff;
 }
 
-/* Mid-task question from the Blob: visibly different from a normal reply. */
+/* Mid-task question from the Blob: visibly different from a normal reply.
+
+   A tinted fill, not an outline. Every other bubble in this transcript is a
+   plain fill — user and agent, both themes — so an outlined one does not read
+   as "the same thing in a different state", it reads as a different component
+   that wandered in. The accent still carries the meaning; it just arrives the
+   way this app spends colour everywhere else. */
 .bubble-ask {
-  border: 1.5px solid var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 18%, var(--bubble-agent));
 }
 
-/* "Do this yourself" ask: amber — the task is blocked on a human action. */
+/* "Do this yourself" ask: the task is blocked on a human action.
+
+   Violet, not the amber this used to be. Amber is the convention, but it has
+   no dark form — darkened it is simply brown — so tinting a dark bubble with
+   it produced khaki mud rather than a colour anyone chose. Violet is a Blob
+   colour, it stays itself at this lightness, and it is unmistakably not the
+   blue of an ordinary question. */
 .bubble-ask-action {
-  border-color: #d99a2b;
+  background: color-mix(in srgb, var(--accent-violet) 20%, var(--bubble-agent));
 }
 
 /* System status line in the transcript (routine fired, Blob spawned,
@@ -3324,13 +3360,35 @@ a.modal-button {
   gap: 8px;
   margin: 4px 0;
   padding: 8px 12px;
-  border: 1.5px solid #d99a2b;
+  /* Filled violet, matching the `.bubble-ask-action` it belongs to — this bar
+     and that bubble are one state, so they cannot be two colours. */
+  background: color-mix(in srgb, var(--accent-violet) 20%, var(--bubble-agent));
   border-radius: 10px;
   font-size: 13px;
 }
 
-/* Data is about to be lost, so this one is red rather than the amber used for
-   "needs you" — and it has no dismiss: it clears itself the moment a save
+/* The app's primary button (`.creator-submit`, `.onboarding-next`): the
+   inverted fill, which is the only button colour here that cannot vanish into
+   a tinted surface. `.modal-button`'s control gray sat at nearly the same
+   lightness as this bar and read as a hole in it rather than as the one thing
+   to press. */
+.ask-action-done {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--bubble-user);
+  color: var(--text-on-dark);
+  font-size: 13px;
+  font-weight: 600;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.ask-action-done:hover {
+  opacity: 0.88;
+}
+
+/* Data is about to be lost, so this one is red rather than the violet used
+   for "needs you" — and it has no dismiss: it clears itself the moment a save
    succeeds, and nothing else would make it true again. */
 .not-saving-bar {
   display: flex;

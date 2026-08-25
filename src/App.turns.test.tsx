@@ -1498,6 +1498,73 @@ describe("turn wiring", () => {
     expect(await screen.findByText("Sources gathered.")).toBeInTheDocument();
   });
 
+  it("does not park a chat on a saved ask that is not in its transcript", async () => {
+    const user = userEvent.setup();
+    // A run parked as waiting_input whose question is nowhere in this Blob's
+    // own transcript: what a build that keyed runs by Blob rather than by
+    // conversation left on disk when a Blob asked something in a GROUP. It
+    // must not park this chat — the bar would name a question that lives in
+    // another room, and the next message here would be sent as its answer.
+    script = [() => "Fresh reply."];
+    await seedGroup();
+    const researcher = "61ec34f1-9ba5-4eff-b8e1-7acefb210001";
+    store.saveBlobTranscript(researcher, [
+      { id: "t1", kind: "text", author: "agent", segments: [{ text: "An ordinary reply." }] },
+    ]);
+    await store.saveBlobRun(researcher, {
+      id: "run-stale",
+      blobId: researcher,
+      trigger: "user",
+      prompt: "pull the reddit threads",
+      question: "Log into Reddit, then press Done.",
+      askKind: "action",
+      startedAt: Date.now(),
+      status: "waiting_input",
+    });
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(await within(conversations).findByRole("button", { name: /^Researcher/ }));
+    expect(await screen.findByText("An ordinary reply.")).toBeVisible();
+    expect(screen.queryByText(/needs you to do something above/)).toBeNull();
+
+    // And the chat still works: the next message runs a turn of its own
+    // rather than being filed as the answer to that orphaned question.
+    await user.type(screen.getByLabelText(/^Message Researcher/), "hello{Enter}");
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(await screen.findByText("Fresh reply.")).toBeVisible();
+  });
+
+  it("shows a group ask in the group, and never in the asker's own chat", async () => {
+    const user = userEvent.setup();
+    responderPick = (names) => names.filter((name) => name === "Researcher");
+    script = [
+      (options) => {
+        // Stops mid-task to ask the room for something only a human can do.
+        options.onAsk?.({ question: "Log into Reddit, then press Done.", kind: "action" });
+        return "Log into Reddit, then press Done.";
+      },
+    ];
+    await seedGroup();
+    mountWithModel();
+
+    const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+    await user.click(within(conversations).getByRole("button", { name: "Launch" }));
+    await user.type(screen.getByLabelText("Message Launch"), "pull the reddit threads{Enter}");
+    await waitFor(() => expect(calls.length).toBe(1));
+
+    // The bar belongs where the ask happened, and names the Blob that asked —
+    // not the first member of the roster.
+    expect(await screen.findByText("Researcher needs you to do something above.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Done" })).toBeVisible();
+
+    // The asker's own chat asked nothing, so it says nothing. The reported
+    // bug put this bar here, in a conversation with no such question in it.
+    await user.click(within(conversations).getByRole("button", { name: /^Researcher/ }));
+    expect(screen.queryByText(/needs you to do something above/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
+  });
+
   it("keeps a Blob's group turn out of its own chat", async () => {
     const user = userEvent.setup();
     responderPick = (names) => names.filter((name) => name === "Researcher");
