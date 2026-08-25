@@ -33,15 +33,14 @@
     "sim:grounding": "vitest run --config vitest.sim.config.ts sim/grounding.sim.ts",
     "sim:recovery": "vitest run --config vitest.sim.config.ts sim/recovery.sim.ts",
     "rs:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml --all && cargo fmt --manifest-path src-tauri/acp-relay/Cargo.toml --all",
-    "rs:lint": "pnpm acp:relay && cargo clippy --manifest-path src-tauri/acp-relay/Cargo.toml --target-dir src-tauri/target --all-targets -- -D warnings && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
-    "rs:test": "pnpm acp:relay && cargo test --manifest-path src-tauri/Cargo.toml --all-features",
+    "rs:lint": "cargo clippy --manifest-path src-tauri/acp-relay/Cargo.toml --target-dir src-tauri/target --all-targets -- -D warnings && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
+    "rs:test": "cargo test --manifest-path src-tauri/Cargo.toml --all-features",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm rs:lint",
     "prepare": "lefthook install",
     "sim:mcp": "vitest run --config vitest.sim.config.ts sim/mcp.sim.ts",
     "plugins": "node scripts/sync-plugins.mjs",
     "notices": "node scripts/generate-notices.mjs",
-    "acp:relay": "node scripts/build-acp-relay.mjs",
-    "sim:acp": "pnpm acp:relay && vitest run --config vitest.sim.config.ts sim/acp.sim.ts"
+    "sim:acp": "vitest run --config vitest.sim.config.ts sim/acp.sim.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",

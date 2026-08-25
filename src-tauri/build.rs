@@ -29,7 +29,84 @@ const MODELS: [(&str, &str, &str); 2] = [
 
 fn main() {
     fetch_models();
+    build_acp_relay();
     tauri_build::build();
+}
+
+/// Build the ACP relay into the `externalBin` path Tauri expects.
+///
+/// `tauri_build::build()` refuses to run at all while
+/// `binaries/blobbies-acp-<target-triple>` is missing, so this cannot be left
+/// to a wrapper script: `cargo build`, `cargo clippy` and `cargo test` are all
+/// entry points CI and a fresh clone use directly, and every one of them would
+/// otherwise fail on a checkout that had never run the npm build.
+///
+/// Safe to nest inside a build script because the relay crate has **no
+/// dependencies** — nothing to resolve and no registry lock to contend for —
+/// and it compiles into its own target directory, so it never races the outer
+/// build for the lock on this one.
+fn build_acp_relay() {
+    let crate_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo always sets this"));
+    let manifest = crate_dir.join("acp-relay").join("Cargo.toml");
+    println!(
+        "cargo:rerun-if-changed={}",
+        crate_dir.join("acp-relay").join("src").display()
+    );
+    println!("cargo:rerun-if-changed={}", manifest.display());
+
+    let target = std::env::var("TARGET").expect("cargo always sets TARGET");
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("cargo always sets OUT_DIR"));
+    let relay_target = out_dir.join("acp-relay");
+    let suffix = if target.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
+
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let mut command = std::process::Command::new(cargo);
+    command
+        .args(["build", "--release", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--target-dir")
+        .arg(&relay_target)
+        .args(["--target", &target]);
+    // Cargo exports the *parent* build's flags and target selection into a
+    // build script's environment. Inherited, they would rebuild the relay with
+    // the wrong settings, or point it back at this crate.
+    for leaked in [
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTFLAGS",
+        "CARGO_BUILD_TARGET",
+        "CARGO_BUILD_RUSTFLAGS",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+    ] {
+        command.env_remove(leaked);
+    }
+
+    let status = command
+        .status()
+        .unwrap_or_else(|error| panic!("could not run cargo to build the ACP relay: {error}"));
+    assert!(status.success(), "building the ACP relay failed");
+
+    let built = relay_target
+        .join(&target)
+        .join("release")
+        .join(format!("blobbies-acp{suffix}"));
+    let bundled = crate_dir
+        .join("binaries")
+        .join(format!("blobbies-acp-{target}{suffix}"));
+    std::fs::create_dir_all(bundled.parent().expect("joined a file name"))
+        .unwrap_or_else(|error| panic!("creating the binaries directory: {error}"));
+    std::fs::copy(&built, &bundled).unwrap_or_else(|error| {
+        panic!(
+            "copying {} to {}: {error}",
+            built.display(),
+            bundled.display()
+        )
+    });
 }
 
 /// Put every model in `OUT_DIR`, fetching only what is missing or wrong.

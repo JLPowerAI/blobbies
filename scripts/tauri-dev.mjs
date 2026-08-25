@@ -9,7 +9,7 @@
 // happens in values, and quotes are only stripped as matched pairs. This file
 // holds a dev API key, so treating it as data rather than code is the posture.
 
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmodSync, existsSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -20,9 +20,6 @@ const CLI = new URL("../node_modules/@tauri-apps/cli/tauri.js", import.meta.url)
 // macOS only: runs the dev build from inside a real `.app` so the OS will
 // grant it a notification center. See the header of that file for why.
 const MACOS_RUNNER = new URL("./macos-dev-runner.mjs", import.meta.url);
-// Builds `blobbies-acp` into src-tauri/binaries — a hard prerequisite of any
-// cargo build of the app crate now that it ships as an externalBin.
-const RELAY_BUILD = new URL("./build-acp-relay.mjs", import.meta.url);
 
 /** Parse `KEY=VALUE` lines into a map. Comments, blanks, and malformed lines
  *  (no `=`, empty key) are skipped; a value may contain `=`; matched single or
@@ -72,7 +69,6 @@ function runnerArgs() {
 // Importable (and unit-testable) without launching anything.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   loadEnvFile();
-  execFileSync(process.execPath, [fileURLToPath(RELAY_BUILD)], { stdio: "inherit" });
   const child = spawn(
     process.execPath,
     [fileURLToPath(CLI), "dev", ...runnerArgs(), ...process.argv.slice(2)],

@@ -21,6 +21,11 @@
  * another's, and revoking a name disconnects the sessions using it.
  */
 
+// `ndJsonStream` is imported statically on purpose: this module is only ever
+// reached through the lazy import in useAcpBridge, so it already sits in the
+// ACP chunk — and host.ts beside it imports the SDK statically anyway, which
+// made a dynamic import here a no-op the bundler warned about.
+import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { type AcpFrameEvent, type AcpTransport, connectionTransport } from "@/lib/acp/bridge";
@@ -116,7 +121,6 @@ export async function attachAcp(
   deps: () => AcpHostDeps,
   callbacks: AcpAttachCallbacks,
 ): Promise<AcpAttachment> {
-  const { ndJsonStream } = await import("@agentclientprotocol/sdk");
   const connections = new Map<number, Connection>();
   /** Connection ids waiting on the user, oldest first. */
   let pending: number[] = [];

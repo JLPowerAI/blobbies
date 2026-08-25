@@ -17,8 +17,17 @@ import { gzipSync } from "node:zlib";
  *  differs across platforms (measured: same chunk hash, 185 kB on macOS,
  *  186 kB on Linux), so the gate must not sit at the boundary. It exists to
  *  catch a whole SDK landing in the startup chunk (+20 kB or more), not
- *  ±1 kB compression variance. */
-const STARTUP_GZIP_BUDGET_KB = 190;
+ *  ±1 kB compression variance.
+ *
+ *  Raised 190 → 200 on 2026-08-25. The chunk had drifted to 189 kB on macOS
+ *  and 190 kB on Linux — the gate was sitting exactly at the boundary, the
+ *  one thing the paragraph above says it must not do, so CI failed on the
+ *  cross-platform ±1 kB rather than on a real regression. The ACP editor
+ *  bridge then added ~1 kB of ordinary wiring (one hook plus a handful of
+ *  event publishes; the protocol, its SDK and its UI are all lazy chunks).
+ *  200 kB restores ~10 kB of slack while staying far below the +20 kB an
+ *  SDK leak costs, which is what this gate is for. */
+const STARTUP_GZIP_BUDGET_KB = 200;
 
 const assetsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "assets");
 const startup = readdirSync(assetsDir).filter((file) => /^index-[^/]+\.js$/.test(file));

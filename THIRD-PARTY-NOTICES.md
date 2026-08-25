@@ -29,6 +29,7 @@ unmodified at the pinned checksums recorded in src-tauri/build.rs.
 
 | Package | Version | Licence / copyright | Repository |
 | --- | --- | --- | --- |
+| @agentclientprotocol/sdk | 1.4.0 | Apache-2.0 — Zed Industries | git+https://github.com/agentclientprotocol/typescript-sdk.git |
 | @ai-sdk/openai-compatible | 3.0.30 | Apache-2.0 | https://github.com/vercel/ai |
 | @ai-sdk/provider | 4.0.7 | Apache-2.0 | https://github.com/vercel/ai |
 | @ai-sdk/provider-utils | 5.0.27 | Apache-2.0 | https://github.com/vercel/ai |

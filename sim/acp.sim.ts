@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,9 +25,21 @@ import type { Group } from "@/lib/groups";
  *   pnpm acp:relay && pnpm sim:acp
  */
 
+// The bundled sidecar, which `src-tauri/build.rs` produces on any cargo build
+// of the app crate — the same file that ships inside the .app, rather than a
+// second copy a wrapper script happened to leave in target/release.
+//
 // jsdom gives `import.meta.url` an http origin, so the path is resolved from
 // the working directory instead — vitest runs from the repo root.
-const RELAY = join(process.cwd(), "src-tauri", "target", "release", "blobbies-acp");
+// Found by suffix rather than by computing the triple: whatever cargo just
+// built for is the thing worth testing, and it saves shelling out to rustc.
+const BINARIES = join(process.cwd(), "src-tauri", "binaries");
+const RELAY = join(
+  BINARIES,
+  (existsSync(BINARIES) ? readdirSync(BINARIES) : []).find(
+    (name) => name.startsWith("blobbies-acp-") && !name.endsWith(".d"),
+  ) ?? "blobbies-acp-missing",
+);
 const TOKEN = "b".repeat(64);
 
 const researcher: Agent = {
