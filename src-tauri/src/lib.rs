@@ -3,6 +3,7 @@ mod capture;
 mod commands;
 mod error;
 mod home;
+mod media;
 mod notifications;
 mod oauth;
 mod ocr;
@@ -61,6 +62,10 @@ pub fn run() {
             secrets::secret_delete,
             skills::skills_list,
             skills::skills_save,
+            media::ffmpeg_present,
+            media::media_info,
+            media::media_clip,
+            media::media_audio,
             acp::acp_start,
             acp::acp_stop,
             acp::acp_send,

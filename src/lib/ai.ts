@@ -16,6 +16,7 @@ import {
   makeBlobTools,
   makeComposioTools,
   makeFsTools,
+  makeMediaTools,
   makeRosterTools,
   makeRoutineTools,
   makeSaveSkillTool,
@@ -27,6 +28,7 @@ import {
 import type { HomeBackend } from "@/lib/home";
 import { type Intent, routeIntent } from "@/lib/intent";
 import { loadMcpTools, type McpServerConfig } from "@/lib/mcp";
+import { ffmpegPresent } from "@/lib/media";
 import { OLLAMA_URL } from "@/lib/ollama";
 import {
   OLLAMA_KEEP_ALIVE,
@@ -929,6 +931,13 @@ export async function streamBlobTurn(options: {
       // Writing a skill needs a skills folder, which only the desktop build
       // has — same fail-closed shape as the capture tools above.
       ...(isTauri() ? [makeSaveSkillTool()] : []),
+      // Hidden entirely when ffmpeg is absent, rather than offered and failing
+      // on use: a tool in the list is a promise the model plans around.
+      // Probed per turn, not cached: it is a handful of stat calls, and a
+      // user who just installed ffmpeg should not have to restart the app.
+      ...(options.home !== undefined && (await ffmpegPresent())
+        ? makeMediaTools(options.home.id)
+        : []),
       ...rosterTools,
       ...(options.routines === undefined ? [] : makeRoutineTools(options.routines)),
       ...mcpTools,

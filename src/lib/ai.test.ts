@@ -1284,9 +1284,14 @@ describe("streamBlobTurn routine scope", () => {
       // web tools through the Tauri HTTP plugin for every later test too.
       delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
     }
-    // The command ran, and named the Blob whose sandbox contains it.
-    expect(invoke.mock.calls[0]?.[0]).toBe("shell_run");
-    expect(invoke.mock.calls[0]?.[1]).toEqual({
+    // The command ran, and named the Blob whose sandbox contains it. Found by
+    // name rather than by position: building a turn's catalog now also probes
+    // the backend for ffmpeg, so `shell_run` is no longer call zero. Asserting
+    // there is exactly ONE of them keeps what the index used to imply — the
+    // turn ran the command once, not once per loop.
+    const ran = invoke.mock.calls.filter((call) => call[0] === "shell_run");
+    expect(ran).toHaveLength(1);
+    expect(ran[0]?.[1]).toEqual({
       id: "61ec34f1-9ba5-4eff-b8e1-7acefb2148ea",
       program: "cat",
       args: ["notes.md"],

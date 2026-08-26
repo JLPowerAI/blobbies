@@ -4,6 +4,7 @@ import { ExternalLink } from "@/components/ExternalLink";
 import { PillSelect } from "@/components/PillSelect";
 import { COMPOSIO_DASHBOARD_URL, composioSignedIn, forgetComposioSession } from "@/lib/composio";
 import { composioLogIn, composioSignOut } from "@/lib/composio-oauth";
+import { ffmpegPresent } from "@/lib/media";
 import {
   getOllamaVersion,
   isOllamaInstalled,
@@ -315,6 +316,9 @@ export function SettingsModal({
   const [composioKeyDraft, setComposioKeyDraft] = useState("");
   const [composio, setComposio] = useState<ComposioStatus>(COMPOSIO_IDLE);
   const [skills, setSkills] = useState<Skill[]>([]);
+  // `undefined` until probed, so the row can say "checking" rather than
+  // claiming ffmpeg is missing before it has looked.
+  const [ffmpeg, setFfmpeg] = useState<boolean | undefined>(undefined);
   const dialogRef = useRef<HTMLDivElement>(null);
   const { closing, requestClose, finishClose } = useExitAnimation(onClose);
 
@@ -326,6 +330,9 @@ export function SettingsModal({
     if (tab === "model" && tinfoil.kind === "idle") {
       void probeTinfoil(setTinfoil);
     }
+    if (tab === "model" && ffmpeg === undefined) {
+      void ffmpegPresent().then(setFfmpeg);
+    }
     if (tab === "plugins" && composio.stage === "idle") {
       void probeComposio(setComposio);
       // Read here rather than from App's copy: this tab is where a user looks
@@ -333,7 +340,7 @@ export function SettingsModal({
       // captured at startup.
       void listSkills().then(setSkills);
     }
-  }, [tab, ollama.kind, tinfoil.kind, composio.stage]);
+  }, [tab, ollama.kind, tinfoil.kind, composio.stage, ffmpeg]);
 
   const availableModels = ollama.kind === "running" ? ollama.models : [];
   const tinfoilModels = tinfoil.kind === "configured" ? tinfoil.models : [];
@@ -809,6 +816,39 @@ export function SettingsModal({
                       Re-check
                     </button>
                   )}
+                </div>
+              </div>
+
+              {/* Not a model, but the same question the tabs above answer:
+                  what can this machine actually do? A Blob's media tools are
+                  hidden entirely without ffmpeg, so this is the only place
+                  that says why they are missing. */}
+              <p className="modal-section-label">Media</p>
+              <div className="modal-card">
+                <div className="modal-row modal-row-multiline">
+                  <span className="modal-row-text">
+                    <span className="modal-row-title ollama-title">
+                      <span
+                        className={`ollama-dot ollama-dot-${ffmpeg === true ? "ok" : "warn"}`}
+                        aria-hidden="true"
+                      />
+                      ffmpeg
+                    </span>
+                    <span className="modal-row-blurb" aria-live="polite">
+                      {ffmpeg === undefined
+                        ? "Checking…"
+                        : ffmpeg
+                          ? "Found. Your Blobs can describe, trim and pull the audio out of media files in their own folders."
+                          : "Not found, so those tools are hidden. Install it with `brew install ffmpeg`, then re-check."}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="modal-button"
+                    onClick={() => void ffmpegPresent().then(setFfmpeg)}
+                  >
+                    Re-check
+                  </button>
                 </div>
               </div>
 

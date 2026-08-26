@@ -17,6 +17,7 @@ import {
   windowTextLimit,
 } from "@/lib/context-window";
 import type { HomeBackend } from "@/lib/home";
+import { mediaAudio, mediaClip, mediaInfo } from "@/lib/media";
 import { applyMemoryWrite, type BlobMemory, knownFact, normaliseFact } from "@/lib/memory";
 import { coerceSchedule, describeSchedule, type RoutineSchedule } from "@/lib/schedule";
 import { hostIsPublic, isTauri, runCommand } from "@/lib/tauri";
@@ -1403,6 +1404,90 @@ export function makeComposioTools(model?: string): AgentTool[] {
  * one they are refused outright, matching `makeFsTools` being absent when a
  * turn has no home.
  */
+/**
+ * Media tools, for a Blob whose machine has ffmpeg.
+ *
+ * Every one is a fixed job — describe, cut a range, lift the audio — never a
+ * command line. The Rust side builds the argv and contains both ends of it in
+ * this Blob's home; see `src-tauri/src/media.rs` for why that is not a shell
+ * allowlist entry.
+ */
+export function makeMediaTools(blobId: string): AgentTool[] {
+  const infoParams = z.object({
+    path: z.string().describe('Media file in your home folder, e.g. "clips/talk.mp4"'),
+  });
+  const clipParams = z.object({
+    path: z.string().describe("Media file in your home folder to cut from"),
+    output: z.string().describe("New file to write, in your home folder. Must not exist yet."),
+    start: z.string().describe('Where to start, as seconds or HH:MM:SS — e.g. "90" or "00:01:30"'),
+    duration: z.string().describe('How long to keep, as seconds or HH:MM:SS — e.g. "30"'),
+  });
+  const audioParams = z.object({
+    path: z.string().describe("Media file in your home folder to take the audio from"),
+    output: z.string().describe('New audio file to write, e.g. "talk.wav". Must not exist yet.'),
+  });
+
+  const failed = (error: unknown) =>
+    typeof error === "string" ? `That didn't work: ${error}` : "That media job didn't work.";
+
+  const info: AgentTool<typeof infoParams> = {
+    name: "media_info",
+    description:
+      "Find out what a video or audio file in your home folder actually is — " +
+      "how long it runs, its size, and what streams it has. Do this before " +
+      "cutting, so the range you ask for exists.",
+    parameters: infoParams,
+    execute: async (args) => {
+      try {
+        const { report } = await mediaInfo(blobId, args.path);
+        // Fenced: this is a file's own metadata, written by whoever made the
+        // file, which makes it data and never an instruction.
+        return wrapUntrusted(report, args.path);
+      } catch (error) {
+        return failed(error);
+      }
+    },
+  };
+
+  const clip: AgentTool<typeof clipParams> = {
+    name: "media_clip",
+    description:
+      "Cut a time range out of a video or audio file in your home folder " +
+      "into a new file. Check the length with media_info first. The output " +
+      "must be a new name — nothing is ever overwritten.",
+    // Writes a file, and one transcode at a time is all the machine should give.
+    executionMode: "sequential",
+    parameters: clipParams,
+    execute: async (args) => {
+      try {
+        const made = await mediaClip(blobId, args.path, args.output, args.start, args.duration);
+        return `Wrote ${made.name} (${made.bytes} bytes).`;
+      } catch (error) {
+        return failed(error);
+      }
+    },
+  };
+
+  const audio: AgentTool<typeof audioParams> = {
+    name: "media_audio",
+    description:
+      "Lift the audio track out of a video in your home folder into its own " +
+      "file — useful before transcribing it. The output must be a new name.",
+    executionMode: "sequential",
+    parameters: audioParams,
+    execute: async (args) => {
+      try {
+        const made = await mediaAudio(blobId, args.path, args.output);
+        return `Wrote ${made.name} (${made.bytes} bytes).`;
+      } catch (error) {
+        return failed(error);
+      }
+    },
+  };
+
+  return [info, clip, audio];
+}
+
 /**
  * `save_skill`: the write half of the skills folder.
  *
