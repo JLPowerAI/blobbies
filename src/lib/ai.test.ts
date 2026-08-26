@@ -1552,7 +1552,47 @@ describe("streamBlobTurn routine scope", () => {
       onConfigure: () => {},
     });
     const subagent = calls.find((call) => call.name === "run_subagent");
-    expect(subagent?.result).toContain("nothing useful");
+    // Says the helper finished with nothing to report, and that the tool
+    // itself is not broken — the caller must not read this as a failure to
+    // retry (see the failure case below, which reads differently).
+    expect(subagent?.result).toContain("said nothing");
+    expect(subagent?.result).not.toContain("failed");
+  });
+
+  it("tells a helper that failed apart from one that merely had nothing to say", async () => {
+    // Observed as "run_subagent flaky": every dead end came back as one
+    // indistinguishable line, so the caller could not tell a broken helper
+    // from an empty answer and retried what would never work. The loop
+    // reports the cause on its error event; this asserts it survives.
+    let askedParent = false;
+    fetchHandler = async (_input, init) => {
+      if (isHelperRequest(init)) {
+        return new Response(JSON.stringify({ error: "model shrubbery not found" }), {
+          status: 400,
+          statusText: "Bad Request",
+        });
+      }
+      if (!askedParent) {
+        askedParent = true;
+        return ndjson(toolCallChunks("run_subagent", { name: "scout", task: "the weather" }));
+      }
+      return ndjson(textChunks("The helper broke, so I checked myself."));
+    };
+    const calls: ToolCallRecord[] = [];
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "the weather" }],
+      scope: "routine",
+      home: memoryHome(),
+      memory: { list: () => [], save: () => {} },
+      onToolCall: (call) => calls.push(call),
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    const subagent = calls.find((call) => call.name === "run_subagent");
+    expect(subagent?.result).toContain("failed");
+    // The cause, not just the fact: a bare "failed" is the same dead end.
+    expect(subagent?.result).toContain("shrubbery");
   });
 });
 

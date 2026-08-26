@@ -968,6 +968,19 @@ describe("routine tools", () => {
     expect(result).toContain("give a new instruction or a new schedule");
   });
 
+  it("names the missing kind when times arrive without one", async () => {
+    const routines = fakeRoutines([
+      { id: "r0", name: "Digest", instruction: "x", triggers: [], active: true },
+    ]);
+    // The schedule-shaped call that used to be told it gave no schedule.
+    const result = await find(routines.access, "update_routine")?.execute(
+      { name: "Digest", minutes: 1, count: 5 },
+      context,
+    );
+    expect(result).toContain("kind");
+    expect(routines.current[0]?.schedule).toBeUndefined();
+  });
+
   it("deletes by name and says when there is nothing to delete", async () => {
     const routines = fakeRoutines([
       { id: "r0", name: "Digest", instruction: "x", triggers: [], active: true },

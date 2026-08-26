@@ -419,6 +419,13 @@ function makeSubagentTool(context: {
           : `\n\nExtra instructions:\n${args.instructions.trim()}`);
       let text = "";
       let cutShort = false;
+      // Why these are tracked rather than inferred from empty text: a helper
+      // that failed, was refused, ran out of steps or was cancelled all end
+      // with nothing to say. Reporting one "nothing useful" for all four
+      // leaves the caller unable to tell a broken tool from a refusal, so it
+      // retries what will never work — the flakiness Issue 2 describes.
+      let failure: string | undefined;
+      let refused = false;
       try {
         const loop = agentLoop(
           [
@@ -446,7 +453,13 @@ function makeSubagentTool(context: {
           if (event.type === "max_turns") {
             cutShort = true;
           }
+          if (event.type === "truncated" && event.reason === "refusal") {
+            refused = true;
+          }
           if (event.type === "error") {
+            // The loop reports the cause here and then stops; dropping it was
+            // what turned every helper failure into silence.
+            failure = event.error.message;
             break;
           }
           if (toolContext.signal.aborted) {
@@ -460,12 +473,24 @@ function makeSubagentTool(context: {
         return `The helper failed: ${error instanceof Error ? error.message : "unknown error"}`;
       }
       const result = text.trim().slice(0, SUBAGENT_RESULT_LIMIT);
+      // Partial work still beats a bare error: report what came back, and say
+      // what interrupted it.
+      const note =
+        failure !== undefined
+          ? `The helper failed: ${failure}`
+          : toolContext.signal.aborted
+            ? "The helper was cancelled before it finished."
+            : refused
+              ? "The helper declined the task rather than failing — the task itself is the problem, so rephrase it or do it yourself instead of retrying."
+              : cutShort
+                ? "The helper ran out of steps; this may be incomplete."
+                : undefined;
       if (result === "") {
-        return "The helper returned nothing useful.";
+        return note === undefined
+          ? "The helper finished but said nothing. Nothing is wrong with the tool — give a task with a concrete answer to report back."
+          : `${note} It returned no result.`;
       }
-      return cutShort
-        ? `${result}\n[The helper ran out of steps; this may be incomplete.]`
-        : result;
+      return note === undefined ? result : `${result}\n[${note}]`;
     },
   };
   return tool;

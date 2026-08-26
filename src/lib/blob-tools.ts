@@ -1245,7 +1245,16 @@ export function makeRoutineTools(routines: RoutineAccess): AgentTool[] {
         patch.schedule = schedule;
       }
       if (patch.instruction === undefined && patch.schedule === undefined) {
-        return "Not updated: give a new instruction or a new schedule.";
+        // Schedule fields without `kind` are the common miss: the call LOOKS
+        // like a new schedule, so a "give me a schedule" refusal reads as a
+        // lie and the model retries the same call. Name the missing field.
+        const saidSchedule = [args.minutes, args.count, args.hour, args.minute, args.weekday].some(
+          (value) => value !== undefined,
+        );
+        return saidSchedule
+          ? "Not updated: a new schedule also needs kind ('interval', 'once', " +
+              "'daily' or 'weekly'). Call again with kind alongside the times."
+          : "Not updated: give a new instruction or a new schedule.";
       }
       return routines.update(args.name.trim(), patch)
         ? `Updated ${existing.name}${patch.schedule === undefined ? "" : ` — ${describeSchedule(patch.schedule)}`}.`
