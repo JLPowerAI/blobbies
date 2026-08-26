@@ -175,11 +175,16 @@ interface BlobAvatarProps {
 /** Glossy gradient blob used as each agent's identity mark. Decorative only. */
 export function BlobAvatar({
   tone,
-  shape = "sphere",
+  shape: requestedShape = "sphere",
   size = 38,
   variant = "idle",
 }: BlobAvatarProps) {
-  const [light, dark] = BLOB_GRADIENTS[tone];
+  // A roster is JSON on disk the user is told they may look at, and a tone or
+  // shape can also arrive from a build newer than this one. Neither is worth
+  // a blank window: an unknown value falls back to the default look, because
+  // the avatar is decoration and the Blob behind it still works.
+  const shape = requestedShape in SHAPES ? requestedShape : "sphere";
+  const [light, dark] = BLOB_GRADIENTS[tone] ?? BLOB_GRADIENTS.gray;
   // The same tone can render more than once (sidebar row + chat header), so
   // gradient/clip ids must be per-instance to stay unique in the document.
   const uid = useId();

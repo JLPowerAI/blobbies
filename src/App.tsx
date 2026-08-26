@@ -993,6 +993,10 @@ export function App() {
       time: "Now",
       lastActivityAt: Date.now(),
       snippet: GREETING,
+      // A copy opens a conversation of its own, and greets only when it has
+      // no role to greet over — the source's title and description are
+      // carried in by the spread above.
+      greeted: configFieldEmpty(source.title) && configFieldEmpty(source.description),
       unread: false,
       pinned: false,
       hidden: false,
@@ -1447,6 +1451,11 @@ export function App() {
       time: "Now",
       lastActivityAt: Date.now(),
       snippet: GREETING,
+      // Born with no role, so it opens by asking for one. Recorded rather
+      // than inferred later: the setup round fills that role in on the first
+      // turn, and a greeting derived from the role would disappear while the
+      // user is still reading it.
+      greeted: true,
       tone,
       shape,
       // Dev server only: something to look at in the Memories dialog before a
@@ -1609,6 +1618,47 @@ export function App() {
     // Anything watching this conversation from outside React (an attached ACP
     // editor) sees the same message the transcript just gained.
     publishConversation(conversationId, { type: "message", message });
+  };
+
+  /**
+   * Run a failed turn again.
+   *
+   * The apology comes off first: it is not something the Blob had to say,
+   * and leaving it in history means the next turn reads its own excuse back
+   * and tends to repeat it. What is left ends with the user's message, which
+   * is exactly the state the first attempt started from.
+   */
+  const retryFailedTurn = (conversationId: string, failed: Message) => {
+    const group = groupsRef.current.find(
+      (candidate) => groupConversationId(candidate.id) === conversationId,
+    );
+    // In a group the failure belongs to the member that hit it, not to the
+    // room; in a one-to-one chat the conversation IS the Blob.
+    const targetId =
+      failed.kind === "text" && failed.authorId !== undefined ? failed.authorId : conversationId;
+    const target = agentsRef.current.find((candidate) => candidate.id === targetId);
+    if (target === undefined) {
+      return;
+    }
+    dropMessage(conversationId, failed.id);
+    void queueTurn(() => {
+      const sent = sentRef.current[conversationId] ?? [];
+      return requestReply(
+        target,
+        // A group's history is the shared transcript; a Blob's own chat also
+        // has whatever has already been archived off the live slice.
+        group === undefined ? [...transcriptFor(target), ...sent] : sent,
+        group === undefined
+          ? undefined
+          : {
+              trigger: "user",
+              group: { id: group.id, name: group.name, members: membersOf(group) },
+              // It was asked once already — by the router or by name. A retry
+              // that lets it pass leaves the room silent for a second time.
+              mustAnswer: true,
+            },
+      );
+    }, conversationId);
   };
 
   /** Reflect the newest message in the sidebar (timestamp + snippet). */
@@ -1834,6 +1884,21 @@ export function App() {
             // catalog carries take_screenshot and the prompt names it. False
             // where capture cannot work at all (browser, Linux builds).
             canScreenshot: canCapture(),
+            // The rest of the user's team, on exactly the turns that carry the
+            // roster tools: a solo chat or an autonomous turn can hand work
+            // over or reconfigure a sibling, and both resolve names exactly.
+            // Withheld in a group, where those tools are withheld too and the
+            // Group chat section already names the room.
+            ...(group === undefined
+              ? {
+                  siblings: agentsRef.current
+                    .filter((candidate) => candidate.id !== target.id)
+                    .map(({ name, title }) => ({
+                      name,
+                      ...(title === undefined ? {} : { title }),
+                    })),
+                }
+              : {}),
             // What the window can no longer hold, in one paragraph. Changes
             // only on a compaction turn, which rewrites the history below it
             // anyway — so it costs no cache hit that was not already lost.
@@ -2019,6 +2084,20 @@ export function App() {
         return { ...previous, [convoId]: next };
       });
     };
+    /**
+     * Mark the turn's last bubble as a failure, so it renders with Retry and
+     * Dismiss. A no-op when the turn produced nothing at all, which cannot
+     * happen on the paths that call it — both write their explanation first.
+     */
+    const markLastFailed = () => {
+      const id = `${replyId}-${bubbleCount}`;
+      mutateSent((previous) => ({
+        ...previous,
+        [convoId]: (previous[convoId] ?? []).map((entry) =>
+          entry.id === id && entry.kind === "text" ? { ...entry, failed: true } : entry,
+        ),
+      }));
+    };
     /** Flush the partial transcript at safe points (gg-agent checkpoints). */
     const flushTranscript = () => {
       store.saveConversation(convoId, sentRef.current[convoId] ?? []);
@@ -2202,6 +2281,10 @@ export function App() {
           text = `${text}\u2026 (the model stopped responding)`;
           noteStopped("\u2026 (the model stopped responding)");
         }
+        // The last bubble is an explanation, not an answer: mark it so it
+        // carries Retry and Dismiss. Marked here rather than in the composer
+        // because only this path knows the turn ended badly.
+        markLastFailed();
       }
     } finally {
       activeTurns.current.delete(convoId);
@@ -2489,7 +2572,11 @@ export function App() {
     });
   };
 
-  /** Take back a message whose files all turned out to be unreadable. */
+  /**
+   * Take a message back out of a conversation, on screen and on disk: a
+   * message whose files all turned out to be unreadable, or a failed reply
+   * the user dismissed.
+   */
   const dropMessage = (conversationId: string, id: string) => {
     mutateSent((previous) => {
       const next = (previous[conversationId] ?? []).filter((entry) => entry.id !== id);
@@ -3086,6 +3173,8 @@ export function App() {
                 store.conversationSliceKey(groupConversationId(selectedGroup.id)),
               )}
               thinking={busy}
+              onRetry={(message) => retryFailedTurn(groupConversationId(selectedGroup.id), message)}
+              onDismiss={(id) => dropMessage(groupConversationId(selectedGroup.id), id)}
               {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
               {...(groupAsk?.askKind === undefined ? {} : { waitingAsk: groupAsk.askKind })}
               {...(groupAsker === undefined ? {} : { waitingAskAgent: groupAsker })}
@@ -3113,6 +3202,8 @@ export function App() {
           // — or queued here, which the user cannot tell apart and should not
           // have to: both mean “it has my message”.
           thinking={thinkingFor[agent.id] !== undefined || waitingTurns.includes(agent.id)}
+          onRetry={(message) => retryFailedTurn(agent.id, message)}
+          onDismiss={(id) => dropMessage(agent.id, id)}
           model={model}
           onModelChange={changeModel}
           reasoning={reasoning}
@@ -3141,6 +3232,12 @@ export function App() {
                   userMemories={userMemories}
                   onChangeMemories={changeMemories}
                   mcpServers={mcpServers}
+                  siblings={agents
+                    .filter((candidate) => candidate.id !== agent.id)
+                    .map(({ name, title }) => ({
+                      name,
+                      ...(title === undefined ? {} : { title }),
+                    }))}
                   onBack={() => setDetailView({ kind: "info" })}
                   onClose={() => setDetailOpen(false)}
                 />

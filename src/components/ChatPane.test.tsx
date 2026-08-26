@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatPane } from "@/components/ChatPane";
 import type { Agent, Message } from "@/data/agents";
 import type { PickedFile } from "@/lib/attachments";
+import * as store from "@/lib/store";
 
 /** Revealing a file is an OS call; what matters here is that it is asked for. */
 const revealFile = vi.fn(async (_path: string) => {});
@@ -1033,6 +1034,54 @@ describe("ChatPane", () => {
     }
   });
 
+  it("keeps the reader where they were when older messages load above", () => {
+    // Paging in 50 bubbles adds their height ABOVE the viewport, so leaving
+    // scrollTop alone moves every line the reader was looking at down the
+    // page. The fix is arithmetic: put back the height that was added.
+    const many: Message[] = Array.from({ length: 120 }, (_, i) => ({
+      id: `q${i}`,
+      kind: "text",
+      author: i % 2 === 0 ? "agent" : "user",
+      segments: [{ text: `Line ${i}` }],
+    }));
+    render(pane(false, vi.fn(), many));
+    const el = document.querySelector(".message-scroll");
+    if (!(el instanceof HTMLElement)) throw new Error("no scroller");
+
+    const shown = () => el.querySelectorAll(".message-row").length;
+    const before = shown();
+    const VIEWPORT = 200;
+    // Each mounted row is worth this much; the grown height is derived from
+    // the rows actually rendered, which is what a browser would report.
+    const ROW = 40;
+    let top = 100;
+    Object.defineProperty(el, "scrollHeight", { get: () => shown() * ROW, configurable: true });
+    Object.defineProperty(el, "clientHeight", { get: () => VIEWPORT, configurable: true });
+    Object.defineProperty(el, "scrollTop", {
+      get: () => top,
+      set: (value: number) => {
+        top = value;
+      },
+      configurable: true,
+    });
+    el.scrollTo = ((options: ScrollToOptions) => {
+      top = options.top ?? top;
+    }) as unknown as typeof el.scrollTo;
+
+    const heightBefore = shown() * ROW;
+    // Near the top: the page-in trigger.
+    act(() => {
+      el.scrollTop = 120;
+      el.dispatchEvent(new Event("scroll"));
+    });
+
+    // Older messages did mount...
+    expect(shown()).toBeGreaterThan(before);
+    // ...and the viewport moved down by exactly what they added, so the line
+    // the reader was on is still under their eyes.
+    expect(top).toBe(120 + (shown() * ROW - heightBefore));
+  });
+
   it("lets the re-clamping nudge actually land instead of erasing it", () => {
     // The defect behind four failed fixes, and the reason each one looked
     // right in tests and wrong on the machine.
@@ -1940,5 +1989,85 @@ describe("a created routine", () => {
     // the dim caption — same selector, answered the other way.
     expect(line.matches(".transcript-event:has(.transcript-event-subject)")).toBe(false);
     expect(line.querySelector("svg")).toBeNull();
+  });
+});
+
+describe("an unsent draft", () => {
+  it("is kept while typing and put back when the app comes up again", async () => {
+    // The loss it prevents: a half-written message is component state, so a
+    // reload — or a crash — threw the sentence away with no way back.
+    const saveDrafts = vi.spyOn(store, "saveDrafts").mockImplementation(() => {});
+    const user = userEvent.setup();
+    const { unmount } = render(pane(false, () => {}));
+
+    await user.type(screen.getByPlaceholderText("Message Ken"), "half a thought");
+    expect(saveDrafts).toHaveBeenLastCalledWith({ [agent.id]: "half a thought" });
+
+    // Coming back to it: what was written is what is in the composer.
+    unmount();
+    vi.spyOn(store, "loadDrafts").mockResolvedValue({ [agent.id]: "half a thought" });
+    render(pane(false, () => {}));
+    expect(await screen.findByDisplayValue("half a thought")).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it("belongs to its own conversation and does not follow the user to another", async () => {
+    vi.spyOn(store, "saveDrafts").mockImplementation(() => {});
+    vi.spyOn(store, "loadDrafts").mockResolvedValue({ [agent.id]: "for Ken only" });
+    const other: Agent = { ...agent, id: "b2b0f0d2-1111-4bbb-8ccc-2d3e4f5a6b7c", name: "Nova" };
+    const user = userEvent.setup();
+    const { rerender } = render(pane(false, () => {}));
+    expect(await screen.findByDisplayValue("for Ken only")).toBeInTheDocument();
+
+    rerender(
+      <ChatPane
+        agent={other}
+        messages={[]}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        onStop={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+    // Nova's composer is empty, and Ken's words are still Ken's.
+    expect(screen.getByPlaceholderText("Message Nova")).toHaveValue("");
+    await user.type(screen.getByPlaceholderText("Message Nova"), "hi");
+    rerender(pane(false, () => {}));
+    expect(screen.getByPlaceholderText("Message Ken")).toHaveValue("for Ken only");
+    vi.restoreAllMocks();
+  });
+});
+
+describe("dragging a file onto the composer", () => {
+  it("keeps the drop highlight lit while the pointer crosses the parts inside it", () => {
+    // WebKit reports a null `relatedTarget` on every dragenter and dragleave
+    // (bug 66547, open since 2011), and this app is a WKWebView. Any check
+    // that asks "did the pointer land on a child of mine?" is therefore
+    // always answered no, and the highlight flickered off every time the file
+    // passed over the textarea or a file chip on its way in.
+    render(pane(false, () => {}));
+    const composer = document.querySelector(".composer");
+    const field = screen.getByPlaceholderText("Message Ken");
+    if (!(composer instanceof HTMLElement)) throw new Error("no composer");
+
+    const drag = (type: string, on: Element) =>
+      fireEvent(on, new Event(type, { bubbles: true, cancelable: true }));
+
+    drag("dragenter", composer);
+    expect(composer).toHaveClass("composer-dragging");
+
+    // Onto the textarea inside it: one enter, one leave, still inside.
+    drag("dragenter", field);
+    drag("dragleave", composer);
+    expect(composer).toHaveClass("composer-dragging");
+
+    // And back out of the composer entirely: the highlight goes.
+    drag("dragleave", field);
+    expect(composer).not.toHaveClass("composer-dragging");
   });
 });

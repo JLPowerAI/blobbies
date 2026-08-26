@@ -260,6 +260,27 @@ describe("App", () => {
     expect(screen.getByLabelText(/Reacted with/)).toBeInTheDocument();
   });
 
+  it("puts the reaction on the bubble without moving the conversation", async () => {
+    // The chip used to be a row of its own inside the message, so reacting
+    // grew that message by a line and pushed every bubble below it down the
+    // transcript — a reaction rearranged the conversation around it.
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user);
+
+    const reactButtons = screen.getAllByRole("button", { name: "React" });
+    await user.click(reactButtons[0] as HTMLElement);
+    await user.click(screen.getByRole("button", { name: "React with thumbs up" }));
+
+    const chip = screen.getByLabelText(/Reacted with/);
+    // Out of flow, so it occupies no height in the message column.
+    expect(chip).toHaveClass("bubble-reaction");
+    expect(chip.closest(".message-line")).not.toBeNull();
+    // On the bubble's own line box, which hugs the bubble — not a sibling row
+    // of it, which is what took up the space.
+    expect(chip.parentElement).toHaveClass("message-line");
+  });
+
   it("routes palette creation through the creator with the query prefilled", async () => {
     const user = userEvent.setup();
     render(<App />);

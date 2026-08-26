@@ -29,6 +29,7 @@
     "sim:recap": "vitest run --config vitest.sim.config.ts sim/recap.sim.ts",
     "sim:routine": "vitest run --config vitest.sim.config.ts sim/routine.sim.ts",
     "sim:stress": "vitest run --config vitest.sim.config.ts sim/stress.sim.ts",
+    "sim:fleet": "vitest run --config vitest.sim.config.ts sim/fleet.sim.ts",
     "sim:routing": "vitest run --config vitest.sim.config.ts sim/routing.sim.ts",
     "sim:grounding": "vitest run --config vitest.sim.config.ts sim/grounding.sim.ts",
     "sim:recovery": "vitest run --config vitest.sim.config.ts sim/recovery.sim.ts",

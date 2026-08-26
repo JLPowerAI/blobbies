@@ -60,6 +60,18 @@ export interface PromptExtensions {
   /** Connected MCP servers, each a short "name: what it provides" line. */
   mcpServers?: string[];
   /**
+   * The other Blobs on the user's roster, this one excluded — their exact
+   * names and one-line jobs.
+   *
+   * Passed only on turns that carry the roster tools (so: not in a group,
+   * where App.tsx withholds them): the section tells the Blob to address
+   * these names with `update_blob` / `message_blob`, and naming a tool the
+   * model cannot see is the misfire the Tools catalog already avoids. An
+   * empty array is meaningful — "you are the only one so far" — while
+   * `undefined` renders no roster at all.
+   */
+  siblings?: readonly { name: string; title?: string }[];
+  /**
    * Apps connected through Composio, by display name.
    *
    * Only apps with a usable account: a half-finished or expired connection
@@ -362,6 +374,34 @@ export function blobSystemPrompt(
         ].join("\n"),
   );
 
+  // 6. Blobbies itself: the one thing no tool description and no configured
+  // role ever says — that this Blob is one of several the user keeps, and
+  // that its memories, home folder and routines belong to it alone. Without
+  // it a Blob asked "what are you?" answers from the role only, and
+  // `update_blob`'s own refusal ("check the name against the roster you were
+  // shown") pointed at a roster nothing ever showed: names were guesses.
+  //
+  // Below the tool and app inventories because it is the most volatile of the
+  // stable sections — a spawn or a delete rewrites it, and everything above
+  // here should survive that. Deliberately short: it is context, not a job.
+  const fleet = section(
+    "Blobbies",
+    "You are one of the user's Blobs in Blobbies, an app where they keep a " +
+      "small team of assistants. Your memories, home folder and routines are " +
+      "yours alone and persist between conversations.\n" +
+      (extensions.siblings === undefined
+        ? ""
+        : extensions.siblings.length === 0
+          ? "You are the only Blob so far."
+          : // Exact names, because these are what update_blob and message_blob
+            // resolve on: both refuse an unknown name outright.
+            `The user's other Blobs \u2014 use these exact names with update_blob and message_blob:\n${extensions.siblings
+              .map((blob) =>
+                configFieldEmpty(blob.title) ? `- ${blob.name}` : `- ${blob.name}: ${blob.title}`,
+              )
+              .join("\n")}`),
+  );
+
   // Group chat: stable for the life of the group, so it sits with the other
   // cacheable sections rather than near the memories. The labelling rule is
   // the one thing the model cannot infer — in the request, another Blob's
@@ -465,7 +505,7 @@ export function blobSystemPrompt(
     // Trimmed because `section` prefixes its own blank line, and the first
     // section is now the whole prompt's opening — without this every prompt
     // starts with two blank lines a model has to read past.
-    return `${role}${replies}${who}${capabilities}${skills}${mcp}${apps}${group}`.trim();
+    return `${role}${replies}${who}${capabilities}${skills}${mcp}${apps}${fleet}${group}`.trim();
   }
   // The compacted head of this conversation, beside the other volatile data:
   // it changes only when history is trimmed, and that same turn rewrites the
@@ -491,7 +531,7 @@ export function blobSystemPrompt(
   // they are always adjacent, and the duplicate spent a line of the
   // most-often-rewritten section saying what the line above it already said.
   const factsNote = shared === "" && memories === "" ? "" : `\n${MEMORY_DATA_NOTE}`;
-  return `${role}${replies}${who}${capabilities}${skills}${mcp}${apps}${group}${recap}${shared}${memories}${factsNote}`.trim();
+  return `${role}${replies}${who}${capabilities}${skills}${mcp}${apps}${fleet}${group}${recap}${shared}${memories}${factsNote}`.trim();
 }
 
 /**

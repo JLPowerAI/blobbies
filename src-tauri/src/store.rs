@@ -49,7 +49,17 @@ struct TrashMarker {
 /// read rejects, the startup `Promise.all` that hydrates roster, settings and
 /// groups rejects with it, and the app comes up empty. Adding a slice means
 /// adding it here in the same change (`store.test.ts` fails the drift).
-const ROOT_SLICES: [&str; 6] = ["settings", "ui-layout", "roster", "user", "groups", "acp"];
+const ROOT_SLICES: [&str; 7] = [
+    "settings",
+    "ui-layout",
+    "roster",
+    "user",
+    "groups",
+    "acp",
+    // Unsent composer text, keyed by conversation. Its own slice rather than
+    // part of a transcript: a keystroke must never rewrite a conversation.
+    "drafts",
+];
 
 /// Slices that live inside a Blob directory. `recap` is the rolling summary of
 /// the conversation's compacted head (see `lib/recap.ts`).

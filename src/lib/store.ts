@@ -252,9 +252,50 @@ if (typeof window !== "undefined") {
 
 // ---------------------------------------------------------------- typed API
 
+/**
+ * Everything below reads files the user is told they may open, written by
+ * builds that may be newer than this one. A record that arrives malformed —
+ * `null` in a list, a string where an object belongs, a missing id — reaches
+ * React as a crash: `roster.map(blob => blob.name)` on a null entry takes the
+ * whole window down, and losing the roster is far worse than losing one row.
+ *
+ * So each list is filtered here rather than trusted and cast. The rule is
+ * deliberately narrow: drop a record only when it cannot be identified or
+ * addressed, and leave odd-but-harmless values to the render, which falls
+ * back on its own (an unknown avatar tone draws the default rather than
+ * refusing to draw). Validating more than identity here would silently delete
+ * rows a future build added a field to.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A record carrying a usable string at `key`. */
+function hasText(value: Record<string, unknown>, key: string): boolean {
+  return typeof value[key] === "string" && value[key] !== "";
+}
+
+/**
+ * Keep the records of a stored list that are usable, drop the rest.
+ *
+ * Returns `null` for a slice that is not a list at all, which every caller
+ * reads as “nothing saved” — the same answer as a missing file.
+ */
+function usableRows<T>(
+  value: unknown,
+  usable: (row: Record<string, unknown>) => boolean,
+): T[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return value.filter((row): row is T => isRecord(row) && usable(row));
+}
+
 export async function loadRoster(): Promise<Agent[] | null> {
   const value = await rawRead("roster");
-  return Array.isArray(value) ? (value as Agent[]) : null;
+  // A Blob is addressed by id and shown by name; without either it cannot be
+  // opened, mentioned or drawn.
+  return usableRows<Agent>(value, (row) => hasText(row, "id") && hasText(row, "name"));
 }
 
 export function saveRoster(rows: Agent[]): void {
@@ -276,7 +317,9 @@ export function saveSettings(settings: Settings): void {
  */
 export async function loadUserMemories(): Promise<BlobMemory[] | null> {
   const value = await rawRead("user");
-  return Array.isArray(value) ? (value as BlobMemory[]) : null;
+  // A fact with no words is nothing to remember, and one with no id cannot be
+  // edited or forgotten again.
+  return usableRows<BlobMemory>(value, (row) => hasText(row, "id") && hasText(row, "text"));
 }
 
 export function saveUserMemories(memories: BlobMemory[]): void {
@@ -307,6 +350,34 @@ export async function loadAcpSettings(): Promise<AcpSettings> {
 
 export function saveAcpSettings(settings: AcpSettings): void {
   queueWrite("acp", settings);
+}
+
+/**
+ * Half-typed messages, keyed by conversation id.
+ *
+ * Its own root slice, not part of a transcript: a draft is not a message, and
+ * putting it in the transcript would rewrite that whole file on every
+ * keystroke (see `saveConversation`). One small record for every conversation
+ * instead, coalesced by the same 300ms debounce as everything else here.
+ *
+ * Read defensively: this file is on disk and the user is told they may look
+ * at it, so anything that is not a string is dropped rather than handed to
+ * the composer.
+ */
+export async function loadDrafts(): Promise<Record<string, string>> {
+  const value = await rawRead("drafts");
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1] !== "",
+    ),
+  );
+}
+
+export function saveDrafts(drafts: Record<string, string>): void {
+  queueWrite("drafts", drafts);
 }
 
 export async function loadUiLayout(): Promise<Partial<UiLayout> | null> {
@@ -351,27 +422,36 @@ const rollovers = new Map<string, Promise<void>>();
  * direction (nothing is lost), but the reader has to be the one that notices.
  */
 async function loadTranscript(base: string): Promise<Message[] | null> {
+  // Messages are addressed by id all the way through — dedupe below, reply
+  // targets, reactions, attachment patches — so one without a usable id is
+  // not a message this app can hold. `kind` picks the view; the card registry
+  // fails closed on a kind it does not know, but a missing one has no card at
+  // all. Anything past that is the card's problem, and a card that throws now
+  // costs its own line rather than the conversation.
+  const messages = (value: unknown): Message[] | null =>
+    usableRows<Message>(value, (row) => hasText(row, "id") && hasText(row, "kind"));
+
   let archived: Message[] = [];
   let archives = 0;
   for (;;) {
-    const value = await rawRead(`${base}/transcript-${archives + 1}`);
-    if (!Array.isArray(value)) {
+    const rolled = messages(await rawRead(`${base}/transcript-${archives + 1}`));
+    if (rolled === null) {
       break;
     }
-    archived = archived.concat(value as Message[]);
+    archived = archived.concat(rolled);
     archives += 1;
   }
-  const live = await rawRead(`${base}/transcript`);
+  const live = messages(await rawRead(`${base}/transcript`));
   if (archives === 0) {
     sealedTranscripts.delete(base);
-    return Array.isArray(live) ? (live as Message[]) : null;
+    return live;
   }
   sealedTranscripts.set(base, { archives, messages: archived.length });
-  if (!Array.isArray(live)) {
+  if (live === null) {
     return archived;
   }
   const seen = new Set(archived.map((message) => message.id));
-  return archived.concat((live as Message[]).filter((message) => !seen.has(message.id)));
+  return archived.concat(live.filter((message) => !seen.has(message.id)));
 }
 
 /**
@@ -420,7 +500,15 @@ function saveTranscript(base: string, messages: Message[]): void {
 
 export async function loadBlobRoutines(id: string): Promise<Routine[] | null> {
   const value = await rawRead(`blobs/${id}/routines`);
-  return Array.isArray(value) ? (value as Routine[]) : null;
+  const rows = usableRows<Routine>(value, (row) => hasText(row, "id") && hasText(row, "name"));
+  // `triggers` is the one field the panels iterate without asking first, so a
+  // routine that lost it takes the Routines screen down. Absent labels mean a
+  // routine with no triggers yet — which the UI already draws.
+  return rows === null
+    ? null
+    : rows.map((routine) =>
+        Array.isArray(routine.triggers) ? routine : { ...routine, triggers: [] },
+      );
 }
 
 export function saveBlobRoutines(id: string, routines: Routine[]): void {
@@ -445,7 +533,9 @@ export function saveBlobConfig(id: string, config: Agent): void {
  */
 export async function loadGroups(): Promise<Group[] | null> {
   const value = await rawRead("groups");
-  return Array.isArray(value) ? (value as Group[]) : null;
+  // A room is opened by id and listed by name; its members are looked up by
+  // that name, so a nameless group would strand every Blob assigned to it.
+  return usableRows<Group>(value, (row) => hasText(row, "id") && hasText(row, "name"));
 }
 
 export function saveGroups(groups: Group[]): void {

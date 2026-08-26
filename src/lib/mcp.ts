@@ -1,5 +1,6 @@
 import type { AgentTool } from "@kenkaiiii/gg-agent";
 import { z } from "zod";
+import { capToolText, toolTextLimit } from "@/lib/context-window";
 import { httpFetch } from "@/lib/http";
 import type { McpServerConfig, McpTool } from "@/lib/mcp-config";
 import { parseLoopbackUrl } from "@/lib/mcp-config";
@@ -42,7 +43,14 @@ const PROTOCOL_VERSION = "2025-06-18";
 /** A slow or wedged server must not hold a routine open. */
 const REQUEST_TIMEOUT_MS = 20_000;
 
-/** Cap on a tool result, matching web_fetch: ~570 tokens of a 16k window. */
+/**
+ * Cap on a tool result when the caller did not name a model.
+ *
+ * The real budget is `toolTextLimit(model)` — 3% of the window that will hold
+ * it, exactly what web_fetch spends on a page. This floor is what the old
+ * flat cap was: right for a 16k local window, and a 20x under-read on an
+ * enclave model, which is why the model is passed in wherever it is known.
+ */
 const RESULT_LIMIT = 3_000;
 
 /**
@@ -338,7 +346,7 @@ export function parseToolList(result: unknown): McpTool[] {
  * Only text content is read: an MCP server may return images and embedded
  * resources, and neither belongs in a local model's context uninspected.
  */
-export function flattenResult(result: unknown): string {
+export function flattenResult(result: unknown, limit: number = RESULT_LIMIT): string {
   const payload = result as { content?: unknown; isError?: unknown } | null;
   const content = payload?.content;
   const text = Array.isArray(content)
@@ -350,11 +358,14 @@ export function flattenResult(result: unknown): string {
         .filter((part) => part !== "")
         .join("\n")
     : "";
-  const trimmed = text.trim().slice(0, RESULT_LIMIT);
+  const trimmed = text.trim();
   if (trimmed === "") {
     return payload?.isError === true ? "The tool reported an error." : "The tool returned nothing.";
   }
-  return trimmed;
+  // Capped with a marker, never a bare slice: a server that answers with JSON
+  // cut at an arbitrary character leaves the model parsing a half-object and
+  // reporting the fragment as the whole result.
+  return capToolText(trimmed, limit);
 }
 
 /** Cap on parameters mirrored from a server-supplied schema. */
@@ -469,6 +480,8 @@ export function makeMcpTools(
 export async function loadMcpTools(
   servers: McpServerConfig[],
   signal?: AbortSignal,
+  /** Sizes how much of one result the model can hold; omitted means the floor. */
+  model?: string,
 ): Promise<AgentTool[]> {
   // One set across every server, so no server can shadow another's tool.
   // Sequential for the same reason: "first one wins" needs a stable order.
@@ -487,6 +500,7 @@ export async function loadMcpTools(
             wrapUntrusted(
               flattenResult(
                 await rpc(session, "tools/call", { name, arguments: args }, callSignal),
+                toolTextLimit(model),
               ),
               server.name,
             ),

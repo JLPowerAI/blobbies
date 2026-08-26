@@ -812,7 +812,7 @@ export async function streamBlobTurn(options: {
   // nothing: loadMcpTools drops it and the run keeps its other tools.
   const mcpTools =
     (options.mcpServers ?? []).length > 0
-      ? await loadMcpTools(options.mcpServers ?? [], options.signal)
+      ? await loadMcpTools(options.mcpServers ?? [], options.signal, options.model)
       : [];
 
   /**
@@ -883,7 +883,7 @@ export async function streamBlobTurn(options: {
     // only once something is connected: with no account the model would spend
     // rounds discovering there is nothing to call. Deliberately outside the
     // router's web verdict — see the `tools` line below.
-    const appTools = options.hasConnectedApps === true ? makeComposioTools() : [];
+    const appTools = options.hasConnectedApps === true ? makeComposioTools(options.model) : [];
     // One catalog for every turn (2026-08-20, owner's call): a Blob's
     // capabilities must not depend on who started the turn — "spawn up 3
     // bots", "read that file", "run that command" are chat requests as much

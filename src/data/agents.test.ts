@@ -71,6 +71,33 @@ describe("transcriptFor", () => {
     expect(entries[0]?.id).not.toBe(entries[1]?.id);
   });
 
+  it("keeps greeting after the setup round fills in the Blob's own role", () => {
+    // The greeting used to be inferred from title/description, so the first
+    // turn — which sets both — deleted these bubbles out of a conversation the
+    // user was in the middle of reading.
+    const configured: Agent = {
+      ...blob(),
+      greeted: true,
+      title: "Inbox summariser",
+      description: "Summarises mail",
+    };
+    expect(transcriptFor(configured)).toHaveLength(2);
+  });
+
+  it("gives a Blob born with a role nothing to contradict it", () => {
+    // spawn_blob requires both fields, so this Blob never asked what to do —
+    // and this history reaches the model, where the canned lines would read
+    // as its own words arguing against the role it was born with.
+    const born: Agent = { ...blob(), title: "Files receipts", description: "Sorts receipts" };
+    expect(transcriptFor(born)).toEqual([]);
+  });
+
+  it("still greets a Blob saved before the flag existed", () => {
+    // Rosters already on disk carry no `greeted`, so the old inference stays
+    // as the fallback rather than silently dropping their greeting.
+    expect(transcriptFor(blob())).toHaveLength(2);
+  });
+
   it("prefers the seeded conversation when one exists", () => {
     const agent = blob();
     transcripts[agent.id] = [

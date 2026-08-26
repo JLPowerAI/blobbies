@@ -77,3 +77,49 @@ export function contextWindow(model: string): number {
   }
   return tinfoilWindows.get(tinfoilModelId(model)) ?? TINFOIL_FALLBACK_WINDOW;
 }
+
+/**
+ * How many characters of one tool's output may enter the prompt.
+ *
+ * Same 3%-of-window budget `fetchTextLimit` gives a fetched page, and for the
+ * same reason: a result is only useful if the model can hold it. A flat cap
+ * is wrong in both directions — 3,000 characters is most of a 16k local
+ * window and 0.3% of deepseek's.
+ */
+export function toolTextLimit(model?: string): number {
+  return windowTextLimit(model === undefined ? OLLAMA_NUM_CTX : contextWindow(model));
+}
+
+/**
+ * The 3%-of-window share, in characters, that any one blob of external text
+ * may take: a fetched page, an MCP result, an app result.
+ *
+ * One function because it is one budget — `fetchTextLimit` had this body
+ * first and now delegates, so a page and a tool result cannot drift apart.
+ * 5.3 characters per token is this app's ratio for prose, where the usual
+ * conservative 4 assumes code.
+ */
+export function windowTextLimit(window: number): number {
+  return Math.min(Math.max(Math.round(window * 0.03 * 5.3), 3_000), 60_000);
+}
+
+/**
+ * Cut oversized tool output, and say so in words the model can act on.
+ *
+ * A silent cut is the expensive failure: JSON stops mid-object, the model
+ * reads what it got as the whole answer, and reports a partial list as
+ * complete. Naming the real size and the remedy — narrow the call — is what
+ * turns "the search worked but I only saw six of forty repos" into a retry
+ * that fits.
+ */
+export function capToolText(text: string, limit: number): string {
+  if (text.length <= limit) {
+    return text;
+  }
+  return (
+    `${text.slice(0, limit)}\n[cut off: the tool returned ${text.length} characters and you ` +
+    `can read only the first ${limit}. The rest is gone — it is not in a file and not ` +
+    "retrievable. Run the call again asking for fewer items or fewer fields, and tell the " +
+    "user which part you could not see rather than treating this as the whole answer.]"
+  );
+}

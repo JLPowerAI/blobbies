@@ -1,9 +1,7 @@
 import {
   ArrowDown,
   ArrowUp,
-  Clock,
   CornerUpRight,
-  Download,
   Ellipsis,
   FileText,
   Image as ImageIcon,
@@ -16,7 +14,9 @@ import {
 } from "lucide-react";
 import {
   type FormEvent,
+  Fragment,
   type KeyboardEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -26,17 +26,18 @@ import {
   useState,
 } from "react";
 import { BlobAvatar } from "@/components/BlobAvatar";
-import { MarkdownContent } from "@/components/MarkdownContent";
+import { messageCard } from "@/components/cards/registry";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { withMentions } from "@/components/Mention";
 import { PillSelect } from "@/components/PillSelect";
 import { type Agent, MAX_BLOB_NAME_LENGTH, type Message } from "@/data/agents";
 import { type Attachment, MAX_ATTACHMENTS, type PickedFile } from "@/lib/attachments";
 import { fileBadge, fileKind } from "@/lib/file-kind";
-import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
-import { type MentionPalette, mentionPalette } from "@/lib/mentions";
+import { mentionPalette } from "@/lib/mentions";
 import { prefersReducedMotion } from "@/lib/motion";
 import { listOllamaModels, type OllamaModel } from "@/lib/ollama";
 import { imagePreview } from "@/lib/preview";
+import * as store from "@/lib/store";
 import { revealFile } from "@/lib/tauri";
 // Tinfoil's real module (attestation stack) is a lazy chunk; only the pure
 // id helpers are static. The probe/model-list go through `import()`.
@@ -72,6 +73,14 @@ interface ChatPaneProps {
   thinking?: boolean;
   /** In a group, which member is generating — `agent` is only the fallback. */
   thinkingAgent?: Agent;
+  /**
+   * Run a failed turn again: the message is the one that failed, and it comes
+   * off the transcript before the retry so the Blob does not read its own
+   * apology back as history.
+   */
+  onRetry?: (message: Message) => void;
+  /** Take a failed message off the transcript for good. */
+  onDismiss?: (messageId: string) => void;
   /** Ollama model tag driving replies; "" until one is chosen. */
   model: string;
   onModelChange: (model: string) => void;
@@ -251,93 +260,12 @@ function dividerLabel(previous: number | null, ms: number): string | null {
   return ms - previous >= TIME_DIVIDER_GAP_MS ? clockLabel(ms) : null;
 }
 
-function TextBubble({
-  message,
-  palette,
-}: {
-  message: Extract<Message, { kind: "text" }>;
-  palette?: MentionPalette | undefined;
-}) {
-  // An ask renders as a highlighted card: the Blob paused its task and needs
-  // the user — "action" means "do this yourself" (login, click, paste).
-  const askClass =
-    message.ask === undefined
-      ? ""
-      : message.ask === "action"
-        ? " bubble-ask bubble-ask-action"
-        : " bubble-ask";
-  const quote =
-    message.replyTo === undefined ? null : <span className="bubble-quote">{message.replyTo}</span>;
-
-  if (message.author === "user") {
-    return (
-      <div className="bubble bubble-user">
-        {quote}
-        {/* The user's own words render verbatim; only the agent speaks markdown. */}
-        {message.segments.map((segment) =>
-          segment.accent === true ? (
-            <span key={segment.text} className="bubble-accent">
-              {segment.text}
-            </span>
-          ) : (
-            // The user's own @mentions are highlighted too: they are what
-            // actually decides who answers, so they must read as addressing.
-            <span key={segment.text}>{withMentions(segment.text, palette)}</span>
-          ),
-        )}
-      </div>
-    );
-  }
-
-  // Each table becomes its own block: a bubble hugs its text and caps at a
-  // fraction of the pane, which squeezes columns until headers wrap mid-word.
-  const blocks = splitMarkdownBlocks(message.segments.map((segment) => segment.text).join(""));
-  return (
-    <div className="bubble-stack">
-      {blocks.map((block, position) => (
-        <div
-          key={block.line}
-          className={
-            block.kind === "table"
-              ? "bubble bubble-agent bubble-table"
-              : `bubble bubble-agent${askClass}`
-          }
-        >
-          {position === 0 ? quote : null}
-          <MarkdownContent text={block.text} palette={palette} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function FileBubble({ message }: { message: Extract<Message, { kind: "file" }> }) {
-  return (
-    <div className="bubble bubble-file">
-      <span className="file-badge" aria-hidden="true">
-        PDF
-      </span>
-      <span className="file-text">
-        <span className="file-name">{message.fileName}</span>
-        <span className="file-meta">{message.meta}</span>
-      </span>
-      <button
-        type="button"
-        className="icon-button file-download"
-        aria-label={`Download ${message.fileName}`}
-      >
-        <Download size={15} strokeWidth={1.8} aria-hidden="true" />
-      </button>
-    </div>
-  );
-}
-
 interface MessageRowProps {
   message: Message;
   /** In a group, the Blob that said it — its name and face go above the bubble. */
   author?: Agent | undefined;
-  /** In a group, the members' colours — highlights `@Name` in the text. */
-  palette?: MentionPalette | undefined;
+  /** The message's own view, chosen by the card registry. */
+  card: ReactNode;
   reaction: string | undefined;
   pickerOpen: boolean;
   /** Arrived after mount: plays the in-place jelly pop exactly once. */
@@ -358,7 +286,7 @@ interface MessageRowProps {
 function MessageRow({
   message,
   author,
-  palette,
+  card,
   reaction,
   pickerOpen,
   fresh,
@@ -370,29 +298,6 @@ function MessageRow({
   onReact,
   onReply,
 }: MessageRowProps) {
-  // Event lines are status, not speech: no actions, reactions or bubble.
-  if (message.kind === "event") {
-    return (
-      <p className="timestamp-divider transcript-event" role="status">
-        {message.text}
-        {message.subject === undefined ? null : (
-          <>
-            {" "}
-            {/* The same clock the Routines list puts beside a routine, so the
-                two read as the same object in two places. Decorative: the
-                label right next to it already says what this is. */}
-            <Clock
-              className="transcript-event-icon"
-              size={14}
-              strokeWidth={1.8}
-              aria-hidden="true"
-            />{" "}
-            <span className="transcript-event-subject">{message.subject.label}</span>
-          </>
-        )}
-      </p>
-    );
-  }
   const side = message.kind === "text" && message.author === "user" ? "user" : "agent";
   return (
     <div
@@ -498,19 +403,17 @@ function MessageRow({
               ))}
             </span>
           )}
-          {/* An attachment-only message has no words, so it gets no empty bubble. */}
-          {message.kind !== "text" ? (
-            <FileBubble message={message} />
-          ) : message.segments.some((segment) => segment.text !== "") ? (
-            <TextBubble message={message} palette={palette} />
-          ) : null}
+          {card}
         </div>
+        {/* Inside the line, which hugs the bubble: the chip is placed against
+            the bubble's own edges, and taken out of flow so that reacting
+            does not add a row and shunt the transcript below it downwards. */}
+        {reaction === undefined ? null : (
+          <span className="bubble-reaction" role="img" aria-label={`Reacted with ${reaction}`}>
+            {reaction}
+          </span>
+        )}
       </div>
-      {reaction === undefined ? null : (
-        <span className="bubble-reaction" role="img" aria-label={`Reacted with ${reaction}`}>
-          {reaction}
-        </span>
-      )}
     </div>
   );
 }
@@ -666,6 +569,8 @@ export function ChatPane({
   onRenameGroup,
   thinking = false,
   thinkingAgent,
+  onRetry,
+  onDismiss,
   model,
   onModelChange,
   reasoning,
@@ -680,6 +585,12 @@ export function ChatPane({
   onOpenSettings,
 }: ChatPaneProps) {
   const [draft, setDraft] = useState("");
+  /**
+   * Every conversation's unsent draft, as last written to disk. A ref, not
+   * state: nothing on screen reads the other conversations' drafts, and this
+   * changes on every keystroke.
+   */
+  const draftsRef = useRef<Record<string, string>>({});
   /** Files picked but not sent yet; they are saved only once the message goes.
       Keyed by id, not name: picking the same file twice is two chips. */
   const [attached, setAttached] = useState<
@@ -687,6 +598,9 @@ export function ChatPane({
   >([]);
   /** True while a drag hovers the composer, so the drop target is visible. */
   const [dragging, setDragging] = useState(false);
+  /** Nested elements the dragged file is currently over; see the composer's
+      drag handlers for why a count and not `relatedTarget`. */
+  const dragDepth = useRef(0);
   /** The message being replied to: its preview, and its id — which is what
       routes the reply to one member in a group. */
   const [replyTo, setReplyTo] = useState<{ id: string; preview: string } | null>(null);
@@ -919,6 +833,30 @@ export function ChatPane({
   const conversationKey = group?.id ?? agent.id;
 
   /**
+   * Keep the draft, so closing the app mid-sentence does not throw the
+   * sentence away. Written from the handlers that change it rather than from
+   * an effect on `draft`: at a conversation switch both the key and the text
+   * change in one commit, and an effect would see the new key beside the old
+   * text and file one conversation's words under another's name.
+   */
+  const rememberDraft = useCallback(
+    (text: string) => {
+      const next = { ...draftsRef.current };
+      // Whitespace is not a draft; leaving it in would restore a composer
+      // that looks empty but counts as unsent.
+      if (text.trim() === "") {
+        delete next[conversationKey];
+      } else {
+        next[conversationKey] = text;
+      }
+      draftsRef.current = next;
+      // Debounced 300ms inside the store, so a fast typist writes once.
+      store.saveDrafts(next);
+    },
+    [conversationKey],
+  );
+
+  /**
    * Page size back to one page the moment the conversation changes — during
    * render, not in an effect.
    *
@@ -1047,13 +985,28 @@ export function ChatPane({
     }
   }, []);
 
-  // Fresh conversation, fresh composer: clear the draft, reply chip and
-  // reaction picker when switching Blobs so state never leaks across.
-  // biome-ignore lint/correctness/useExhaustiveDependencies(conversationKey): only the switch matters
+  // The drafts on disk, once. Whatever is waiting for the conversation that
+  // is open goes straight into the composer: the read finishes long before
+  // anyone has typed, and a draft is only replaced by an empty composer.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(conversationKey): the mount value is the one being restored
   useEffect(() => {
-    setDraft("");
+    void store.loadDrafts().then((saved) => {
+      draftsRef.current = saved;
+      const waiting = saved[conversationKey];
+      if (waiting !== undefined) {
+        setDraft((current) => (current === "" ? waiting : current));
+      }
+    });
+  }, []);
+
+  // Fresh conversation, fresh composer: restore that conversation's own
+  // draft, and clear the reply chip and reaction picker when switching Blobs
+  // so state never leaks across.
+  useEffect(() => {
+    setDraft(draftsRef.current[conversationKey] ?? "");
     setAttached([]);
     setDragging(false);
+    dragDepth.current = 0;
     setMention(null);
     // Inlined rather than through `editName`: a non-stable function in here
     // is one the dependency lint has to be argued with.
@@ -1507,6 +1460,8 @@ export function ChatPane({
     // under a bubble that has already drawn.
     setMultiline(false);
     setDraft("");
+    // Sent, so there is nothing left to keep.
+    rememberDraft("");
     setAttached([]);
     setMention(null);
     closeReply();
@@ -1571,7 +1526,9 @@ export function ChatPane({
       return;
     }
     const start = caret - typed[0].length + (typed[0].startsWith("@") ? 0 : 1);
-    setDraft(`${draft.slice(0, start)}@${name} ${draft.slice(caret)}`);
+    const completed = `${draft.slice(0, start)}@${name} ${draft.slice(caret)}`;
+    setDraft(completed);
+    rememberDraft(completed);
     setMention(null);
     // Put the caret after the inserted name, not at the end of the draft:
     // mentions are often typed mid-sentence. Handed to the layout effect
@@ -1903,37 +1860,63 @@ export function ChatPane({
           }
         }}
       >
-        {(messages.length > visibleCount ? messages.slice(-visibleCount) : messages).flatMap(
-          (message) => [
-            ...(dividers.has(message.id)
-              ? [
-                  <p className="timestamp-divider" key={`${message.id}-divider`}>
-                    {dividers.get(message.id)}
-                  </p>,
-                ]
-              : []),
-            <MessageRow
-              fresh={!initialIds.current.has(message.id)}
-              onPopped={() => markPopped(message.id)}
-              key={message.id}
-              message={message}
-              author={
-                message.kind === "text"
-                  ? group?.members.find((member) => member.id === message.authorId)
-                  : undefined
-              }
-              palette={palette}
-              reaction={reactions[message.id]}
-              pickerOpen={pickerFor === message.id}
-              stale={hoverId !== undefined && hoverId !== message.id}
-              reading={readingMessages.includes(message.id)}
-              onEnter={() => setHoverId(message.id)}
-              onTogglePicker={() => setPickerFor(pickerFor === message.id ? null : message.id)}
-              onReact={(emoji) => toggleReaction(message.id, emoji)}
-              onReply={() => startReply(message)}
-            />,
-          ],
-        )}
+        {/* Keyed on the conversation, so a crash caused by one transcript is
+            not still on screen after switching to another. `inline`: the
+            roster and the composer outlive one unrenderable message. */}
+        <ErrorBoundary inline key={group?.id ?? agent.id}>
+          {(messages.length > visibleCount ? messages.slice(-visibleCount) : messages).flatMap(
+            (message) => {
+              // The registry picks the view; a kind this build has never heard of
+              // gets a placeholder here rather than an exception in the pane.
+              const failed = message.kind === "text" && message.failed === true;
+              const card = messageCard(message, {
+                palette,
+                // Only a failed turn is offered a way back; every other
+                // message would just carry two dead buttons.
+                ...(failed && onRetry !== undefined ? { onRetry: () => onRetry(message) } : {}),
+                ...(failed && onDismiss !== undefined
+                  ? { onDismiss: () => onDismiss(message.id) }
+                  : {}),
+              });
+              return [
+                ...(dividers.has(message.id)
+                  ? [
+                      <p className="timestamp-divider" key={`${message.id}-divider`}>
+                        {dividers.get(message.id)}
+                      </p>,
+                    ]
+                  : []),
+                // Status lines are not speech: no bubble, no hover bar, no reactions.
+                card.standalone ? (
+                  <Fragment key={message.id}>{card.node}</Fragment>
+                ) : (
+                  <MessageRow
+                    fresh={!initialIds.current.has(message.id)}
+                    onPopped={() => markPopped(message.id)}
+                    key={message.id}
+                    message={message}
+                    card={card.node}
+                    author={
+                      message.kind === "text"
+                        ? group?.members.find((member) => member.id === message.authorId)
+                        : undefined
+                    }
+                    reaction={reactions[message.id]}
+                    pickerOpen={pickerFor === message.id}
+                    stale={hoverId !== undefined && hoverId !== message.id}
+                    reading={readingMessages.includes(message.id)}
+                    onEnter={() => setHoverId(message.id)}
+                    onTogglePicker={() =>
+                      setPickerFor(pickerFor === message.id ? null : message.id)
+                    }
+                    onReact={(emoji) => toggleReaction(message.id, emoji)}
+                    onReply={() => startReply(message)}
+                  />
+                ),
+              ];
+            },
+          )}
+        </ErrorBoundary>
         {/* Always mounted: reserves its space (nothing overlaps or jumps) and
             lets the blob fade in/out instead of popping with the DOM. */}
         <div
@@ -2016,15 +1999,29 @@ export function ChatPane({
         // webview navigates away to the file instead.
         onDragOver={(event) => {
           event.preventDefault();
+        }}
+        // Counted, not tested against `relatedTarget`: this app runs in a
+        // WKWebView, where dragenter and dragleave always report a null
+        // related target (WebKit bug 66547, open since 2011). The containment
+        // check that reads correctly everywhere else is therefore always
+        // false here — so crossing onto the textarea, a file chip or the send
+        // button read as leaving, and the highlight flickered the whole way
+        // across the composer. A child entered is one enter and one leave, so
+        // the depth only reaches zero when the pointer really is out.
+        onDragEnter={() => {
+          dragDepth.current += 1;
           setDragging(true);
         }}
-        onDragLeave={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        onDragLeave={() => {
+          dragDepth.current = Math.max(0, dragDepth.current - 1);
+          if (dragDepth.current === 0) {
             setDragging(false);
           }
         }}
         onDrop={(event) => {
           event.preventDefault();
+          // A drop ends the drag outright, however deep it was.
+          dragDepth.current = 0;
           setDragging(false);
           addFiles(event.dataTransfer.files);
         }}
@@ -2175,6 +2172,7 @@ export function ChatPane({
               value={draft}
               onChange={(event) => {
                 setDraft(event.currentTarget.value);
+                rememberDraft(event.currentTarget.value);
                 trackMention(event.currentTarget.value, event.currentTarget.selectionStart);
               }}
               // The caret can leave a half-typed mention without the text

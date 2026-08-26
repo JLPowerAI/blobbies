@@ -3,7 +3,7 @@ import type { Message as AiMessage } from "@kenkaiiii/gg-ai";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_SHAPES, type Agent, AVATAR_TONES } from "@/data/agents";
+import { AGENT_SHAPES, type Agent, AVATAR_TONES, GREETING } from "@/data/agents";
 import type { streamBlobTurn as StreamBlobTurn } from "@/lib/ai";
 import { subscribeConversation } from "@/lib/conversation-bus";
 import type { SchedulerHost } from "@/lib/scheduler";
@@ -409,6 +409,104 @@ describe("turn wiring", () => {
     expect(String(result?.content)).toContain("Did you mean 'q'?");
   });
 
+  it("keeps the setup greeting once the Blob names its own job", async () => {
+    // The greeting used to be derived from title/description, so the setup
+    // round — which fills both in on the very first turn — deleted it out of
+    // a conversation the user was in the middle of reading.
+    const user = userEvent.setup();
+    script = [
+      (options) => {
+        options.onConfigure?.({ title: "Inbox summariser", description: "Summarises mail" });
+        options.onSegment?.("On it.");
+        return "On it.";
+      },
+    ];
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+    const transcript = () => screen.getByRole("log");
+    expect(within(transcript()).getByText(GREETING)).toBeInTheDocument();
+
+    await say(user, "summarise my inbox every morning");
+
+    // The Blob took a title — and the words it opened with are still there.
+    await waitFor(() => expect(within(transcript()).getByText("On it.")).toBeInTheDocument());
+    expect(within(transcript()).getByText(GREETING)).toBeInTheDocument();
+  });
+
+  it("gives a Blob born with a role no setup greeting to contradict it", async () => {
+    // spawn_blob requires a title and description, so this one never asked
+    // what to do — and those canned lines reach the model as its own prior
+    // words, where they argue against the role it was born with.
+    const user = userEvent.setup();
+    script = [() => "Spawning.", () => "Ready."];
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+    await say(user, "make me a helper");
+    await callRosterTool("spawn_blob", {
+      name: "Filer",
+      title: "Files receipts",
+      description: "Sorts receipts into folders",
+      instructions: "File every receipt.",
+    });
+
+    await user.click(await screen.findByRole("button", { name: /Filer/ }));
+    const log = await screen.findByRole("log");
+    expect(within(log).queryByText(GREETING)).not.toBeInTheDocument();
+  });
+
+  it("offers a way back from a turn that failed, instead of only an apology", async () => {
+    // Before this the failure was an ordinary agent bubble: the only way to
+    // try again was to type the whole question out a second time.
+    script = [
+      () => {
+        throw new Error("connection refused");
+      },
+      () => "Otters are semi-aquatic mammals.",
+    ];
+    const user = userEvent.setup();
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+    await say(user, "tell me about otters");
+
+    // Several matches: the bubble, and the sidebar snippet echoing it.
+    await screen.findAllByText(/couldn't reach the local model/);
+    const retry = await screen.findByRole("button", { name: "Retry" });
+
+    await user.click(retry);
+    // The turn ran again...
+    await waitFor(() => expect(calls.length).toBe(2));
+    expect(await screen.findByText("Otters are semi-aquatic mammals.")).toBeInTheDocument();
+    // ...from the question, with the apology taken out of history first: a
+    // Blob that reads its own excuse back tends to repeat it.
+    const replayed = (calls[1]?.messages ?? []).map((entry) => String(entry.content)).join(" ");
+    expect(replayed).toContain("tell me about otters");
+    expect(replayed).not.toContain("couldn't reach the local model");
+    expect(document.querySelector(".turn-failed-actions")).toBeNull();
+  });
+
+  it("lets a failed turn be dismissed outright", async () => {
+    script = [
+      () => {
+        throw new Error("connection refused");
+      },
+    ];
+    const user = userEvent.setup();
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+    await say(user, "tell me about otters");
+
+    await screen.findAllByText(/couldn't reach the local model/);
+    const transcript = document.querySelector(".message-scroll");
+    expect(transcript?.textContent).toContain("couldn't reach the local model");
+    await user.click(await screen.findByRole("button", { name: "Dismiss" }));
+
+    // Gone from the transcript, and no turn was started by dismissing it.
+    await waitFor(() =>
+      expect(transcript?.textContent).not.toContain("couldn't reach the local model"),
+    );
+    expect(calls.length).toBe(1);
+  });
+
   it("animates the sidebar row's avatar while its turn runs", async () => {
     const user = userEvent.setup();
     let release = () => {};
@@ -575,6 +673,51 @@ describe("turn wiring", () => {
     expect(AGENT_SHAPES).toContain(filer?.shape);
     // A real id, so the scheduler and per-Blob slices can address it.
     expect(filer?.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("rebuilds the roster in the prompt after a spawn and after a delete", async () => {
+    const user = userEvent.setup();
+    script = [() => "Done.", () => "Done.", () => "Done."];
+    mountWithModel();
+    await createFirstBlob(user, "Ken");
+
+    // Alone on the roster: the only honest thing to say, and saying nothing
+    // leaves a Blob to invent a colleague when asked to hand work over.
+    await say(user, "hello");
+    const first = String(
+      calls[0]?.messages.find((message) => message.role === "system")?.content ?? "",
+    );
+    expect(first).toContain("You are the only Blob so far.");
+
+    await callRosterTool("spawn_blob", {
+      name: "Filer",
+      title: "Files things",
+      description: "Keeps the inbox tidy.",
+      instructions: "Be terse.",
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Filer/ })).toBeInTheDocument());
+
+    // The prompt is assembled per turn from the live roster, so a Blob spawned
+    // mid-session is addressable on the very next turn — no reload, and no
+    // stale copy captured when the conversation opened.
+    await say(user, "who else is around?");
+    const second = String(
+      calls[1]?.messages.find((message) => message.role === "system")?.content ?? "",
+    );
+    expect(second).toContain("- Filer: Files things");
+    expect(second).not.toContain("only Blob so far");
+
+    // ...and a deleted Blob leaves it, which matters more: a name that no
+    // longer resolves is a hand-off the user never sees happen.
+    expect(await callRosterTool("delete_blob", { name: "Filer", confirm_name: "Filer" })).toContain(
+      "Filer",
+    );
+    await say(user, "and now?");
+    const third = String(
+      calls[2]?.messages.find((message) => message.role === "system")?.content ?? "",
+    );
+    expect(third).not.toContain("Filer");
+    expect(third).toContain("You are the only Blob so far.");
   });
 
   it("gives each spawned Blob a different style, not N gray spheres", async () => {

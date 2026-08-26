@@ -308,6 +308,60 @@ describe("blobSystemPrompt", () => {
     expect(prompt).not.toContain("update_blob");
   });
 
+  it("tells the Blob what it is part of, and lists its siblings by exact name", async () => {
+    const { blobSystemPrompt } = await import("@/lib/ai");
+    const blob = { name: "Researcher", title: "Finds things", description: "Helps." };
+
+    // The frame no configured role ever carries: one of several assistants,
+    // with storage of its own that outlives the conversation.
+    const solo = blobSystemPrompt(blob);
+    expect(solo).toContain("## Blobbies");
+    expect(solo).toContain("one of the user's Blobs in Blobbies");
+    expect(solo).toContain("persist between conversations");
+
+    // Roster: exact names, and the title beside each so a hand-off can pick
+    // the Blob whose job it is rather than the first name it recognises.
+    const withSiblings = blobSystemPrompt(blob, undefined, {
+      siblings: [{ name: "Writer", title: "Drafts posts" }, { name: "Scout" }],
+    });
+    expect(withSiblings).toContain("- Writer: Drafts posts");
+    // No title (or a placeholder one) renders the bare name, never a dangling
+    // colon or the word "none" as a job description.
+    expect(withSiblings).toContain("- Scout");
+    expect(withSiblings).not.toContain("- Scout:");
+    expect(
+      blobSystemPrompt(blob, undefined, { siblings: [{ name: "Scout", title: "none" }] }),
+    ).not.toContain("Scout: none");
+    expect(withSiblings).toContain("update_blob and message_blob");
+
+    // The empty roster is a fact worth stating: without it a lone Blob asked
+    // to hand work over invents a colleague to hand it to.
+    const only = blobSystemPrompt(blob, undefined, { siblings: [] });
+    expect(only).toContain("You are the only Blob so far.");
+    // ...and NOTHING roster-shaped beyond that sentence: no header promising a
+    // list, no bullets, no tool names. A dangling "The user's other Blobs:"
+    // with nothing under it is worse than silence — the model fills it in.
+    expect(only).not.toContain("The user's other Blobs");
+    expect(only).not.toContain("update_blob and message_blob");
+    const fleetLines = ((only.split("## Blobbies")[1] ?? "").split("\n## ")[0] ?? "").split("\n");
+    expect(fleetLines.filter((line) => line.startsWith("- "))).toEqual([]);
+
+    // Not passed at all (a group turn, where the roster tools are withheld):
+    // the identity paragraph still renders — a Blob in a room is no less a
+    // Blob — but no roster line names a tool it cannot call.
+    const inGroup = blobSystemPrompt(blob, undefined, {
+      group: { name: "Launch", others: ["Writer"] },
+    });
+    expect(inGroup).toContain("one of the user's Blobs in Blobbies");
+    expect(inGroup).not.toContain("only Blob so far");
+    expect(inGroup).not.toContain("update_blob");
+
+    // Under ~60 words: this is context in a prefix every turn pays for, not a
+    // second job description competing with the role above it.
+    const words = (solo.split("## Blobbies")[1] ?? "").split("\n## ")[0] ?? "";
+    expect(words.trim().split(/\s+/).length).toBeLessThan(60);
+  });
+
   it("treats placeholder 'none' config as unconfigured, so the setup round re-arms", async () => {
     const { blobSystemPrompt } = await import("@/lib/ai");
     // Live 2026-08-19: a configure round once saved title/description "none"

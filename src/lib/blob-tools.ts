@@ -9,7 +9,13 @@ import {
   type Routine,
 } from "@/data/agents";
 import { composioExecute, composioSchema, composioSearch } from "@/lib/composio";
-import { contextWindow, OLLAMA_NUM_CTX } from "@/lib/context-window";
+import {
+  capToolText,
+  contextWindow,
+  OLLAMA_NUM_CTX,
+  toolTextLimit,
+  windowTextLimit,
+} from "@/lib/context-window";
 import type { HomeBackend } from "@/lib/home";
 import { applyMemoryWrite, type BlobMemory, knownFact, normaliseFact } from "@/lib/memory";
 import { coerceSchedule, describeSchedule, type RoutineSchedule } from "@/lib/schedule";
@@ -53,10 +59,7 @@ import { wrapUntrusted } from "@/lib/untrusted";
  * | 131k Tinfoil fallback | ~20,800 chars |
  * | 1M deepseek-v4-flash | 60,000 chars (ceiling) |
  */
-export function fetchTextLimit(window: number): number {
-  const chars = Math.round(window * 0.03 * 5.3);
-  return Math.min(Math.max(chars, 3_000), 60_000);
-}
+export const fetchTextLimit = windowTextLimit;
 
 const SEARCH_RESULT_LIMIT = 5;
 
@@ -1314,7 +1317,13 @@ export function makeRoutineTools(routines: RoutineAccess): AgentTool[] {
  * instruction. This is the highest-value fence in the app — these tools hold
  * real credentials and can send mail.
  */
-export function makeComposioTools(): AgentTool[] {
+export function makeComposioTools(model?: string): AgentTool[] {
+  // App results were the one tool output nothing capped: a bulk search can
+  // return a megabyte, which fits no window and silently shoves the
+  // conversation out of the one it lands in. Same budget as a fetched page,
+  // and `capToolText` says what was cut, so the model narrows the call
+  // instead of reporting the fragment it could read as the whole answer.
+  const limit = toolTextLimit(model);
   const searchParams = z.object({
     query: z
       .string()
@@ -1332,7 +1341,8 @@ export function makeComposioTools(): AgentTool[] {
       "tool names and a plan. You cannot know these names in advance, so never " +
       "guess one: look it up, check it with app_tool_schema, then run it.",
     parameters: searchParams,
-    execute: async (args) => wrapUntrusted(await composioSearch(args.query), "composio"),
+    execute: async (args) =>
+      wrapUntrusted(capToolText(await composioSearch(args.query), limit), "composio"),
   };
 
   const schemaParams = z.object({
@@ -1345,7 +1355,8 @@ export function makeComposioTools(): AgentTool[] {
       "means, example values. One call here is cheaper than a failed run and " +
       "a retry, so read the schema rather than guessing argument names.",
     parameters: schemaParams,
-    execute: async (args) => wrapUntrusted(await composioSchema(args.tool), "composio"),
+    execute: async (args) =>
+      wrapUntrusted(capToolText(await composioSchema(args.tool), limit), "composio"),
   };
 
   const runParams = z.object({
@@ -1370,7 +1381,10 @@ export function makeComposioTools(): AgentTool[] {
     // and must not be fired in parallel batches.
     executionMode: "sequential",
     execute: async (args) =>
-      wrapUntrusted(await composioExecute(args.tool, args.arguments), "composio"),
+      wrapUntrusted(
+        capToolText(await composioExecute(args.tool, args.arguments), limit),
+        "composio",
+      ),
   };
 
   return [search, schema, run];

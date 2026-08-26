@@ -24,6 +24,8 @@ interface SettingsPanelProps {
   onChangeMemories: (next: { blob?: BlobMemory[]; user?: BlobMemory[] }) => void;
   /** App-wide local MCP servers (not per-Blob); named in the prompt preview. */
   mcpServers: McpServerConfig[];
+  /** The user's other Blobs, as a 1:1 turn sends them; keeps the preview honest. */
+  siblings: readonly { name: string; title?: string }[];
   /** Back to the info (screen + routines) view. */
   onBack: () => void;
   onClose: () => void;
@@ -37,6 +39,7 @@ export function SettingsPanel({
   userMemories,
   onChangeMemories,
   mcpServers,
+  siblings,
   onBack,
   onClose,
 }: SettingsPanelProps) {
@@ -200,6 +203,7 @@ export function SettingsPanel({
           prompt={blobSystemPrompt(agent, user, {
             userMemories,
             mcpServers: mcpServers.filter((server) => server.enabled).map((server) => server.name),
+            siblings,
             redactMemories: true,
           })}
           onClose={() => setPromptOpen(false)}

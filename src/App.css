@@ -3254,15 +3254,39 @@ a.modal-button {
   background: var(--surface-control);
 }
 
+/* Sits ON the bubble's bottom outer corner rather than under it.
+
+   In flow this chip was its own row in the message column, so reacting grew
+   the message by a line and pushed every bubble below it down the transcript
+   — the reaction moved the conversation. Out of flow it costs no height, and
+   the line box it now lives in hugs the bubble, so it has the bubble's real
+   edges to hang off.
+
+   `z-index` because it overlaps: it paints over the gap below rather than
+   being covered by the message after it. */
 .bubble-reaction {
+  position: absolute;
+  bottom: 0;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   padding: 2px 7px;
+  /* Half on the bubble, half below: reads as attached to the bubble rather
+     than as a separate thing sitting under it. */
+  translate: 0 45%;
   border-radius: 999px;
   background: var(--surface-control);
   border: 1px solid var(--border-hairline);
   font-size: 12px;
-  margin-top: -2px;
+}
+
+/* The outer corner on each side — the side the bubble is already aligned to. */
+.message-row-agent .bubble-reaction {
+  left: 10px;
+}
+
+.message-row-user .bubble-reaction {
+  right: 10px;
 }
 
 .timestamp-divider {
@@ -3330,6 +3354,13 @@ a.modal-button {
 .transcript-event {
   font-weight: 600;
   color: var(--accent-green);
+}
+
+/* A message this build cannot draw. Muted, not green like the event lines it
+   sits among: those report something that worked, and this is a gap. */
+.card-unavailable {
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
 /* A line naming a thing ("Created routine ⏱ Nightly digest") reads as caption
@@ -3408,6 +3439,93 @@ a.modal-button {
   /* Optical: aligns the glyph with the first line's cap height rather than
      its box, which otherwise rides high next to wrapped text. */
   margin-block-start: 1px;
+}
+
+/* A turn that did not finish. Under the explanation, because the buttons are
+   the answer to it: try again, or take it off the transcript. */
+.turn-failed-actions {
+  display: flex;
+  gap: 6px;
+  margin-block-start: 2px;
+}
+
+.turn-failed-action {
+  padding: 4px 12px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.turn-failed-action:hover {
+  opacity: 0.8;
+}
+
+/* A render threw. Centred and quiet rather than alarming: the user cannot fix
+   this, so the screen's job is to say what happened and hand over the error.
+   `crash-inline` is the same surface confined to the transcript, where the
+   rest of the app is still working around it. */
+.crash-surface {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 32px;
+  background: var(--surface-chat);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  text-align: center;
+}
+
+.crash-inline {
+  height: auto;
+  padding: 24px 16px;
+}
+
+.crash-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.crash-detail {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--status-err);
+  font-size: 13px;
+  line-height: 1.45;
+  /* An error message can be one unbroken token (a URL, a stack frame). */
+  overflow-wrap: anywhere;
+}
+
+.crash-actions {
+  display: flex;
+  gap: 8px;
+  margin-block-start: 4px;
+}
+
+.crash-button {
+  padding: 6px 14px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.crash-button:hover {
+  opacity: 0.8;
 }
 
 /* Files section: routine-row plus a trailing delete button. The row rule

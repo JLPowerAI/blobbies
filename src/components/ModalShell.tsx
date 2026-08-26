@@ -1,8 +1,9 @@
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { createPortal } from "react-dom";
 import { useExitAnimation } from "@/lib/useExitAnimation";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 
 interface ModalShellProps {
   /** Heading text, and the noun in the close button's label. */
@@ -38,9 +39,10 @@ export function ModalShell({ title, titleNote, ariaLabel, children, onClose }: M
   const dialogRef = useRef<HTMLDivElement>(null);
   const { closing, requestClose, finishClose } = useExitAnimation(onClose);
 
-  useEffect(() => {
-    dialogRef.current?.focus();
-  }, []);
+  // Focuses the dialog on open, keeps Tab inside it — which is what makes the
+  // `aria-modal` below true rather than a claim — and hands focus back to the
+  // control that opened it on close.
+  useFocusTrap(dialogRef);
 
   return createPortal(
     // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-to-dismiss mirrors the Escape path

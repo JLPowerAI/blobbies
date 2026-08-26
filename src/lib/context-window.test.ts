@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { contextWindow, OLLAMA_NUM_CTX, rememberTinfoilWindows } from "@/lib/context-window";
+import {
+  capToolText,
+  contextWindow,
+  OLLAMA_NUM_CTX,
+  rememberTinfoilWindows,
+  toolTextLimit,
+} from "@/lib/context-window";
 
 /**
  * Which window each model choice reports.
@@ -51,5 +57,38 @@ describe("contextWindow", () => {
     expect(contextWindow("tinfoil:zero-model")).toBe(131_072);
     expect(contextWindow("tinfoil:nan-model")).toBe(131_072);
     expect(contextWindow("tinfoil:negative-model")).toBe(131_072);
+  });
+});
+
+describe("tool output budget", () => {
+  it("sizes a tool result to the window that has to hold it", () => {
+    // The floor is the old flat cap: correct for a 16k local window, which is
+    // why it stays exactly where it was.
+    expect(toolTextLimit("qwen3.5:9b")).toBe(3_000);
+    expect(toolTextLimit()).toBe(3_000);
+    // An enclave model was reading 3,000 characters of a result it had room
+    // for a hundred times over.
+    rememberTinfoilWindows([{ id: "roomy", contextWindow: 1_000_000 }]);
+    expect(toolTextLimit("tinfoil:roomy")).toBe(60_000);
+    // ...and never the whole window: one greedy result must still leave space
+    // for the conversation it is answering.
+    expect(toolTextLimit("tinfoil:roomy")).toBeLessThan(1_000_000);
+  });
+
+  it("says a result was cut, how big it was, and what to do instead", () => {
+    // Short output is passed through untouched — no marker on a full answer,
+    // or the model hedges a complete result.
+    expect(capToolText("small", 3_000)).toBe("small");
+
+    const cut = capToolText(JSON.stringify({ repos: "x".repeat(50_000) }), 3_000);
+    expect(cut).toContain("cut off");
+    // The real size, so the model can judge how much narrower to go.
+    expect(cut).toContain("50012 characters");
+    // The remedy, because the failure this prevents is a Blob reporting six
+    // of forty results as the whole list.
+    expect(cut).toContain("fewer items");
+    // And the truth about the rest: not parked in a file it can open, so it
+    // does not go hunting for one.
+    expect(cut).toContain("not retrievable");
   });
 });

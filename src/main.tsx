@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@/App";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { initAutoUpdate } from "@/lib/updater";
 
 // Fire-and-forget: checks now and every few hours, no-op outside Tauri.
@@ -26,12 +27,18 @@ if (container === null) {
  * so the fault can be chased with hot reload instead of a 10-minute rebuild.
  * It changes nothing about the release bundle.
  */
+// Inside the mode switch but around the app in both arms: a render that
+// throws has to reach a surface with Reload and Copy-error on it either way.
 const app =
   import.meta.env.VITE_NO_STRICT === "1" ? (
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   ) : (
     <StrictMode>
-      <App />
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
     </StrictMode>
   );
 

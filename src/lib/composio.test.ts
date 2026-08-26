@@ -6,6 +6,7 @@ import {
   startComposioLink,
   waitForComposioLink,
 } from "@/lib/composio";
+import { rememberTinfoilWindows } from "@/lib/context-window";
 
 /**
  * Stand in for the transport, so these tests exercise the parsing rather than
@@ -189,5 +190,49 @@ describe("waitForComposioLink", () => {
     await expect(waiting).resolves.toBe(false);
     // Sleeping through the abort would cost a full 2s poll interval.
     expect(Date.now() - started).toBeLessThan(1_500);
+  });
+});
+
+describe("app tool results", () => {
+  it("caps an oversized app result to what the model's window can hold", async () => {
+    // The gap this closes, from a real run: GITHUB_SEARCH_REPOSITORIES answers
+    // with tens of thousands of tokens. Every other tool output in the app was
+    // bounded — web_fetch by window, local MCP at 3,000, read_file at 6,000 —
+    // and this path had no cap at all, so a bulk search could hand a 16k local
+    // window a megabyte and push the conversation out of it.
+    const { makeComposioTools } = await import("@/lib/blob-tools");
+    // Sized between the two budgets on purpose: far past a 16k window's share
+    // and comfortably inside an enclave model's, so one payload proves both
+    // that the cut happens and that it is not applied to a model with room.
+    reply.text = JSON.stringify({ items: Array.from({ length: 200 }, () => "repo".repeat(50)) });
+    expect(reply.text.length).toBeGreaterThan(30_000);
+    expect(reply.text.length).toBeLessThan(60_000);
+
+    const run = makeComposioTools("qwen3.5:9b").find((tool) => tool.name === "app_run_tool");
+    const result = String(
+      await run?.execute({ tool: "GITHUB_SEARCH_REPOSITORIES", arguments: "{}" }, {
+        signal: new AbortController().signal,
+      } as never),
+    );
+
+    // Small local window: the floor, plus the fence that always wraps app data.
+    expect(result.length).toBeLessThan(5_000);
+    expect(result).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    // Told, not silently trimmed — otherwise the Blob reports the first few
+    // repos as the complete answer.
+    expect(result).toContain("cut off");
+    expect(result).toContain("fewer items");
+
+    // An enclave model has room for the whole thing, so it gets it: the same
+    // window-sized budget web_fetch already uses for a page.
+    rememberTinfoilWindows([{ id: "wide", contextWindow: 1_000_000 }]);
+    const wide = makeComposioTools("tinfoil:wide").find((tool) => tool.name === "app_run_tool");
+    const full = String(
+      await wide?.execute({ tool: "GITHUB_SEARCH_REPOSITORIES", arguments: "{}" }, {
+        signal: new AbortController().signal,
+      } as never),
+    );
+    expect(full).not.toContain("cut off");
+    expect(full).toContain(reply.text);
   });
 });

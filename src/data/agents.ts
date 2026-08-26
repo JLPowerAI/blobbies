@@ -118,6 +118,17 @@ export interface Agent {
   section?: string;
   /** Hidden Blobs stay in the roster but are not listed in the sidebar. */
   hidden?: boolean;
+  /**
+   * This Blob opened its conversation with the setup greeting — set once, at
+   * creation, for a Blob born without a role.
+   *
+   * Recorded rather than re-derived from `title`/`description`, because those
+   * change: the setup round fills them in on the first turn, and a greeting
+   * derived from them would vanish out of a conversation the user is in the
+   * middle of reading. Whether those words were said is a fact about the
+   * past, so it is stored like one.
+   */
+  greeted?: boolean;
   /** Lasting facts the Blob saved via its remember tool. */
   memories?: import("@/lib/blob-tools").BlobMemory[];
   /** Short role line, e.g. "Handles my inbox". */
@@ -208,8 +219,22 @@ export type Message =
        * re-promised the same fix on every following turn — it could not tell
        * it had already tried. Hence every tool, its arguments, and whether it
        * failed, not just the reads.
+       *
+       * Replayed into the next turn's history, never rendered: the
+       * transcript shows what a Blob said, not the machinery behind it.
        */
       toolTrace?: ToolTraceEntry[];
+      /**
+       * The turn did not finish: the model was unreachable, or it stopped
+       * mid-reply. The text is an explanation rather than an answer, so the
+       * message carries Retry and Dismiss instead of standing as something
+       * the Blob had to say.
+       *
+       * On the message rather than in component state because the failure
+       * has to survive a reload — a transcript that comes back holding an
+       * apology and no way to retry is exactly what this replaces.
+       */
+      failed?: true;
     }
   | {
       id: string;
@@ -401,13 +426,20 @@ export function transcriptFor(agent: Agent): Message[] {
   if (seeded !== undefined) {
     return seeded;
   }
-  // Only the unconfigured get the setup greeting. A Blob born configured —
-  // spawner-set title/description (spawn_blob requires both), or one whose
-  // setup round already ran — would otherwise open with "tell me what to
-  // handle" over a role it already has; worse, this history is fed to the
-  // model too, where those canned lines read as the Blob's own prior words
-  // and quietly argue against the configuration it was born with.
-  if (!configFieldEmpty(agent.title) || !configFieldEmpty(agent.description)) {
+  // Only a Blob that greeted keeps the greeting. A Blob born configured —
+  // spawner-set title/description (spawn_blob requires both) — never said
+  // these words: it would otherwise open with "tell me what to handle" over a
+  // role it already has, and this history is fed to the model too, where the
+  // canned lines read as its own prior words and quietly argue against the
+  // configuration it was born with.
+  //
+  // `greeted` is the record of what was actually said, written once at
+  // creation. The config check is only a fallback for Blobs saved before that
+  // flag existed: config changes the moment the setup round runs, so a
+  // greeting derived from it disappears out of a conversation mid-read.
+  const greeted =
+    agent.greeted ?? (configFieldEmpty(agent.title) && configFieldEmpty(agent.description));
+  if (!greeted) {
     return [];
   }
   // Fixed text, not agent.snippet: the snippet follows the latest activity,

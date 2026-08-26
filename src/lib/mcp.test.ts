@@ -251,8 +251,18 @@ describe("flattenResult", () => {
     });
     expect(result).toBe("hello\nworld");
 
+    // Default budget is the small-window floor, and the cut is announced: a
+    // bare slice through JSON leaves the model reading half an object as the
+    // whole answer.
     const long = flattenResult({ content: [{ type: "text", text: "y".repeat(50_000) }] });
-    expect(long.length).toBe(3_000);
+    expect(long).toContain("y".repeat(3_000));
+    expect(long).toContain("cut off");
+    expect(long).toContain("50000 characters");
+
+    // A caller that knows the model gets its window's share instead — the
+    // same 3% web_fetch spends on a page.
+    const roomy = flattenResult({ content: [{ type: "text", text: "y".repeat(50_000) }] }, 40_000);
+    expect(roomy).toContain("y".repeat(40_000));
   });
 
   it("says something useful when there is no text", () => {
