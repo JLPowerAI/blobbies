@@ -282,6 +282,11 @@ jobs:
 
           After installing, the app updates itself. The remaining files are how
           it does that.
+
+          **Checking your download.** \`SHA256SUMS.txt\` lists a fingerprint for
+          every file above. To confirm yours arrived intact, run
+          \`shasum -a 256 <file>\` on macOS or Linux (\`certutil -hashfile <file>
+          SHA256\` on Windows) and compare the result with the matching line.
           EOF
           sed 's/^[[:space:]]*//' preamble.md > release-notes.md
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
