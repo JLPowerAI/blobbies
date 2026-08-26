@@ -79,6 +79,7 @@ import * as store from "@/lib/store";
 import { openExternal } from "@/lib/tauri";
 import { isTinfoilModel } from "@/lib/tinfoil-model";
 import { dropOrphanToolResults, toolTraceMessages, trimToolTrace } from "@/lib/tool-trace";
+import { wrapUntrusted } from "@/lib/untrusted";
 import { checkForUpdates, onTrayUpdateCheck } from "@/lib/updater";
 import "./App.css";
 
@@ -710,8 +711,13 @@ export function App() {
       // Only that Blob's own conversation — the transcript the routine writes
       // into. A routine has no business waiting on an unrelated group.
       busy: (blobId: string) => activeTurns.current.has(blobId),
-      fire: (blobId: string, routine: Routine) =>
-        queueTurn(() => fireRoutine(blobId, routine), blobId),
+      // Event triggers watch the Blob's own home folder: the one event source
+      // that needs no credential and no second process. Rust contains the
+      // path (`resolve_in_home`) exactly as it does for the fs tools.
+      listFiles: (blobId: string, folder: string) =>
+        homeFor(blobId).list(folder === "" ? undefined : folder),
+      fire: (blobId: string, routine: Routine, arrived?: readonly string[]) =>
+        queueTurn(() => fireRoutine(blobId, routine, arrived), blobId),
     };
     return startScheduler(host);
   }, []);
@@ -1266,6 +1272,11 @@ export function App() {
             next.nextRunAt = nextFireTime(next.schedule, Date.now());
             armed = true;
           }
+        }
+        // A changed trigger forgets what the old one had seen: the first poll
+        // of a new folder must arm, not fire about every file already in it.
+        if ("trigger" in patch && !("seen" in patch)) {
+          delete next.seen;
         }
         // Re-enabling a fired one-shot (or any disarmed routine) must re-arm
         // it, or it sits armed-less until the next app launch — armRoutines
@@ -3060,6 +3071,7 @@ export function App() {
   const fireRoutine = async (
     blobId: string,
     routine: Routine,
+    arrived?: readonly string[],
   ): Promise<"done" | "failed" | "cancelled"> => {
     const target = agentsRef.current.find((candidate) => candidate.id === blobId);
     if (target === undefined || routine.instruction.trim() === "") {
@@ -3093,7 +3105,13 @@ export function App() {
     return requestReply(target, history, {
       trigger: "routine",
       routineId: routine.id,
-      prompt: routine.instruction,
+      // A file trigger passes names, never contents: a file name is written
+      // by whoever dropped the file, so it is fenced as untrusted, and
+      // reading the file is left to the Blob's own contained, traced tool.
+      prompt:
+        arrived === undefined || arrived.length === 0
+          ? routine.instruction
+          : `${routine.instruction}\n\nNew files just arrived:\n${wrapUntrusted(arrived.join("\n"), "home")}`,
     });
   };
 

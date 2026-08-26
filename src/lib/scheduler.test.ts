@@ -6,6 +6,10 @@ import { armRoutines, type SchedulerHost, tick } from "@/lib/scheduler";
 function makeHost(initial: Record<string, Routine[]>) {
   const routines = new Map<string, Routine[]>(Object.entries(initial));
   const fired: string[] = [];
+  const arrivals: string[][] = [];
+  const seenAtFire: (string[] | undefined)[] = [];
+  // Folder listings a file trigger will see, keyed by folder.
+  const listings = new Map<string, { name: string; isDir: boolean }[]>();
   let busy = false;
   let fireResult: "done" | "failed" | "cancelled" = "done";
   const host: SchedulerHost = {
@@ -19,14 +23,40 @@ function makeHost(initial: Record<string, Routine[]>) {
       );
     },
     busy: () => busy,
-    fire: (_blobId, routine) => {
+    listFiles: (_blobId, folder) => {
+      const listing = listings.get(folder);
+      // Absent = the folder does not exist, which the backend rejects.
+      return listing === undefined
+        ? Promise.reject(new Error("no such folder"))
+        : Promise.resolve(listing);
+    },
+    fire: (blobId, routine, arrived) => {
       fired.push(routine.id);
+      arrivals.push([...(arrived ?? [])]);
+      // What the STORE said at the instant the turn began. This is the only
+      // way to prove claim-before-run: if the claim were written after the
+      // fire instead, a re-entrant tick during a slow turn would still see
+      // the old value here — and so would this snapshot.
+      seenAtFire.push(
+        routines
+          .get(blobId)
+          ?.find((candidate) => candidate.id === routine.id)
+          ?.seen?.slice(),
+      );
       return Promise.resolve(fireResult);
     },
   };
   return {
     host,
     fired,
+    arrivals,
+    seenAtFire,
+    setListing: (folder: string, names: readonly (string | { name: string; isDir: boolean })[]) => {
+      listings.set(
+        folder,
+        names.map((entry) => (typeof entry === "string" ? { name: entry, isDir: false } : entry)),
+      );
+    },
     setBusy: (value: boolean) => {
       busy = value;
     },
@@ -211,6 +241,71 @@ describe("tick", () => {
     expect(h.fired).toHaveLength(1);
     await tick(h.host, now);
     expect(h.fired).toHaveLength(2);
+  });
+
+  it("claims a file trigger before running it, and never fires twice", async () => {
+    const now = 10 * HOUR;
+    const h = makeHost({
+      b1: [routine({ schedule: undefined, trigger: { kind: "file", folder: "inbox" } })],
+    });
+    h.setListing("inbox", ["old.txt"]);
+    // First poll arms: what was already in the folder is not an arrival.
+    expect(await tick(h.host, now)).toBe(false);
+    expect(h.get("b1", "r1")?.seen).toEqual(["old.txt"]);
+
+    h.setListing("inbox", ["old.txt", "new.txt"]);
+    expect(await tick(h.host, now)).toBe(true);
+    expect(h.fired).toEqual(["r1"]);
+    // Names only — never contents.
+    expect(h.arrivals).toEqual([["new.txt"]]);
+    // The ordering itself: the arrival was already marked seen when the turn
+    // started, so a tick re-entering during a slow turn finds nothing new.
+    expect(h.seenAtFire).toEqual([["new.txt", "old.txt"]]);
+    expect(h.get("b1", "r1")?.seen).toEqual(["new.txt", "old.txt"]);
+    expect(h.get("b1", "r1")?.lastRunAt).toBe(now);
+    expect(await tick(h.host, now)).toBe(false);
+    expect(h.fired).toHaveLength(1);
+  });
+
+  it("skips a file trigger while its Blob is busy, keeping the arrival", async () => {
+    const now = 10 * HOUR;
+    const h = makeHost({
+      b1: [routine({ schedule: undefined, seen: [], trigger: { kind: "file", folder: "inbox" } })],
+    });
+    h.setListing("inbox", ["new.txt"]);
+    h.setBusy(true);
+    expect(await tick(h.host, now)).toBe(false);
+    expect(h.fired).toEqual([]);
+    // Nothing was claimed, so the arrival is still waiting when it frees up.
+    expect(h.get("b1", "r1")?.seen).toEqual([]);
+    h.setBusy(false);
+    expect(await tick(h.host, now)).toBe(true);
+    expect(h.arrivals).toEqual([["new.txt"]]);
+  });
+
+  it("waits quietly when the watched folder does not exist yet", async () => {
+    const now = 10 * HOUR;
+    const h = makeHost({
+      b1: [routine({ schedule: undefined, trigger: { kind: "file", folder: "missing" } })],
+    });
+    expect(await tick(h.host, now)).toBe(false);
+    expect(h.get("b1", "r1")?.seen).toBeUndefined();
+  });
+
+  it("ignores a trigger the store cannot vouch for", async () => {
+    const now = 10 * HOUR;
+    const h = makeHost({
+      b1: [
+        routine({
+          schedule: undefined,
+          seen: [],
+          trigger: { kind: "file", folder: "../escape" },
+        }),
+      ],
+    });
+    h.setListing("../escape", ["loot.txt"]);
+    expect(await tick(h.host, now)).toBe(false);
+    expect(h.fired).toEqual([]);
   });
 });
 

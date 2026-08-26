@@ -272,6 +272,13 @@ export interface Routine {
   active: boolean;
   /** When to fire automatically; absent = manual-only routine. */
   schedule?: import("@/lib/schedule").RoutineSchedule;
+  /** What else fires it: an event the scheduler polls for. */
+  trigger?: import("@/lib/trigger").RoutineTrigger;
+  /**
+   * The trigger's last observation — the file names its folder held on the
+   * previous poll. Absent means "never polled", which arms without firing.
+   */
+  seen?: string[];
   /** Epoch ms of the next scheduled fire; the scheduler claims it via CAS. */
   nextRunAt?: number;
   /**

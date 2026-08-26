@@ -1,17 +1,5 @@
-import {
-  ChevronLeft,
-  ChevronRight,
-  ChevronsRight,
-  CircleDashed,
-  Clock,
-  GitBranch,
-  Hash,
-  MessagesSquare,
-  Plus,
-  Siren,
-  TriangleAlert,
-} from "lucide-react";
-import { type ComponentType, useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, ChevronsRight, Clock, Inbox, Plus } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { Routine } from "@/data/agents";
 import {
   coerceSchedule,
@@ -19,6 +7,7 @@ import {
   type RoutineSchedule,
   WEEKDAY_NAMES,
 } from "@/lib/schedule";
+import { describeTrigger, MAX_FOLDER_LENGTH, normalizeFolder } from "@/lib/trigger";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 interface RoutinePanelProps {
@@ -46,29 +35,8 @@ const SCHEDULE_OPTIONS: ReadonlyArray<{ label: string; schedule: RoutineSchedule
 /** Hour-of-day options, 0–23, shown 24-hour to match describeSchedule. */
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
-interface EventTrigger {
-  label: string;
-  icon: ComponentType<{
-    size?: number | string;
-    strokeWidth?: number | string;
-    className?: string;
-    "aria-hidden"?: boolean | "true" | "false";
-  }>;
-}
-
-const EVENT_TRIGGERS: readonly EventTrigger[] = [
-  { label: "Slack message", icon: Hash },
-  { label: "Git event", icon: GitBranch },
-  { label: "Teams message", icon: MessagesSquare },
-  { label: "Linear issue", icon: CircleDashed },
-  { label: "Sentry alert", icon: TriangleAlert },
-  { label: "PagerDuty incident", icon: Siren },
-];
-
-/** Schedule triggers show a clock; event triggers show their service icon. */
-function triggerIcon(label: string): EventTrigger["icon"] {
-  return EVENT_TRIGGERS.find((candidate) => candidate.label === label)?.icon ?? Clock;
-}
+/** Where a new file trigger watches unless the user names somewhere else. */
+const DEFAULT_WATCH_FOLDER = "inbox";
 
 /** Per-routine editor: identity, triggers and run history. */
 export function RoutinePanel({
@@ -93,11 +61,18 @@ export function RoutinePanel({
   const [customMinute, setCustomMinute] = useState("0");
   const [customWeekday, setCustomWeekday] = useState("1");
   const [customError, setCustomError] = useState("");
+  // File-trigger editor: the folder of this Blob's home to watch.
+  const [fileOpen, setFileOpen] = useState(false);
+  const [folder, setFolder] = useState(DEFAULT_WATCH_FOLDER);
+  const [folderError, setFolderError] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
   const { closing, requestClose, finishClose } = useExitAnimation(() => {
     setMenuOpen(false);
     setScheduleOpen(false);
+    setFileOpen(false);
   });
+
+  const triggerLabel = routine.trigger === undefined ? undefined : describeTrigger(routine.trigger);
 
   // Close the trigger menu on outside click or Escape.
   useEffect(() => {
@@ -122,10 +97,28 @@ export function RoutinePanel({
     };
   }, [menuOpen, requestClose]);
 
-  const addTrigger = (label: string) => {
-    if (!routine.triggers.includes(label)) {
-      onUpdate({ triggers: [...routine.triggers, label] });
+  /**
+   * Watch a folder. Like a schedule, one per routine: the previous trigger's
+   * label is swapped out rather than stacked. The store path clears what the
+   * old trigger had seen, so the first poll of a new folder arms rather than
+   * firing about every file already sitting in it.
+   */
+  const setTrigger = () => {
+    const cleaned = normalizeFolder(folder);
+    if (cleaned === null) {
+      setFolderError(`A folder inside this Blob's home, up to ${MAX_FOLDER_LENGTH} characters.`);
+      return;
     }
+    const trigger = { kind: "file", folder: cleaned } as const;
+    const label = describeTrigger(trigger);
+    onUpdate({
+      trigger,
+      triggers: [
+        ...routine.triggers.filter((existing) => existing !== triggerLabel && existing !== label),
+        label,
+      ],
+    });
+    setFolderError("");
     requestClose();
   };
 
@@ -165,6 +158,13 @@ export function RoutinePanel({
     }
     setCustomError("");
     setCustomOpen(true);
+  };
+
+  /** Open the folder editor, prefilled from whatever trigger exists. */
+  const openFileTrigger = () => {
+    setFolder(routine.trigger?.folder ?? DEFAULT_WATCH_FOLDER);
+    setFolderError("");
+    setFileOpen(true);
   };
 
   /** Build the schedule from the editor fields; null shows why it failed. */
@@ -273,12 +273,14 @@ export function RoutinePanel({
         <div className="settings-field">
           <span className="settings-label">When to run</span>
           <div className="trigger-card">
-            {routine.triggers.map((trigger) => {
-              const Icon = triggerIcon(trigger);
+            {routine.triggers.map((label) => {
+              // A clock unless it is the file trigger's own line. Labels from
+              // older routines keep showing, and read as schedules.
+              const Icon = label === triggerLabel ? Inbox : Clock;
               return (
-                <div key={trigger} className="trigger-row">
+                <div key={label} className="trigger-row">
                   <Icon size={15} strokeWidth={1.8} aria-hidden="true" className="trigger-glyph" />
-                  {trigger}
+                  {label}
                 </div>
               );
             })}
@@ -468,19 +470,61 @@ export function RoutinePanel({
                         </button>
                       </>
                     )
+                  ) : fileOpen ? (
+                    <div className="trigger-custom">
+                      <label className="trigger-custom-field">
+                        Folder
+                        <input
+                          type="text"
+                          aria-label="Folder"
+                          className="trigger-custom-input"
+                          placeholder={DEFAULT_WATCH_FOLDER}
+                          maxLength={MAX_FOLDER_LENGTH}
+                          value={folder}
+                          onChange={(event) => setFolder(event.currentTarget.value)}
+                        />
+                      </label>
+                      {folderError === "" ? null : (
+                        <span className="trigger-custom-error" aria-live="polite">
+                          {folderError}
+                        </span>
+                      )}
+                      <div className="trigger-custom-actions">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="account-menu-item"
+                          onClick={() => setFileOpen(false)}
+                        >
+                          Back
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="account-menu-item"
+                          onClick={setTrigger}
+                        >
+                          Apply
+                        </button>
+                      </div>
+                    </div>
                   ) : (
-                    EVENT_TRIGGERS.map(({ label, icon: Icon }) => (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        key={label}
-                        className="account-menu-item"
-                        onClick={() => addTrigger(label)}
-                      >
-                        <Icon size={15} strokeWidth={1.8} aria-hidden="true" />
-                        {label}
-                      </button>
-                    ))
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="account-menu-item"
+                      aria-expanded={fileOpen}
+                      onClick={openFileTrigger}
+                    >
+                      <Inbox size={15} strokeWidth={1.8} aria-hidden="true" />
+                      When a file arrives
+                      <ChevronRight
+                        size={14}
+                        strokeWidth={1.8}
+                        aria-hidden="true"
+                        className="trigger-submenu-chevron"
+                      />
+                    </button>
                   )}
                 </div>
               ) : null}

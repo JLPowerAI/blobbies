@@ -718,6 +718,53 @@ describe("App", () => {
     expect(within(editor).getByText(/Every day at 15:30 · next/)).toBeInTheDocument();
   });
 
+  it("watches a folder for arriving files as a routine trigger", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+
+    await user.click(screen.getByRole("button", { name: "Show details panel" }));
+    const details = screen.getByRole("complementary", { name: "Ken details" });
+    await user.click(within(details).getByRole("button", { name: "Create Routine" }));
+
+    const editor = screen.getByRole("complementary", { name: "Routine" });
+    await user.type(within(editor).getByLabelText("Name"), "Sort the inbox");
+    await user.type(within(editor).getByLabelText("Instruction"), "File whatever shows up.");
+    await user.click(within(editor).getByRole("button", { name: "Add trigger" }));
+    await user.click(within(editor).getByRole("menuitem", { name: "When a file arrives" }));
+    await user.clear(within(editor).getByLabelText("Folder"));
+    await user.type(within(editor).getByLabelText("Folder"), "deliveries");
+    await user.click(within(editor).getByRole("menuitem", { name: "Apply" }));
+
+    // The chip says exactly what will fire it — the entries this replaced
+    // said "Slack message" and then never fired at all.
+    expect(
+      within(editor).getByText("When a file arrives in deliveries", { selector: ".trigger-row" }),
+    ).toBeInTheDocument();
+  });
+
+  it("refuses a watched folder that would leave the Blob's home", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+
+    await user.click(screen.getByRole("button", { name: "Show details panel" }));
+    const details = screen.getByRole("complementary", { name: "Ken details" });
+    await user.click(within(details).getByRole("button", { name: "Create Routine" }));
+
+    const editor = screen.getByRole("complementary", { name: "Routine" });
+    await user.click(within(editor).getByRole("button", { name: "Add trigger" }));
+    await user.click(within(editor).getByRole("menuitem", { name: "When a file arrives" }));
+    await user.clear(within(editor).getByLabelText("Folder"));
+    await user.type(within(editor).getByLabelText("Folder"), "../../secrets");
+    await user.click(within(editor).getByRole("menuitem", { name: "Apply" }));
+
+    // Nothing is stored and the editor says why, rather than saving a path
+    // the Rust side would reject later, out of sight.
+    expect(within(editor).getByText(/inside this Blob's home/)).toBeInTheDocument();
+    expect(within(editor).queryByText(/When a file arrives in/)).toBeNull();
+  });
+
   it("schedules a counted burst — every minute, five times — through the custom picker", async () => {
     const user = userEvent.setup();
     render(<App />);
