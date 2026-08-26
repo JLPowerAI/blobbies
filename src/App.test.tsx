@@ -718,7 +718,7 @@ describe("App", () => {
     expect(within(editor).getByText(/Every day at 15:30 · next/)).toBeInTheDocument();
   });
 
-  it("watches a folder for arriving files as a routine trigger", async () => {
+  it("adds a GitHub listener, and stacks a second one beside it", async () => {
     const user = userEvent.setup();
     render(<App />);
     await createFirstBlob(user, "Ken");
@@ -728,22 +728,27 @@ describe("App", () => {
     await user.click(within(details).getByRole("button", { name: "Create Routine" }));
 
     const editor = screen.getByRole("complementary", { name: "Routine" });
-    await user.type(within(editor).getByLabelText("Name"), "Sort the inbox");
-    await user.type(within(editor).getByLabelText("Instruction"), "File whatever shows up.");
+    await user.type(within(editor).getByLabelText("Name"), "Watch the repo");
     await user.click(within(editor).getByRole("button", { name: "Add trigger" }));
-    await user.click(within(editor).getByRole("menuitem", { name: "When a file arrives" }));
-    await user.clear(within(editor).getByLabelText("Folder"));
-    await user.type(within(editor).getByLabelText("Folder"), "deliveries");
+    await user.click(within(editor).getByRole("menuitem", { name: "On a GitHub event" }));
+    await user.type(within(editor).getByLabelText("Repository"), "acme/app");
     await user.click(within(editor).getByRole("menuitem", { name: "Apply" }));
 
-    // The chip says exactly what will fire it — the entries this replaced
-    // said "Slack message" and then never fired at all.
-    expect(
-      within(editor).getByText("When a file arrives in deliveries", { selector: ".trigger-row" }),
-    ).toBeInTheDocument();
+    // The chip says exactly what will fire it, in the reference's words.
+    expect(within(editor).getByText("When a PR opens in acme/app")).toBeInTheDocument();
+
+    // Listeners stack rather than replacing each other — a routine woken by
+    // several things at once is the whole point of the model.
+    await user.click(within(editor).getByRole("button", { name: "Add another" }));
+    await user.click(within(editor).getByRole("menuitem", { name: "On a Slack message" }));
+    await user.type(within(editor).getByLabelText("Channel"), "#ops");
+    await user.click(within(editor).getByRole("menuitem", { name: "Apply" }));
+
+    expect(within(editor).getByText("When a PR opens in acme/app")).toBeInTheDocument();
+    expect(within(editor).getByText("When @mentioned in #ops")).toBeInTheDocument();
   });
 
-  it("refuses a watched folder that would leave the Blob's home", async () => {
+  it("refuses a repository that is not owner/name", async () => {
     const user = userEvent.setup();
     render(<App />);
     await createFirstBlob(user, "Ken");
@@ -754,15 +759,36 @@ describe("App", () => {
 
     const editor = screen.getByRole("complementary", { name: "Routine" });
     await user.click(within(editor).getByRole("button", { name: "Add trigger" }));
-    await user.click(within(editor).getByRole("menuitem", { name: "When a file arrives" }));
-    await user.clear(within(editor).getByLabelText("Folder"));
-    await user.type(within(editor).getByLabelText("Folder"), "../../secrets");
+    await user.click(within(editor).getByRole("menuitem", { name: "On a GitHub event" }));
+    await user.type(within(editor).getByLabelText("Repository"), "just-a-name");
     await user.click(within(editor).getByRole("menuitem", { name: "Apply" }));
 
-    // Nothing is stored and the editor says why, rather than saving a path
-    // the Rust side would reject later, out of sight.
-    expect(within(editor).getByText(/inside this Blob's home/)).toBeInTheDocument();
-    expect(within(editor).queryByText(/When a file arrives in/)).toBeNull();
+    // Nothing is stored and the editor says why, rather than saving a
+    // listener that could never match anything.
+    expect(within(editor).getByText(/owner\/name/)).toBeInTheDocument();
+    expect(within(editor).queryByText(/When a PR opens/)).toBeNull();
+  });
+
+  it("drops a listener the user removes", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await createFirstBlob(user, "Ken");
+
+    await user.click(screen.getByRole("button", { name: "Show details panel" }));
+    const details = screen.getByRole("complementary", { name: "Ken details" });
+    await user.click(within(details).getByRole("button", { name: "Create Routine" }));
+
+    const editor = screen.getByRole("complementary", { name: "Routine" });
+    await user.click(within(editor).getByRole("button", { name: "Add trigger" }));
+    await user.click(within(editor).getByRole("menuitem", { name: "On a Slack message" }));
+    await user.type(within(editor).getByLabelText("Channel"), "#ops");
+    await user.click(within(editor).getByRole("menuitem", { name: "Apply" }));
+    expect(within(editor).getByText("When @mentioned in #ops")).toBeInTheDocument();
+
+    await user.click(
+      within(editor).getByRole("button", { name: "Stop watching: When @mentioned in #ops" }),
+    );
+    expect(within(editor).queryByText("When @mentioned in #ops")).toBeNull();
   });
 
   it("schedules a counted burst — every minute, five times — through the custom picker", async () => {

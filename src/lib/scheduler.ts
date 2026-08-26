@@ -1,16 +1,23 @@
 import type { Routine } from "@/data/agents";
 import { nextFireTime, scheduleBudget } from "@/lib/schedule";
-import { newlyArrived, parseTrigger, type TriggerEntry } from "@/lib/trigger";
+import {
+  anyListenerMatches,
+  type EventListener,
+  listenerIdentity,
+  parseListeners,
+  type TriggerEvent,
+} from "@/lib/trigger";
+import type { PollCursor } from "@/lib/trigger-poll";
 
 /**
- * Fires scheduled and triggered routines while the app is open.
+ * Fires scheduled and event-triggered routines while the app is open.
  *
  * Claim-before-run: a due routine's `nextRunAt` is advanced and persisted
  * BEFORE its turn runs, so a tick racing the startup scan (or a re-entrant
  * tick during a slow turn) can never fire the same instance twice — whoever
  * writes the claim first wins, the other sees a future `nextRunAt` and skips.
- * An event trigger claims the same way: the arrivals it is about to fire on
- * are written into `seen` first, so a second tick sees nothing new.
+ * A listener claims the same way: its poll cursor is advanced before the turn
+ * runs, so a second tick sees nothing new.
  *
  * Missed-while-closed policy: a routine whose `nextRunAt` is already in the
  * past fires once (catch-up), then advances to the next scheduled time.
@@ -37,20 +44,24 @@ export interface SchedulerHost {
    */
   busy(blobId: string): boolean;
   /**
-   * List one folder of a Blob's home, for file triggers. Rejects when the
-   * folder does not exist — a trigger pointed at a missing folder waits for
-   * it rather than failing the tick.
+   * Ask one listener's platform what has happened since its cursor.
+   *
+   * Rejecting is not an error: a disconnected account or a rate limit means
+   * this listener has nothing this tick, not that the tick failed.
    */
-  listFiles(blobId: string, folder: string): Promise<readonly TriggerEntry[]>;
+  poll(
+    listener: EventListener,
+    cursor: PollCursor,
+  ): Promise<{ events: TriggerEvent[]; cursor: PollCursor }>;
   /**
-   * Run the routine's instruction as a turn for its Blob. `arrived` carries
-   * the names of files an event trigger fired on — names only: the Blob must
-   * read a file through its own contained, traced tool if it wants content.
+   * Run the routine's instruction as a turn for its Blob. `event` is the
+   * platform event that fired it, already matched — untrusted throughout, and
+   * fenced by the caller before any of it reaches a model.
    */
   fire(
     blobId: string,
     routine: Routine,
-    arrived?: readonly string[],
+    event?: TriggerEvent,
   ): Promise<"done" | "failed" | "cancelled">;
 }
 
@@ -76,7 +87,7 @@ export async function tick(host: SchedulerHost, now: number = Date.now()): Promi
         continue;
       }
       if (routine.schedule === undefined) {
-        if (await fireTrigger(host, blobId, routine, now)) {
+        if (await fireListeners(host, blobId, routine, now)) {
           return true;
         }
         continue;
@@ -85,7 +96,7 @@ export async function tick(host: SchedulerHost, now: number = Date.now()): Promi
       if (due === undefined || due > now) {
         // Still on the clock, but an event may have arrived meanwhile: a
         // routine may carry both, and the schedule is the slower of the two.
-        if (await fireTrigger(host, blobId, routine, now)) {
+        if (await fireListeners(host, blobId, routine, now)) {
           return true;
         }
         continue;
@@ -130,44 +141,51 @@ export async function tick(host: SchedulerHost, now: number = Date.now()): Promi
 }
 
 /**
- * Poll one routine's event trigger and fire it if something arrived.
+ * Poll one routine's listeners and fire on the first event that matches.
  *
  * Returns true when it fired, so the caller can honour the one-fire-per-tick
- * rule. A listing that fails (folder not created yet, disk busy) is not an
- * error: the trigger simply has nothing to report this tick.
+ * rule. A poll that fails (account disconnected, rate limited) is not an
+ * error: that listener has nothing to report this tick.
  */
-async function fireTrigger(
+async function fireListeners(
   host: SchedulerHost,
   blobId: string,
   routine: Routine,
   now: number,
 ): Promise<boolean> {
-  const trigger = parseTrigger(routine.trigger);
-  if (trigger === null) {
-    return false;
-  }
-  let entries: readonly TriggerEntry[];
-  try {
-    entries = await host.listFiles(blobId, trigger.folder);
-  } catch {
-    return false;
-  }
-  const { seen, arrived } = newlyArrived(routine.seen, entries);
-  if (arrived.length === 0) {
-    // Still record the listing: the first poll arms, and deletions prune so a
-    // file delivered again counts as new. Length is enough to spot a change —
-    // nothing arrived, so the only possible difference is a removal.
-    if (seen.length !== (routine.seen?.length ?? -1)) {
-      host.update(blobId, routine.id, { seen });
+  const listeners = parseListeners(routine.listeners);
+  for (const listener of listeners) {
+    const key = listenerIdentity(listener);
+    const cursor = routine.cursors?.[key] ?? {};
+    let polled: { events: TriggerEvent[]; cursor: PollCursor };
+    try {
+      polled = await host.poll(listener, cursor);
+    } catch {
+      continue;
     }
-    return false;
+    const cursors = { ...routine.cursors, [key]: polled.cursor };
+    // `platformMatched: false` because this app polls raw feeds rather than
+    // receiving pre-filtered ones: a filter that only the platform could have
+    // applied declines here instead of guessing.
+    const match = polled.events.find((event) =>
+      anyListenerMatches([listener], event, { platformMatched: false }),
+    );
+    if (match === undefined) {
+      // The cursor still advances: events that matched nothing are handled,
+      // and re-reading them every tick would never let the listener catch up.
+      if (polled.cursor.since !== cursor.since) {
+        host.update(blobId, routine.id, { cursors });
+      }
+      continue;
+    }
+    // The claim: the cursor moves past this event BEFORE the turn runs, so a
+    // re-entrant tick during a slow turn finds nothing new to fire on.
+    host.update(blobId, routine.id, { cursors });
+    const status = await host.fire(blobId, { ...routine, cursors }, match);
+    host.update(blobId, routine.id, { lastRunAt: now, lastRunStatus: status });
+    return true;
   }
-  // The claim: the arrivals are marked seen BEFORE the turn runs, so a
-  // re-entrant tick during a slow turn finds nothing new to fire on.
-  host.update(blobId, routine.id, { seen });
-  const status = await host.fire(blobId, { ...routine, seen }, arrived);
-  host.update(blobId, routine.id, { lastRunAt: now, lastRunStatus: status });
-  return true;
+  return false;
 }
 
 /**

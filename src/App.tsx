@@ -81,7 +81,15 @@ import { openExternal } from "@/lib/tauri";
 import * as teach from "@/lib/teach";
 import { isTinfoilModel } from "@/lib/tinfoil-model";
 import { dropOrphanToolResults, toolTraceMessages, trimToolTrace } from "@/lib/tool-trace";
-import { wrapUntrusted } from "@/lib/untrusted";
+import {
+  buildEventContext,
+  describeEvent,
+  type EventListener,
+  listenerIdentity,
+  type TriggerEvent,
+} from "@/lib/trigger";
+import type { PollCursor } from "@/lib/trigger-poll";
+
 import { checkForUpdates, onTrayUpdateCheck } from "@/lib/updater";
 import "./App.css";
 
@@ -713,13 +721,16 @@ export function App() {
       // Only that Blob's own conversation — the transcript the routine writes
       // into. A routine has no business waiting on an unrelated group.
       busy: (blobId: string) => activeTurns.current.has(blobId),
-      // Event triggers watch the Blob's own home folder: the one event source
-      // that needs no credential and no second process. Rust contains the
-      // path (`resolve_in_home`) exactly as it does for the fs tools.
-      listFiles: (blobId: string, folder: string) =>
-        homeFor(blobId).list(folder === "" ? undefined : folder),
-      fire: (blobId: string, routine: Routine, arrived?: readonly string[]) =>
-        queueTurn(() => fireRoutine(blobId, routine, arrived), blobId),
+      // Delivery is polling, not a webhook: this app has no server, so a
+      // listener is satisfied by asking the account the user already
+      // connected. See trigger-poll.ts for what that costs.
+      // Loaded on the first poll, not at startup: the platform translation
+      // tables are dead weight for a user with no listeners, and this runs on
+      // a 30s tick where one dynamic import costs nothing.
+      poll: (listener: EventListener, cursor: PollCursor) =>
+        import("@/lib/trigger-poll").then((module) => module.pollListener(listener, cursor)),
+      fire: (blobId: string, routine: Routine, event?: TriggerEvent) =>
+        queueTurn(() => fireRoutine(blobId, routine, event), blobId),
     };
     return startScheduler(host);
   }, []);
@@ -1275,10 +1286,13 @@ export function App() {
             armed = true;
           }
         }
-        // A changed trigger forgets what the old one had seen: the first poll
-        // of a new folder must arm, not fire about every file already in it.
-        if ("trigger" in patch && !("seen" in patch)) {
-          delete next.seen;
+        // Changing the listeners drops cursors nothing points at any more, so
+        // a re-added listener arms afresh instead of inheriting a stale mark.
+        if ("listeners" in patch && !("cursors" in patch)) {
+          const live = new Set((next.listeners ?? []).map(listenerIdentity));
+          next.cursors = Object.fromEntries(
+            Object.entries(next.cursors ?? {}).filter(([key]) => live.has(key)),
+          );
         }
         // Re-enabling a fired one-shot (or any disarmed routine) must re-arm
         // it, or it sits armed-less until the next app launch — armRoutines
@@ -3195,7 +3209,7 @@ export function App() {
   const fireRoutine = async (
     blobId: string,
     routine: Routine,
-    arrived?: readonly string[],
+    event?: TriggerEvent,
   ): Promise<"done" | "failed" | "cancelled"> => {
     const target = agentsRef.current.find((candidate) => candidate.id === blobId);
     if (target === undefined || routine.instruction.trim() === "") {
@@ -3218,7 +3232,12 @@ export function App() {
     appendMessage(blobId, {
       id: `event-${Date.now()}`,
       kind: "event",
-      text: `Routine: ${routine.name.trim() === "" ? "unnamed" : routine.name}`,
+      // Name the event when there is one, so the transcript says why it woke
+      // rather than only which routine did.
+      text:
+        event === undefined
+          ? `Routine: ${routine.name.trim() === "" ? "unnamed" : routine.name}`
+          : `Routine: ${routine.name.trim() === "" ? "unnamed" : routine.name} — ${describeEvent(event)}`,
       timestampMs: Date.now(),
     });
     // Unread dot for a Blob working in the background.
@@ -3229,13 +3248,13 @@ export function App() {
     return requestReply(target, history, {
       trigger: "routine",
       routineId: routine.id,
-      // A file trigger passes names, never contents: a file name is written
-      // by whoever dropped the file, so it is fenced as untrusted, and
-      // reading the file is left to the Blob's own contained, traced tool.
+      // The event was written by whoever sent the message or opened the PR,
+      // so it is fenced as untrusted data rather than pasted in as context
+      // the model might read as instruction.
       prompt:
-        arrived === undefined || arrived.length === 0
+        event === undefined
           ? routine.instruction
-          : `${routine.instruction}\n\nNew files just arrived:\n${wrapUntrusted(arrived.join("\n"), "home")}`,
+          : `${routine.instruction}\n\nThis fired because of:\n${buildEventContext(event)}`,
     });
   };
 

@@ -1,15 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { Routine } from "@/data/agents";
 import { armRoutines, type SchedulerHost, tick } from "@/lib/scheduler";
+import {
+  type EventListener,
+  listenerIdentity,
+  parseListener,
+  type TriggerEvent,
+} from "@/lib/trigger";
+import type { PollCursor } from "@/lib/trigger-poll";
 
 /** In-memory host: synchronous updates, recorded fires. */
 function makeHost(initial: Record<string, Routine[]>) {
   const routines = new Map<string, Routine[]>(Object.entries(initial));
   const fired: string[] = [];
-  const arrivals: string[][] = [];
-  const seenAtFire: (string[] | undefined)[] = [];
-  // Folder listings a file trigger will see, keyed by folder.
-  const listings = new Map<string, { name: string; isDir: boolean }[]>();
+  const arrivals: (TriggerEvent | undefined)[] = [];
+  const seenAtFire: (Record<string, PollCursor> | undefined)[] = [];
+  // Events a listener's platform will report, keyed by listener identity.
+  const feeds = new Map<string, TriggerEvent[]>();
   let busy = false;
   let fireResult: "done" | "failed" | "cancelled" = "done";
   const host: SchedulerHost = {
@@ -23,25 +30,31 @@ function makeHost(initial: Record<string, Routine[]>) {
       );
     },
     busy: () => busy,
-    listFiles: (_blobId, folder) => {
-      const listing = listings.get(folder);
-      // Absent = the folder does not exist, which the backend rejects.
-      return listing === undefined
-        ? Promise.reject(new Error("no such folder"))
-        : Promise.resolve(listing);
+    poll: (listener, cursor) => {
+      const queued = feeds.get(listenerIdentity(listener));
+      // Absent = the platform call failed (not connected, rate limited),
+      // which the poller surfaces by rejecting.
+      if (queued === undefined) {
+        return Promise.reject(new Error("not connected"));
+      }
+      const seen = cursor.since;
+      const fresh =
+        seen === undefined ? [] : queued.slice(queued.findIndex((e) => String(e.id) === seen) + 1);
+      const newest = queued.at(-1);
+      return Promise.resolve({
+        events: fresh,
+        cursor: newest === undefined ? cursor : { since: String(newest.id) },
+      });
     },
-    fire: (blobId, routine, arrived) => {
+    fire: (blobId, routine, event) => {
       fired.push(routine.id);
-      arrivals.push([...(arrived ?? [])]);
+      arrivals.push(event);
       // What the STORE said at the instant the turn began. This is the only
       // way to prove claim-before-run: if the claim were written after the
       // fire instead, a re-entrant tick during a slow turn would still see
       // the old value here — and so would this snapshot.
       seenAtFire.push(
-        routines
-          .get(blobId)
-          ?.find((candidate) => candidate.id === routine.id)
-          ?.seen?.slice(),
+        routines.get(blobId)?.find((candidate) => candidate.id === routine.id)?.cursors,
       );
       return Promise.resolve(fireResult);
     },
@@ -51,11 +64,8 @@ function makeHost(initial: Record<string, Routine[]>) {
     fired,
     arrivals,
     seenAtFire,
-    setListing: (folder: string, names: readonly (string | { name: string; isDir: boolean })[]) => {
-      listings.set(
-        folder,
-        names.map((entry) => (typeof entry === "string" ? { name: entry, isDir: false } : entry)),
-      );
+    setFeed: (listener: EventListener, events: readonly TriggerEvent[]) => {
+      feeds.set(listenerIdentity(listener), [...events]);
     },
     setBusy: (value: boolean) => {
       busy = value;
@@ -243,67 +253,112 @@ describe("tick", () => {
     expect(h.fired).toHaveLength(2);
   });
 
-  it("claims a file trigger before running it, and never fires twice", async () => {
+  it("claims a listener's cursor before running it, and never fires twice", async () => {
     const now = 10 * HOUR;
-    const h = makeHost({
-      b1: [routine({ schedule: undefined, trigger: { kind: "file", folder: "inbox" } })],
-    });
-    h.setListing("inbox", ["old.txt"]);
-    // First poll arms: what was already in the folder is not an arrival.
-    expect(await tick(h.host, now)).toBe(false);
-    expect(h.get("b1", "r1")?.seen).toEqual(["old.txt"]);
+    const listener = parseListener({
+      type: "github",
+      repo: "acme/app",
+      events: ["pr-opened"],
+    }) as EventListener;
+    const h = makeHost({ b1: [routine({ schedule: undefined, listeners: [listener] })] });
+    const old = { source: "github", id: "1", repo: "acme/app", kind: "pr-opened" };
+    h.setFeed(listener, [old]);
 
-    h.setListing("inbox", ["old.txt", "new.txt"]);
+    // First poll arms: what already happened is not news.
+    expect(await tick(h.host, now)).toBe(false);
+    expect(h.fired).toEqual([]);
+
+    const fresh = { source: "github", id: "2", repo: "acme/app", kind: "pr-opened" };
+    h.setFeed(listener, [old, fresh]);
     expect(await tick(h.host, now)).toBe(true);
     expect(h.fired).toEqual(["r1"]);
-    // Names only — never contents.
-    expect(h.arrivals).toEqual([["new.txt"]]);
-    // The ordering itself: the arrival was already marked seen when the turn
-    // started, so a tick re-entering during a slow turn finds nothing new.
-    expect(h.seenAtFire).toEqual([["new.txt", "old.txt"]]);
-    expect(h.get("b1", "r1")?.seen).toEqual(["new.txt", "old.txt"]);
+    expect(h.arrivals).toEqual([fresh]);
+    // The ordering itself: the cursor had already moved past this event when
+    // the turn began, so a tick re-entering during a slow turn finds nothing.
+    expect(h.seenAtFire[0]?.[listenerIdentity(listener)]).toEqual({ since: "2" });
     expect(h.get("b1", "r1")?.lastRunAt).toBe(now);
     expect(await tick(h.host, now)).toBe(false);
     expect(h.fired).toHaveLength(1);
   });
 
-  it("skips a file trigger while its Blob is busy, keeping the arrival", async () => {
+  it("skips listeners while its Blob is busy, keeping the event", async () => {
     const now = 10 * HOUR;
+    const listener = parseListener({
+      type: "github",
+      repo: "acme/app",
+      events: ["pr-opened"],
+    }) as EventListener;
+    const key = listenerIdentity(listener);
     const h = makeHost({
-      b1: [routine({ schedule: undefined, seen: [], trigger: { kind: "file", folder: "inbox" } })],
+      b1: [
+        routine({ schedule: undefined, listeners: [listener], cursors: { [key]: { since: "1" } } }),
+      ],
     });
-    h.setListing("inbox", ["new.txt"]);
+    h.setFeed(listener, [
+      { source: "github", id: "1", repo: "acme/app", kind: "pr-opened" },
+      { source: "github", id: "2", repo: "acme/app", kind: "pr-opened" },
+    ]);
     h.setBusy(true);
     expect(await tick(h.host, now)).toBe(false);
     expect(h.fired).toEqual([]);
-    // Nothing was claimed, so the arrival is still waiting when it frees up.
-    expect(h.get("b1", "r1")?.seen).toEqual([]);
+    // Nothing was claimed, so the event still waits when the Blob frees up.
+    expect(h.get("b1", "r1")?.cursors?.[key]).toEqual({ since: "1" });
     h.setBusy(false);
     expect(await tick(h.host, now)).toBe(true);
-    expect(h.arrivals).toEqual([["new.txt"]]);
+    expect(h.arrivals[0]?.id).toBe("2");
   });
 
-  it("waits quietly when the watched folder does not exist yet", async () => {
+  it("waits quietly when the account is not connected", async () => {
     const now = 10 * HOUR;
-    const h = makeHost({
-      b1: [routine({ schedule: undefined, trigger: { kind: "file", folder: "missing" } })],
-    });
+    const listener = parseListener({
+      type: "slack",
+      channel: "#ops",
+      match: { kind: "mention" },
+    }) as EventListener;
+    // No feed registered = the platform call fails.
+    const h = makeHost({ b1: [routine({ schedule: undefined, listeners: [listener] })] });
     expect(await tick(h.host, now)).toBe(false);
-    expect(h.get("b1", "r1")?.seen).toBeUndefined();
+    expect(h.fired).toEqual([]);
+    expect(h.get("b1", "r1")?.cursors).toBeUndefined();
   });
 
-  it("ignores a trigger the store cannot vouch for", async () => {
+  it("advances past an event no listener wanted, rather than re-reading it", async () => {
+    const now = 10 * HOUR;
+    const listener = parseListener({
+      type: "github",
+      repo: "acme/app",
+      events: ["pr-merged"],
+    }) as EventListener;
+    const key = listenerIdentity(listener);
+    const h = makeHost({
+      b1: [
+        routine({ schedule: undefined, listeners: [listener], cursors: { [key]: { since: "1" } } }),
+      ],
+    });
+    h.setFeed(listener, [
+      { source: "github", id: "1", repo: "acme/app", kind: "pr-merged" },
+      // Not subscribed to this kind.
+      { source: "github", id: "2", repo: "acme/app", kind: "pr-opened" },
+    ]);
+    expect(await tick(h.host, now)).toBe(false);
+    expect(h.fired).toEqual([]);
+    // Handled, so the cursor moves on: otherwise it would be re-read forever.
+    expect(h.get("b1", "r1")?.cursors?.[key]).toEqual({ since: "2" });
+  });
+
+  it("ignores a listener the store cannot vouch for", async () => {
     const now = 10 * HOUR;
     const h = makeHost({
       b1: [
         routine({
           schedule: undefined,
-          seen: [],
-          trigger: { kind: "file", folder: "../escape" },
+          // Not a real repo, so it never becomes a listener.
+          listeners: [
+            { type: "github", repo: "not-a-repo", events: ["pr-opened"] } as EventListener,
+          ],
         }),
       ],
     });
-    h.setListing("../escape", ["loot.txt"]);
     expect(await tick(h.host, now)).toBe(false);
     expect(h.fired).toEqual([]);
   });

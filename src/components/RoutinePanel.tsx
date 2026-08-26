@@ -1,4 +1,13 @@
-import { ChevronLeft, ChevronRight, ChevronsRight, Clock, Inbox, Plus } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsRight,
+  Clock,
+  GitBranch,
+  Hash,
+  Plus,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Routine } from "@/data/agents";
 import {
@@ -7,7 +16,15 @@ import {
   type RoutineSchedule,
   WEEKDAY_NAMES,
 } from "@/lib/schedule";
-import { describeTrigger, MAX_FOLDER_LENGTH, normalizeFolder } from "@/lib/trigger";
+import {
+  ANY_SCOPE,
+  describeListener,
+  type EventListener,
+  GITHUB_EVENT_KINDS,
+  MAX_CHANNEL_LENGTH,
+  parseListener,
+  TRIGGER_MAX_LISTENERS,
+} from "@/lib/trigger";
 import { useExitAnimation } from "@/lib/useExitAnimation";
 
 interface RoutinePanelProps {
@@ -35,8 +52,16 @@ const SCHEDULE_OPTIONS: ReadonlyArray<{ label: string; schedule: RoutineSchedule
 /** Hour-of-day options, 0–23, shown 24-hour to match describeSchedule. */
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
-/** Where a new file trigger watches unless the user names somewhere else. */
-const DEFAULT_WATCH_FOLDER = "inbox";
+/** The GitHub events worth offering first; the rest are in the reference set. */
+const GITHUB_QUICK_EVENTS = ["pr-opened", "pr-merged", "review-requested", "ci-failed"] as const;
+
+/** Slack match kinds, in the order a person is likely to want them. */
+const SLACK_MATCHES = [
+  { kind: "mention", label: "I'm @mentioned" },
+  { kind: "message", label: "Any message" },
+  { kind: "keyword", label: "A keyword appears" },
+  { kind: "reaction", label: "Someone reacts" },
+] as const;
 
 /** Per-routine editor: identity, triggers and run history. */
 export function RoutinePanel({
@@ -61,18 +86,24 @@ export function RoutinePanel({
   const [customMinute, setCustomMinute] = useState("0");
   const [customWeekday, setCustomWeekday] = useState("1");
   const [customError, setCustomError] = useState("");
-  // File-trigger editor: the folder of this Blob's home to watch.
-  const [fileOpen, setFileOpen] = useState(false);
-  const [folder, setFolder] = useState(DEFAULT_WATCH_FOLDER);
-  const [folderError, setFolderError] = useState("");
+  // Listener editor: which platform, and the one scope it needs.
+  const [listenerOpen, setListenerOpen] = useState<"slack" | "github" | undefined>(undefined);
+  const [scope, setScope] = useState("");
+  const [slackMatch, setSlackMatch] = useState<(typeof SLACK_MATCHES)[number]["kind"]>("mention");
+  const [keyword, setKeyword] = useState("");
+  const [ghEvent, setGhEvent] = useState<string>(GITHUB_QUICK_EVENTS[0]);
+  const [listenerError, setListenerError] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
   const { closing, requestClose, finishClose } = useExitAnimation(() => {
     setMenuOpen(false);
     setScheduleOpen(false);
-    setFileOpen(false);
+    setListenerOpen(undefined);
   });
 
-  const triggerLabel = routine.trigger === undefined ? undefined : describeTrigger(routine.trigger);
+  const listeners = routine.listeners ?? [];
+  // Every listener's own words, so the rows below can tell a listener line
+  // from a schedule line without guessing at the label text.
+  const listenerLabels = new Map(listeners.map((l) => [describeListener(l), l] as const));
 
   // Close the trigger menu on outside click or Escape.
   useEffect(() => {
@@ -98,28 +129,57 @@ export function RoutinePanel({
   }, [menuOpen, requestClose]);
 
   /**
-   * Watch a folder. Like a schedule, one per routine: the previous trigger's
-   * label is swapped out rather than stacked. The store path clears what the
-   * old trigger had seen, so the first poll of a new folder arms rather than
-   * firing about every file already sitting in it.
+   * Add one listener. Unlike a schedule, listeners STACK: the reference model
+   * is a routine woken by several things at once — a repo and a channel — so
+   * a new one is appended up to the cap rather than replacing what is there.
+   * A duplicate is dropped instead, so adding the same thing twice is a no-op.
    */
-  const setTrigger = () => {
-    const cleaned = normalizeFolder(folder);
-    if (cleaned === null) {
-      setFolderError(`A folder inside this Blob's home, up to ${MAX_FOLDER_LENGTH} characters.`);
+  const addListener = (draft: unknown) => {
+    const listener = parseListener(draft);
+    if (listener === null) {
+      setListenerError(
+        listenerOpen === "github"
+          ? "A repository as owner/name, e.g. blobbies/app."
+          : "A channel name, or * for anywhere on Slack.",
+      );
       return;
     }
-    const trigger = { kind: "file", folder: cleaned } as const;
-    const label = describeTrigger(trigger);
+    const label = describeListener(listener);
+    if (listenerLabels.has(label)) {
+      requestClose();
+      return;
+    }
+    if (listeners.length >= TRIGGER_MAX_LISTENERS) {
+      setListenerError(`A routine can watch up to ${TRIGGER_MAX_LISTENERS} things.`);
+      return;
+    }
     onUpdate({
-      trigger,
-      triggers: [
-        ...routine.triggers.filter((existing) => existing !== triggerLabel && existing !== label),
-        label,
-      ],
+      listeners: [...listeners, listener],
+      triggers: [...routine.triggers, label],
     });
-    setFolderError("");
+    setListenerError("");
     requestClose();
+  };
+
+  /** Build the listener the editor currently describes. */
+  const draftListener = (): unknown => {
+    if (listenerOpen === "github") {
+      return { type: "github", repo: scope.trim(), events: [ghEvent] };
+    }
+    const channel = scope.trim() === "" ? ANY_SCOPE : scope.trim();
+    if (slackMatch === "keyword") {
+      return { type: "slack", channel, match: { kind: "keyword", keyword } };
+    }
+    return { type: "slack", channel, match: { kind: slackMatch } };
+  };
+
+  /** Drop one listener, and the label that described it. */
+  const removeListener = (listener: EventListener) => {
+    const label = describeListener(listener);
+    onUpdate({
+      listeners: listeners.filter((candidate) => candidate !== listener),
+      triggers: routine.triggers.filter((existing) => existing !== label),
+    });
   };
 
   /** A schedule replaces any previous one — one clock per routine. */
@@ -160,11 +220,14 @@ export function RoutinePanel({
     setCustomOpen(true);
   };
 
-  /** Open the folder editor, prefilled from whatever trigger exists. */
-  const openFileTrigger = () => {
-    setFolder(routine.trigger?.folder ?? DEFAULT_WATCH_FOLDER);
-    setFolderError("");
-    setFileOpen(true);
+  /** Open the listener editor for one platform, cleared and ready. */
+  const openListener = (platform: "slack" | "github") => {
+    setScope("");
+    setKeyword("");
+    setSlackMatch("mention");
+    setGhEvent(GITHUB_QUICK_EVENTS[0]);
+    setListenerError("");
+    setListenerOpen(platform);
   };
 
   /** Build the schedule from the editor fields; null shows why it failed. */
@@ -274,13 +337,24 @@ export function RoutinePanel({
           <span className="settings-label">When to run</span>
           <div className="trigger-card">
             {routine.triggers.map((label) => {
-              // A clock unless it is the file trigger's own line. Labels from
-              // older routines keep showing, and read as schedules.
-              const Icon = label === triggerLabel ? Inbox : Clock;
+              // A listener's own words identify it; anything else is a clock.
+              const listener = listenerLabels.get(label);
+              const Icon =
+                listener === undefined ? Clock : listener.type === "github" ? GitBranch : Hash;
               return (
                 <div key={label} className="trigger-row">
                   <Icon size={15} strokeWidth={1.8} aria-hidden="true" className="trigger-glyph" />
                   {label}
+                  {listener === undefined ? null : (
+                    <button
+                      type="button"
+                      className="trigger-row-remove"
+                      aria-label={`Stop watching: ${label}`}
+                      onClick={() => removeListener(listener)}
+                    >
+                      <X size={13} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -470,23 +544,75 @@ export function RoutinePanel({
                         </button>
                       </>
                     )
-                  ) : fileOpen ? (
+                  ) : listenerOpen !== undefined ? (
                     <div className="trigger-custom">
                       <label className="trigger-custom-field">
-                        Folder
+                        {listenerOpen === "github" ? "Repository" : "Channel"}
                         <input
                           type="text"
-                          aria-label="Folder"
+                          aria-label={listenerOpen === "github" ? "Repository" : "Channel"}
                           className="trigger-custom-input"
-                          placeholder={DEFAULT_WATCH_FOLDER}
-                          maxLength={MAX_FOLDER_LENGTH}
-                          value={folder}
-                          onChange={(event) => setFolder(event.currentTarget.value)}
+                          placeholder={listenerOpen === "github" ? "owner/name" : "#general or *"}
+                          maxLength={listenerOpen === "github" ? 140 : MAX_CHANNEL_LENGTH}
+                          value={scope}
+                          onChange={(event) => setScope(event.currentTarget.value)}
                         />
                       </label>
-                      {folderError === "" ? null : (
+                      {listenerOpen === "github" ? (
+                        <label className="trigger-custom-field">
+                          Event
+                          <select
+                            aria-label="Event"
+                            className="trigger-custom-select"
+                            value={ghEvent}
+                            onChange={(event) => setGhEvent(event.currentTarget.value)}
+                          >
+                            {GITHUB_EVENT_KINDS.map((kind) => (
+                              <option key={kind} value={kind}>
+                                {kind}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : (
+                        <>
+                          <label className="trigger-custom-field">
+                            When
+                            <select
+                              aria-label="When"
+                              className="trigger-custom-select"
+                              value={slackMatch}
+                              onChange={(event) =>
+                                setSlackMatch(
+                                  event.currentTarget
+                                    .value as (typeof SLACK_MATCHES)[number]["kind"],
+                                )
+                              }
+                            >
+                              {SLACK_MATCHES.map((option) => (
+                                <option key={option.kind} value={option.kind}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          {slackMatch === "keyword" ? (
+                            <label className="trigger-custom-field">
+                              Keyword
+                              <input
+                                type="text"
+                                aria-label="Keyword"
+                                className="trigger-custom-input"
+                                value={keyword}
+                                onChange={(event) => setKeyword(event.currentTarget.value)}
+                              />
+                            </label>
+                          ) : null}
+                        </>
+                      )}
+                      {listenerError === "" ? null : (
                         <span className="trigger-custom-error" aria-live="polite">
-                          {folderError}
+                          {listenerError}
                         </span>
                       )}
                       <div className="trigger-custom-actions">
@@ -494,7 +620,7 @@ export function RoutinePanel({
                           type="button"
                           role="menuitem"
                           className="account-menu-item"
-                          onClick={() => setFileOpen(false)}
+                          onClick={() => setListenerOpen(undefined)}
                         >
                           Back
                         </button>
@@ -502,29 +628,45 @@ export function RoutinePanel({
                           type="button"
                           role="menuitem"
                           className="account-menu-item"
-                          onClick={setTrigger}
+                          onClick={() => addListener(draftListener())}
                         >
                           Apply
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="account-menu-item"
-                      aria-expanded={fileOpen}
-                      onClick={openFileTrigger}
-                    >
-                      <Inbox size={15} strokeWidth={1.8} aria-hidden="true" />
-                      When a file arrives
-                      <ChevronRight
-                        size={14}
-                        strokeWidth={1.8}
-                        aria-hidden="true"
-                        className="trigger-submenu-chevron"
-                      />
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="account-menu-item"
+                        onClick={() => openListener("slack")}
+                      >
+                        <Hash size={15} strokeWidth={1.8} aria-hidden="true" />
+                        On a Slack message
+                        <ChevronRight
+                          size={14}
+                          strokeWidth={1.8}
+                          aria-hidden="true"
+                          className="trigger-submenu-chevron"
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="account-menu-item"
+                        onClick={() => openListener("github")}
+                      >
+                        <GitBranch size={15} strokeWidth={1.8} aria-hidden="true" />
+                        On a GitHub event
+                        <ChevronRight
+                          size={14}
+                          strokeWidth={1.8}
+                          aria-hidden="true"
+                          className="trigger-submenu-chevron"
+                        />
+                      </button>
+                    </>
                   )}
                 </div>
               ) : null}

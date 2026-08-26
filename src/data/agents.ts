@@ -270,15 +270,21 @@ export interface Routine {
   /** Trigger labels, e.g. "Every hour" or "Slack message". */
   triggers: string[];
   active: boolean;
-  /** When to fire automatically; absent = manual-only routine. */
-  schedule?: import("@/lib/schedule").RoutineSchedule;
-  /** What else fires it: an event the scheduler polls for. */
-  trigger?: import("@/lib/trigger").RoutineTrigger;
   /**
-   * The trigger's last observation — the file names its folder held on the
-   * previous poll. Absent means "never polled", which arms without firing.
+   * When to fire on the clock; absent = no schedule. This is the `cron`
+   * member of the trigger family the listeners below complete.
    */
-  seen?: string[];
+  schedule?: import("@/lib/schedule").RoutineSchedule;
+  /**
+   * Event listeners — a Slack channel, a GitHub repo — that also fire it. A
+   * routine may hold several, and may hold both a schedule and listeners.
+   */
+  listeners?: import("@/lib/trigger").EventListener[];
+  /**
+   * Per-listener poll cursors, keyed by `listenerIdentity`. Absent for a
+   * listener means "never polled", which arms without firing.
+   */
+  cursors?: Record<string, import("@/lib/trigger-poll").PollCursor>;
   /** Epoch ms of the next scheduled fire; the scheduler claims it via CAS. */
   nextRunAt?: number;
   /**
