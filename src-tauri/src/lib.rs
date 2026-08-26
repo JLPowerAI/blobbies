@@ -60,6 +60,7 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_delete,
             skills::skills_list,
+            skills::skills_save,
             acp::acp_start,
             acp::acp_stop,
             acp::acp_send,

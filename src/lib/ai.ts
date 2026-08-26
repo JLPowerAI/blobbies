@@ -18,6 +18,7 @@ import {
   makeFsTools,
   makeRosterTools,
   makeRoutineTools,
+  makeSaveSkillTool,
   makeShellTool,
   type PendingAsk,
   type RosterAccess,
@@ -34,6 +35,7 @@ import {
 } from "@/lib/ollama-native";
 import { configFieldEmpty } from "@/lib/prompt";
 import { type Capture, canCapture, makeScreenshotTool } from "@/lib/screenshot";
+import { isTauri } from "@/lib/tauri";
 import { isTinfoilModel, registerTinfoilProvider, tinfoilStructuredCall } from "@/lib/tinfoil";
 
 // From here on, "local" streams over native /api/chat so every turn carries
@@ -924,6 +926,9 @@ export async function streamBlobTurn(options: {
             }),
           ]),
       ...(fs === null ? [] : [...fs.readOnly, ...fs.mutating]),
+      // Writing a skill needs a skills folder, which only the desktop build
+      // has — same fail-closed shape as the capture tools above.
+      ...(isTauri() ? [makeSaveSkillTool()] : []),
       ...rosterTools,
       ...(options.routines === undefined ? [] : makeRoutineTools(options.routines)),
       ...mcpTools,

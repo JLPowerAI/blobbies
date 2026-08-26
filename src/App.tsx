@@ -62,6 +62,7 @@ import {
 import { homeFor } from "@/lib/home";
 import type { Intent } from "@/lib/intent";
 import { type McpServerConfig, parseLoopbackUrl } from "@/lib/mcp-config";
+import { modelSeesImages } from "@/lib/model-vision";
 import { notify, shouldNotify } from "@/lib/notify";
 import { unloadOllamaModel } from "@/lib/ollama";
 import { readPreference, writePreference } from "@/lib/preferences";
@@ -77,6 +78,7 @@ import { listSkills, type Skill, skillLine } from "@/lib/skills";
 import { playChime } from "@/lib/sound";
 import * as store from "@/lib/store";
 import { openExternal } from "@/lib/tauri";
+import * as teach from "@/lib/teach";
 import { isTinfoilModel } from "@/lib/tinfoil-model";
 import { dropOrphanToolResults, toolTraceMessages, trimToolTrace } from "@/lib/tool-trace";
 import { wrapUntrusted } from "@/lib/untrusted";
@@ -1745,6 +1747,12 @@ export function App() {
       stopWith?: string;
       /** Pre-made classification (groups): skips this turn's router and write. */
       intent?: Intent;
+      /**
+       * Base64 PNGs to send alongside `prompt`, for a turn that is about
+       * pictures — a recorded demonstration. Dropped for a model that cannot
+       * read images, which rejects the request outright rather than degrading.
+       */
+      images?: readonly string[];
     },
   ): Promise<"done" | "failed" | "cancelled"> => {
     const trigger = turn?.trigger ?? "user";
@@ -1932,7 +1940,22 @@ export function App() {
     // Routine (and answer-to-routine) turns carry the instruction as the
     // prompt; it is not a visible transcript message — the event line is.
     if (turn?.prompt !== undefined) {
-      aiMessages.push({ role: "user", content: turn.prompt });
+      const images = turn.images ?? [];
+      aiMessages.push(
+        images.length === 0 || !(await modelSeesImages(model))
+          ? { role: "user", content: turn.prompt }
+          : {
+              role: "user",
+              content: [
+                { type: "text", text: turn.prompt },
+                ...images.map((data) => ({
+                  type: "image" as const,
+                  mediaType: "image/png",
+                  data,
+                })),
+              ],
+            },
+      );
     }
     // In a group, the newest message is often another Blob's reply, and a
     // model answers the newest thing it sees: measured at 50% on qwen3.5:2b,
@@ -2556,6 +2579,107 @@ export function App() {
    * user should see what was captured at the moment it happens, including on a
    * routine that runs unattended.
    */
+  /**
+   * Teach by demonstration: record the screen, then let the Blob write down
+   * what it saw as a skill.
+   *
+   * Frames go through `capture_take`, so this inherits the whole containment
+   * of the screenshot tool — the OS consent gate, the downscale, the home
+   * budget — and adds the one thing recording needs: a pill that is on screen
+   * for every second it records, with the elapsed time and both ways out.
+   */
+  const [teachState, setTeachState] = useState<teach.TeachState>(teach.IDLE);
+  const [teachElapsed, setTeachElapsed] = useState(0);
+  // The frames' base64, for the turn that follows. Kept out of React state:
+  // this is megabytes of PNG that nothing on screen renders.
+  const teachFrames = useRef<string[]>([]);
+  // The recorder's own state, readable outside render. `stopTeaching` reads
+  // it rather than working inside a setState updater: queueing a turn from an
+  // updater would fire twice under StrictMode's double-invoke, and a
+  // demonstration must produce exactly one turn.
+  const teachRef = useRef<teach.TeachState>(teach.IDLE);
+  teachRef.current = teachState;
+
+  const stopTeaching = (outcome: "save" | "discard") => {
+    const frames = [...teachFrames.current];
+    teachFrames.current = [];
+    const { state, saved } = teach.stop(teachRef.current, outcome);
+    teachRef.current = state;
+    setTeachState(state);
+    if (saved === undefined) {
+      return;
+    }
+    const target = agentsRef.current.find((candidate) => candidate.id === saved.blobId);
+    if (target === undefined) {
+      return;
+    }
+    appendMessage(saved.blobId, {
+      id: `event-${Date.now()}`,
+      kind: "event",
+      text: `Demonstration recorded — ${saved.frames.length} frames`,
+      timestampMs: Date.now(),
+    });
+    void queueTurn(
+      () =>
+        requestReply(target, transcriptFor(target), {
+          trigger: "routine",
+          prompt: teach.demonstrationPrompt(saved.frames),
+          images: frames,
+        }),
+      saved.blobId,
+    );
+  };
+  // The effect below runs on a timer and must not restart on every render.
+  const stopTeachingRef = useRef(stopTeaching);
+  stopTeachingRef.current = stopTeaching;
+
+  // One interval drives both the elapsed readout and the frames, so the time
+  // shown and the time recorded can never disagree.
+  useEffect(() => {
+    if (teachState.phase !== "recording") {
+      return;
+    }
+    let cancelled = false;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setTeachElapsed(now - teachState.startedAt);
+      // The hard cap SAVES: discarding a demonstration someone just performed
+      // would be worse than not stopping at all.
+      if (teach.expired(teachState, now)) {
+        stopTeachingRef.current("save");
+        return;
+      }
+      const index = teachFrames.current.length;
+      if (!teach.canCapture(teachState, now)) {
+        return;
+      }
+      const name = teach.frameName(index);
+      void import("@tauri-apps/api/core")
+        .then(({ invoke }) =>
+          invoke<Capture>("capture_take", {
+            id: teachState.blobId ?? null,
+            name,
+            windowId: null,
+          }),
+        )
+        .then((capture) => {
+          if (cancelled) {
+            return;
+          }
+          teachFrames.current = [...teachFrames.current, capture.png];
+          setTeachState((current) => teach.addFrame(current, name));
+        })
+        .catch(() => {
+          // A frame that fails (consent revoked mid-recording, display asleep)
+          // is one missing picture, not a reason to lose the demonstration.
+        });
+    }, teach.FRAME_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [teachState]);
+
   const showCapture = async (
     conversationId: string,
     blobId: string,
@@ -3236,7 +3360,40 @@ export function App() {
           detailOpen={detailOpen}
           onToggleDetail={() => setDetailOpen((open) => !open)}
           onOpenSettings={openSettings}
+          teaching={teachState.phase === "recording"}
+          {...(canCapture()
+            ? {
+                onTeach: () => {
+                  setTeachElapsed(0);
+                  teachFrames.current = [];
+                  setTeachState((current) => teach.start(current, agent.id, Date.now()));
+                },
+              }
+            : {})}
         />
+      ) : null}
+      {/* On screen for every second it records, naming the Blob it is teaching
+          and offering both ways out. A recording the user cannot see is the
+          one thing this feature must never do. */}
+      {teachState.phase === "recording" ? (
+        <div className="teach-pill" role="status" aria-live="polite">
+          <span className="teach-pill-dot" aria-hidden="true" />
+          <span className="teach-pill-text">
+            Recording for{" "}
+            {agents.find((candidate) => candidate.id === teachState.blobId)?.name ?? "a Blob"}
+          </span>
+          <span className="teach-pill-time">{teach.formatElapsed(teachElapsed)}</span>
+          <button type="button" className="teach-pill-save" onClick={() => stopTeaching("save")}>
+            Stop &amp; save
+          </button>
+          <button
+            type="button"
+            className="teach-pill-discard"
+            onClick={() => stopTeaching("discard")}
+          >
+            Discard
+          </button>
+        </div>
       ) : null}
       {agent === undefined || selectedGroup !== undefined ? null : (
         <SlidePanel side="right" open={detailOpen && !composing}>

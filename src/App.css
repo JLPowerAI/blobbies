@@ -6410,3 +6410,74 @@ a.modal-button {
     scroll-behavior: auto;
   }
 }
+
+/* --------------------------------------------- teach recording pill */
+
+/* On screen for every second a demonstration records. Fixed and centred under
+   the header so it survives a pane switch — recording is app-wide, not a
+   property of whichever conversation happens to be open — and so it never
+   covers the composer, where the user may still be typing. */
+.teach-pill {
+  position: fixed;
+  inset-block-start: 60px;
+  inset-inline: 0;
+  z-index: 60;
+  width: fit-content;
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  border-radius: 999px;
+  background: var(--surface-chat);
+  border: 1px solid var(--border-hairline);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  color: var(--text-primary);
+  animation: pop-up-in 180ms var(--ease-standard);
+}
+
+.teach-pill-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--status-err);
+  animation: unread-pulse 2s ease-in-out infinite;
+}
+
+.teach-pill-time {
+  /* Tabular so the seconds do not jitter the buttons beside them. */
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.teach-pill-save,
+.teach-pill-discard {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: none;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.teach-pill-save {
+  background: var(--text-primary);
+  color: var(--surface-chat);
+  font-weight: 500;
+}
+
+.teach-pill-discard {
+  background: var(--surface-control);
+  color: var(--text-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The red dot's presence is the signal; the pulse only decorates it. */
+  .teach-pill {
+    animation: none;
+  }
+
+  .teach-pill-dot {
+    animation: none;
+  }
+}

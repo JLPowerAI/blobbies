@@ -1403,6 +1403,55 @@ export function makeComposioTools(model?: string): AgentTool[] {
  * one they are refused outright, matching `makeFsTools` being absent when a
  * turn has no home.
  */
+/**
+ * `save_skill`: the write half of the skills folder.
+ *
+ * Offered only where skills can actually be written (desktop), and deliberately
+ * narrow — three text fields, no path. Rust builds the folder name and the
+ * frontmatter itself from these, so the model chooses *what* a skill says and
+ * never *where* it lands or which keys it carries (`skills.rs`).
+ */
+export function makeSaveSkillTool(): AgentTool {
+  const parameters = z.object({
+    name: z.string().describe('Short name for the skill, e.g. "filing the inbox"'),
+    description: z
+      .string()
+      .describe("One line saying when this skill should be used, and when it should not"),
+    body: z.string().describe("Markdown steps: how to do the task, in the order you would do it"),
+  });
+  const tool: AgentTool<typeof parameters> = {
+    name: "save_skill",
+    description:
+      "Write down how to do something so you still know it next time. Use " +
+      "after the user demonstrates a task or walks you through one, and when " +
+      "they ask you to remember a way of working. Saving the same name again " +
+      "replaces what you wrote before, so re-save the whole skill rather than " +
+      "a fragment. This is for repeatable know-how — use memory for facts.",
+    parameters,
+    // Writes a folder: two at once would race on the same directory.
+    executionMode: "sequential",
+    execute: async (args) => {
+      if (!isTauri()) {
+        return "Skills can't be saved in this build — tell the user the steps instead so they can keep them.";
+      }
+      const { invoke } = await import("@tauri-apps/api/core");
+      try {
+        const slug = await invoke<string>("skills_save", {
+          name: args.name,
+          description: args.description,
+          body: args.body,
+        });
+        return `Saved as the skill "${args.name}" (skills/${slug}). It will be in your skills list from the next turn.`;
+      } catch (error) {
+        return typeof error === "string"
+          ? `The skill wasn't saved: ${error}`
+          : "The skill wasn't saved. Tell the user the steps instead so they can keep them.";
+      }
+    },
+  };
+  return tool;
+}
+
 export function makeShellTool(blobId?: string): AgentTool {
   const parameters = z.object({
     program: z.string().describe("Program name only, e.g. ls, rg, cat, grep"),

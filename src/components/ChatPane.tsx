@@ -4,6 +4,7 @@ import {
   CornerUpRight,
   Ellipsis,
   FileText,
+  GraduationCap,
   Image as ImageIcon,
   Monitor,
   Plus,
@@ -110,6 +111,14 @@ interface ChatPaneProps {
   detailOpen: boolean;
   onToggleDetail: () => void;
   onOpenSettings: () => void;
+  /**
+   * Start recording a demonstration for this Blob. Absent where recording is
+   * impossible (a group pane, or a build that cannot capture), which is also
+   * what hides the button — an entry that cannot work is worse than none.
+   */
+  onTeach?: (() => void) | undefined;
+  /** True while any Blob is being taught, so the entry cannot start a second. */
+  teaching?: boolean | undefined;
 }
 
 /** Messages rendered initially; scrolling to the top reveals another page.
@@ -583,6 +592,8 @@ export function ChatPane({
   detailOpen,
   onToggleDetail,
   onOpenSettings,
+  onTeach,
+  teaching,
 }: ChatPaneProps) {
   const [draft, setDraft] = useState("");
   /**
@@ -1771,6 +1782,18 @@ export function ChatPane({
           </PillSelect>
           {/* The details panel is one Blob's memories, files and routines —
               there is no group-wide version of it. */}
+          {onTeach === undefined ? null : (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={`Teach ${agent.name} by demonstration`}
+              title={`Teach ${agent.name} by demonstration`}
+              disabled={teaching === true}
+              onClick={onTeach}
+            >
+              <GraduationCap size={17} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+          )}
           {group === undefined ? (
             <button
               type="button"
