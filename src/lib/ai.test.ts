@@ -1594,6 +1594,46 @@ describe("streamBlobTurn routine scope", () => {
     // The cause, not just the fact: a bare "failed" is the same dead end.
     expect(subagent?.result).toContain("shrubbery");
   });
+
+  it("says a helper ran out of steps even when it left no text behind", async () => {
+    // The last silent outcome: a helper that keeps calling tools until its
+    // turn budget runs out ends with empty text, because each tool call
+    // clears the partial. Reported as "nothing useful" it looks like a
+    // helper with nothing to say, so the caller re-sends the same doomed
+    // task instead of narrowing it.
+    let askedParent = false;
+    let helperTurns = 0;
+    fetchHandler = async (_input, init) => {
+      if (isHelperRequest(init)) {
+        helperTurns += 1;
+        // Never answers, just keeps browsing — list_files is local, so this
+        // burns turns without touching the network.
+        return ndjson(toolCallChunks("list_files", { path: "." }, "Still looking..."));
+      }
+      if (!askedParent) {
+        askedParent = true;
+        return ndjson(toolCallChunks("run_subagent", { name: "scout", task: "the weather" }));
+      }
+      return ndjson(textChunks("The helper stalled, so I answered myself."));
+    };
+    const calls: ToolCallRecord[] = [];
+    await streamBlobTurn({
+      model: "llama3.2:latest",
+      messages: [{ role: "user", content: "the weather" }],
+      scope: "routine",
+      home: memoryHome(),
+      memory: { list: () => [], save: () => {} },
+      onToolCall: (call) => calls.push(call),
+      onSegment: () => {},
+      onConfigure: () => {},
+    });
+    // The budget actually bound, rather than the helper stopping on its own.
+    expect(helperTurns).toBeGreaterThan(1);
+    const subagent = calls.find((call) => call.name === "run_subagent");
+    expect(subagent?.result).toContain("ran out of steps");
+    // Not blamed on the helper having nothing to say.
+    expect(subagent?.result).not.toContain("said nothing");
+  });
 });
 
 describe("a routine that only announces the work", () => {
