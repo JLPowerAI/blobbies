@@ -6,8 +6,8 @@ import {
   cleanResults,
   fetchTextLimit,
   htmlToText,
-  MEMORY_LIMIT,
-  MEMORY_PROMPT_CHARS,
+  MEMORY_PROMPT_TOKENS,
+  MEMORY_STORE_LIMIT,
   MEMORY_TEXT_LIMIT,
   makeAskTool,
   makeBlobTools,
@@ -26,6 +26,7 @@ import {
 } from "@/lib/blob-tools";
 import { memoryHome } from "@/lib/home";
 import type { RoutineSchedule } from "@/lib/schedule";
+import { estimateTokens } from "@/lib/tokens";
 
 const context = { signal: new AbortController().signal, toolCallId: "t1" };
 
@@ -185,12 +186,13 @@ describe("blob tools", () => {
     expect(stored).toHaveLength(4);
   });
 
-  it("evicts the stalest fact at the limit instead of refusing to remember", async () => {
+  it("evicts the stalest fact at the store cap instead of refusing to remember", async () => {
     // Previously the tool answered "Memory is full — forget something first"
     // and dropped the write, so memory silently stopped working at the cap
-    // until the user pruned it by hand. The oldest untouched fact goes, and
-    // the reply names it so the model can offer to re-save it.
-    let stored: BlobMemory[] = Array.from({ length: MEMORY_LIMIT }, (_, index) => ({
+    // until the user pruned it by hand. The weakest fact goes, and the reply
+    // names it so the model can offer to re-save it. Reaching this at all now
+    // takes years: facts leave the prompt, not the store.
+    let stored: BlobMemory[] = Array.from({ length: MEMORY_STORE_LIMIT }, (_, index) => ({
       id: `id${index}`,
       text: `saved fact number ${index}`,
       createdAt: index + 1,
@@ -205,10 +207,71 @@ describe("blob tools", () => {
     const result = await tools
       .find((tool) => tool.name === "remember")
       ?.execute({ text: "Ken moved to Lisbon" }, context);
-    expect(stored).toHaveLength(MEMORY_LIMIT);
+    expect(stored).toHaveLength(MEMORY_STORE_LIMIT);
     expect(stored.map((memory) => memory.text)).toContain("Ken moved to Lisbon");
     expect(stored.map((memory) => memory.text)).not.toContain("saved fact number 0");
     expect(result).toContain("saved fact number 0");
+  });
+
+  it("recalls a fact the prompt had no room to show", async () => {
+    // The point of the split: fact 200 is still answerable even though the
+    // working set stops long before it.
+    const stored: BlobMemory[] = [
+      ...Array.from({ length: 200 }, (_, index) => ({
+        id: `id${index}`,
+        text: `filler fact number ${index}`,
+        createdAt: index + 1,
+      })),
+      { id: "dentist", text: "Ken's dentist is Dr Okafor", createdAt: 1 },
+    ];
+    const tools = makeBlobTools({ list: () => stored, save: () => {} });
+    expect(renderMemories(stored)).not.toContain("Dr Okafor");
+
+    const result = await tools
+      .find((tool) => tool.name === "recall_memory")
+      ?.execute({ query: "dentist" }, context);
+    expect(result).toContain("Dr Okafor");
+  });
+
+  it("says so plainly when a recall finds nothing, rather than guessing", async () => {
+    const tools = makeBlobTools({
+      list: () => [{ id: "a", text: "Ken runs on Mondays", createdAt: 1 }],
+      save: () => {},
+    });
+    const result = await tools
+      .find((tool) => tool.name === "recall_memory")
+      ?.execute({ query: "dentist" }, context);
+    expect(result).toBe('Nothing saved about "dentist".');
+  });
+
+  it("cannot write through the recall tool", async () => {
+    // It is offered to the chat loop, which deliberately holds no memory
+    // write tool; a save reachable from here would route around that.
+    let saved: BlobMemory[] | null = null;
+    const tools = makeBlobTools({
+      list: () => [{ id: "a", text: "Ken runs on Mondays", createdAt: 1 }],
+      save: (next) => {
+        saved = next;
+      },
+    });
+    await tools
+      .find((tool) => tool.name === "recall_memory")
+      ?.execute({ query: "Mondays" }, context);
+    expect(saved).toBeNull();
+  });
+
+  it("saves at the tier the model chose, defaulting to log", async () => {
+    let stored: BlobMemory[] = [];
+    const tools = makeBlobTools({
+      list: () => stored,
+      save: (next) => {
+        stored = next;
+      },
+    });
+    const remember = tools.find((tool) => tool.name === "remember");
+    await remember?.execute({ text: "Ken is a paramedic", tier: "profile" }, context);
+    await remember?.execute({ text: "Ken booked a dentist" }, context);
+    expect(stored.map((memory) => memory.tier)).toEqual(["profile", "log"]);
   });
 
   it("treats a requoted fact as known, without spending a reconcile call", async () => {
@@ -236,17 +299,21 @@ describe("blob tools", () => {
   });
 
   it("budgets the memory block so it cannot overrun a local context window", () => {
-    // Worst case the store allows: every slot filled to the text cap.
-    const full: BlobMemory[] = Array.from({ length: MEMORY_LIMIT }, (_, index) => ({
+    // Worst case the store allows: every slot filled to the text cap. The
+    // store is now far larger than the window, so this is the case that used
+    // to be impossible only because facts were deleted to prevent it.
+    const full: BlobMemory[] = Array.from({ length: MEMORY_STORE_LIMIT }, (_, index) => ({
       id: `id${index}`,
       text: "x".repeat(MEMORY_TEXT_LIMIT),
       createdAt: index,
     }));
     const block = renderMemories(full);
-    expect(block.length).toBeLessThanOrEqual(MEMORY_PROMPT_CHARS + 200);
-    // Newest survive the budget, oldest are dropped.
-    expect(block).toContain(`[${MEMORY_LIMIT}]`);
-    expect(block).not.toContain("[1]");
+    expect(estimateTokens(block)).toBeLessThanOrEqual(MEMORY_PROMPT_TOKENS + 50);
+    // Newest survive the budget, oldest are dropped — and the model is told
+    // the others are still saved rather than assuming this is everything.
+    expect(block).toContain(`[${MEMORY_STORE_LIMIT}]`);
+    expect(block).not.toContain("[1] ");
+    expect(block).toContain("not shown — call recall_memory");
   });
 
   it("web_fetch refuses non-https and malformed URLs", async () => {

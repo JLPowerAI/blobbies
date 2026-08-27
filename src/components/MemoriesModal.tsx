@@ -4,7 +4,7 @@ import { ModalShell } from "@/components/ModalShell";
 import {
   applyMemoryWrite,
   type BlobMemory,
-  MEMORY_LIMIT,
+  MEMORY_STORE_LIMIT,
   MEMORY_TEXT_LIMIT,
   type MemoryWrite,
 } from "@/lib/memory";
@@ -292,7 +292,8 @@ export function MemoriesModal({
                             row.scope === "blob" ? "Share with all Blobs" : "Keep to this Blob only"
                           }
                           disabled={
-                            listFor(row.scope === "blob" ? "user" : "blob").length >= MEMORY_LIMIT
+                            listFor(row.scope === "blob" ? "user" : "blob").length >=
+                            MEMORY_STORE_LIMIT
                           }
                           onClick={() => moveScope(row.memory, row.scope)}
                         >

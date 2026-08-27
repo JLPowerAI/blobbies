@@ -424,7 +424,8 @@ describe("blobSystemPrompt", () => {
 
   it("caps both memory sections together, dropping the oldest facts first", async () => {
     const { blobSystemPrompt } = await import("@/lib/ai");
-    const { MEMORY_PROMPT_CHARS } = await import("@/lib/blob-tools");
+    const { MEMORY_PROMPT_TOKENS } = await import("@/lib/blob-tools");
+    const { estimateTokens } = await import("@/lib/tokens");
     const facts = (prefix: string) =>
       Array.from({ length: 40 }, (_, index) => ({
         id: `${prefix}${index}`,
@@ -434,12 +435,26 @@ describe("blobSystemPrompt", () => {
     const prompt = blobSystemPrompt({ name: "Ken", memories: facts("blob") }, undefined, {
       userMemories: facts("shared"),
     });
-    // 80 facts of 200 chars is 16k; the prompt must stay inside the budget
-    // (plus the two section headers, which are not counted against it).
-    expect(prompt.length).toBeLessThan(MEMORY_PROMPT_CHARS + 2_000);
+    // 80 facts of 200 chars is 16k; the two sections together must stay
+    // inside the one shared budget, headers and lead lines excepted.
+    // Just the two memory sections — the base prompt has bullet lists of its
+    // own, and they are not charged against the memory budget.
+    const sections = prompt
+      .split("\n\n")
+      .filter((block) => block.startsWith("## What "))
+      .join("\n");
+    const factText = sections
+      .split("\n")
+      .filter((line) => line.startsWith("- ") || line.startsWith("("))
+      .join("\n");
+    expect(estimateTokens(factText)).toBeLessThanOrEqual(MEMORY_PROMPT_TOKENS);
+    expect(estimateTokens(prompt)).toBeLessThan(MEMORY_PROMPT_TOKENS + 600);
     // Newest survive, oldest are dropped.
     expect(prompt).toContain("shared fact 39");
     expect(prompt).not.toContain("shared fact 0 ");
+    // And the model is told the rest still exist rather than assuming the
+    // block is everything it was ever told.
+    expect(prompt).toContain("not shown — call recall_memory");
   });
 });
 
@@ -786,6 +801,7 @@ describe("streamBlobTurn", () => {
       "create_routine",
       "delete_routine",
       "list_routines",
+      "recall_memory",
       "run_command",
       "run_subagent",
       "update_routine",
@@ -911,15 +927,21 @@ describe("streamBlobTurn", () => {
       onConfigure: () => {},
       onToolCall: (record) => records.push({ name: record.name, result: record.result }),
     });
-    // The catalog itself is the guarantee — no memory or config write tool
-    // for any model to misuse; those belong to the router alone.
+    // The catalog itself is the guarantee — no memory or config *write* tool
+    // for any model to misuse; those belong to the router alone. recall_memory
+    // is offered because it only reads, and the memory block's "N more saved
+    // facts" line has to lead somewhere.
     expect([...offeredTools].sort()).toEqual([
       "ask_user",
+      "recall_memory",
       "run_command",
       "run_subagent",
       "web_fetch",
       "web_search",
     ]);
+    expect([...offeredTools]).not.toContain("remember");
+    expect([...offeredTools]).not.toContain("update_memory");
+    expect([...offeredTools]).not.toContain("forget");
     // Nothing persisted: the memory survived the misfire.
     expect(saved).toBeNull();
     expect(records[0]?.result).toContain("Unknown tool");
@@ -1104,6 +1126,9 @@ describe("streamBlobTurn routine scope", () => {
       "list_files",
       "message_blob",
       "read_file",
+      // Reads saved facts, never writes one: the write tools stay with the
+      // router even on a routine turn, which never runs the router.
+      "recall_memory",
       // A local command runner, but not a shell: the Rust side takes argv and
       // an allowlist, so a poisoned page cannot turn "run this" into
       // arbitrary execution.
@@ -1231,6 +1256,7 @@ describe("streamBlobTurn routine scope", () => {
       "mcp__files__lookup",
       "message_blob",
       "read_file",
+      "recall_memory",
       "run_command",
       "run_subagent",
       "spawn_blob",

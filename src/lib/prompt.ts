@@ -9,9 +9,10 @@ import type { Message } from "@kenkaiiii/gg-ai";
 import {
   type BlobMemory,
   MEMORY_DATA_NOTE,
-  MEMORY_PROMPT_CHARS,
+  MEMORY_PROMPT_TOKENS,
   renderMemories,
 } from "@/lib/memory";
+import { estimateTokens } from "@/lib/tokens";
 
 /** Who the Blob is talking to: name goes in the (cached) system prompt, timezone feeds `timeNote`. */
 export interface UserContext {
@@ -521,10 +522,10 @@ export function blobSystemPrompt(
   // Budgeted from the real shared block, shared facts first (see above).
   const shared = renderMemories(extensions.userMemories ?? [], {
     scope: "user",
-    budget: MEMORY_PROMPT_CHARS,
+    budget: MEMORY_PROMPT_TOKENS,
   });
   const memories = renderMemories(blob.memories ?? [], {
-    budget: MEMORY_PROMPT_CHARS - shared.length,
+    budget: MEMORY_PROMPT_TOKENS - estimateTokens(shared),
   });
 
   // One closing note under whichever memory blocks rendered, never one each:

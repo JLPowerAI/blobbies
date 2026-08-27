@@ -89,7 +89,7 @@ const MAX_ATTACHMENT_CHARS = 60_000;
 /**
  * Chars of attached text inlined per message, split across its attachments.
  *
- * Same budget reasoning as `MEMORY_PROMPT_CHARS`: ~2k tokens of a 16k window.
+ * Same budget reasoning as `MEMORY_PROMPT_TOKENS`: ~2k tokens of a 16k window.
  * The whole file is still saved — the model reads the rest with its file tools
  * on a routine turn, and the user sees it in the Files panel.
  */

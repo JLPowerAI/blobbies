@@ -1,8 +1,64 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import { FRAME_INTERVAL_MS, MAX_DURATION_MS } from "@/lib/teach";
+
+/** Every turn App asked for, so a test can read what it actually sent. */
+let turns: { messages: { role: string; content: unknown }[] }[] = [];
+
+vi.mock("@/lib/ai", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ai")>()),
+  streamBlobTurn: vi.fn((options: { messages: { role: string; content: unknown }[] }) => {
+    turns.push(options);
+    return Promise.resolve("Learned it.");
+  }),
+}));
+
+// The frames only reach the model when the selected model can see pictures;
+// otherwise App sends the prompt as plain text (`src/App.tsx:1958`). The real
+// check probes Ollama over HTTP, which is not this file's subject.
+vi.mock("@/lib/model-vision", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/model-vision")>()),
+  modelSeesImages: vi.fn(() => Promise.resolve(true)),
+}));
+
+/** The image parts of the last turn's final user message. */
+function sentImages(): { type: string; mediaType?: string; data?: string }[] {
+  const last = turns[turns.length - 1];
+  const content = last?.messages[last.messages.length - 1]?.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return (content as { type: string; mediaType?: string; data?: string }[]).filter(
+    (part) => part.type === "image",
+  );
+}
+
+/**
+ * Advance fake timers one frame at a time, each inside its own act() scope.
+ *
+ * The recorder ticks once per `FRAME_INTERVAL_MS` and re-renders the elapsed
+ * pill each time, so advancing the clock drives React state from a timer
+ * callback rather than an event handler. Without a scope React warns on every
+ * one of those updates — 455 of them for the cap test alone, which advances a
+ * full `MAX_DURATION_MS`.
+ *
+ * Stepping matters as much as the scope. Each tick fires `capture_take` and
+ * appends the resolved frame, and the effect re-arms on the resulting state
+ * change (`src/App.tsx:2652`). Advancing the whole span in one act() batches
+ * those updates to the end, so no frame ever lands and the cap saves an empty
+ * recording — `teach.stop` returns nothing to save when `frames` is empty.
+ * A scope per frame reproduces what the real clock does.
+ */
+async function advanceWithin(ms: number) {
+  for (let elapsed = 0; elapsed < ms; elapsed += FRAME_INTERVAL_MS) {
+    const step = Math.min(FRAME_INTERVAL_MS, ms - elapsed);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(step);
+    });
+  }
+}
 
 /**
  * Teach by demonstration, end to end through the real app.
@@ -33,9 +89,14 @@ function installTauri(): Call[] {
         case "skills_list":
           return Promise.resolve([]);
         // An empty store, answering the shape the real backend answers with:
-        // `null` for a key never written, nothing for a write.
+        // `null` for a key never written, nothing for a write — except the
+        // settings slice, which carries the model a turn needs to run at all.
         case "store_read":
-          return Promise.resolve(null);
+          return Promise.resolve(
+            args.key === "settings"
+              ? { userName: "Ken Kai", theme: "light", model: "llama3.2:latest", plugins: [] }
+              : null,
+          );
         case "store_write":
           return Promise.resolve();
         default:
@@ -48,6 +109,10 @@ function installTauri(): Call[] {
   (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = internals;
   return calls;
 }
+
+beforeEach(() => {
+  turns = [];
+});
 
 afterEach(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -82,7 +147,7 @@ describe("teach by demonstration", () => {
     // A second recording cannot be armed while this one runs.
     expect(screen.getByRole("button", { name: "Teach Ken by demonstration" })).toBeDisabled();
 
-    await vi.advanceTimersByTimeAsync(FRAME_INTERVAL_MS * 2 + 100);
+    await advanceWithin(FRAME_INTERVAL_MS * 2 + 100);
     await waitFor(() =>
       expect(calls.filter((call) => call.command === "capture_take").length).toBeGreaterThan(0),
     );
@@ -97,6 +162,34 @@ describe("teach by demonstration", () => {
     expect(screen.queryByText(/Recording for/)).toBeNull();
   });
 
+  it("sends the recorded frames to the model, not just their names", async () => {
+    // The gap this closes: every other assertion here is satisfied by the
+    // *names* of the frames — the capture_take calls, the transcript line, the
+    // pill. None of them notices if the captured PNG bytes are dropped on the
+    // way to the turn, which is the one thing a demonstration is for. A model
+    // handed six filenames and no pictures learns nothing.
+    const calls = installTauri();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<App />);
+    await createBlob(user, "Ken");
+
+    await user.click(screen.getByRole("button", { name: "Teach Ken by demonstration" }));
+    await advanceWithin(FRAME_INTERVAL_MS * 3 + 100);
+    await user.click(screen.getByRole("button", { name: "Stop & save" }));
+
+    await waitFor(() => expect(turns.length).toBeGreaterThan(0));
+    const images = sentImages();
+    expect(images.length).toBeGreaterThan(0);
+    // Real bytes, not a placeholder: the one-pixel PNG the capture stub hands
+    // back has to survive the whole path into the payload.
+    expect(images[0]?.mediaType).toBe("image/png");
+    expect(images[0]?.data).toMatch(/^iVBORw0KGgo/);
+    // One image part per frame the recorder captured.
+    const captured = calls.filter((call) => call.command === "capture_take").length;
+    expect(images).toHaveLength(captured);
+  });
+
   it("writes nothing at all when the recording is discarded", async () => {
     installTauri();
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -105,7 +198,7 @@ describe("teach by demonstration", () => {
     await createBlob(user, "Ken");
 
     await user.click(screen.getByRole("button", { name: "Teach Ken by demonstration" }));
-    await vi.advanceTimersByTimeAsync(FRAME_INTERVAL_MS + 100);
+    await advanceWithin(FRAME_INTERVAL_MS + 100);
     await user.click(screen.getByRole("button", { name: "Discard" }));
 
     expect(screen.queryByText(/Recording for/)).toBeNull();
@@ -123,7 +216,7 @@ describe("teach by demonstration", () => {
     await createBlob(user, "Ken");
 
     await user.click(screen.getByRole("button", { name: "Teach Ken by demonstration" }));
-    await vi.advanceTimersByTimeAsync(MAX_DURATION_MS + FRAME_INTERVAL_MS);
+    await advanceWithin(MAX_DURATION_MS + FRAME_INTERVAL_MS);
 
     await waitFor(() => expect(screen.queryByText(/Recording for/)).toBeNull());
     // The cap SAVES: throwing away what someone just performed would be worse

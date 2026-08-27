@@ -18,7 +18,13 @@ import {
 } from "@/lib/context-window";
 import type { HomeBackend } from "@/lib/home";
 import { mediaAudio, mediaClip, mediaInfo } from "@/lib/media";
-import { applyMemoryWrite, type BlobMemory, knownFact, normaliseFact } from "@/lib/memory";
+import {
+  applyMemoryWrite,
+  type BlobMemory,
+  knownFact,
+  normaliseFact,
+  searchMemories,
+} from "@/lib/memory";
 import { coerceSchedule, describeSchedule, type RoutineSchedule } from "@/lib/schedule";
 import { hostIsPublic, isTauri, runCommand } from "@/lib/tauri";
 import { wrapUntrusted } from "@/lib/untrusted";
@@ -74,12 +80,18 @@ export {
   applyMemoryWrite,
   factOverlap,
   knownFact,
-  MEMORY_LIMIT,
-  MEMORY_PROMPT_CHARS,
+  MEMORY_PROFILE_PROMPT_LIMIT,
+  MEMORY_PROMPT_TOKENS,
+  MEMORY_RECENT_PROMPT_LIMIT,
+  MEMORY_STORE_LIMIT,
   MEMORY_TEXT_LIMIT,
+  memoryTier,
   normaliseFact,
+  recallMemories,
+  recallRank,
   renderMemories,
   resolveMemory,
+  searchMemories,
 } from "@/lib/memory";
 
 /** In a plain browser (dev/tests) the plugin IPC is absent; fall back. */
@@ -514,6 +526,16 @@ export interface MemoryAccess {
 function makeMemoryTools(access: MemoryAccess) {
   const rememberParams = z.object({
     text: z.string().describe("The fact to remember, one short sentence"),
+    tier: z
+      .enum(["profile", "log", "note"])
+      .optional()
+      .describe(
+        'Defaults to "log". Use "profile" for who the user is and how they ' +
+          'want to be worked with; "note" for minor detail. Keep profile small.',
+      ),
+  });
+  const recallParams = z.object({
+    query: z.string().describe('Words to look for in saved facts, e.g. "dentist"'),
   });
   const updateParams = z.object({
     id: z.string().describe('The number shown in brackets next to the memory, e.g. "2"'),
@@ -554,6 +576,7 @@ function makeMemoryTools(access: MemoryAccess) {
         kind: "save",
         text,
         ...(stale === undefined ? {} : { stale }),
+        ...(args.tier === undefined ? {} : { tier: args.tier }),
       });
       if (result.changed) {
         access.save(result.memories);
@@ -569,11 +592,16 @@ function makeMemoryTools(access: MemoryAccess) {
           .map((memory) => `"${memory.text}"`)
           .join(", ")}.`;
       }
+      if (result.outcome === "updated") {
+        return "Already remembered — kept it as more important.";
+      }
       // Naming the evicted fact is the only warning the user gets that a
-      // memory left the list, and the model can offer to re-save it.
+      // memory left the list, and the model can offer to re-save it. Reaching
+      // the store cap at all takes years; facts leave the *prompt* silently
+      // and by design, which is what the overflow line covers.
       return result.evicted.length === 0
         ? "Remembered."
-        : `Remembered. Memory was full, so I dropped the oldest: ${result.evicted
+        : `Remembered. Memory was full, so I dropped the least-used: ${result.evicted
             .map((memory) => `"${memory.text}"`)
             .join(", ")}.`;
     },
@@ -620,7 +648,28 @@ function makeMemoryTools(access: MemoryAccess) {
       return "Forgotten.";
     },
   };
-  return [remember, update, forget];
+  const recall: AgentTool<typeof recallParams> = {
+    name: "recall_memory",
+    description:
+      "Search everything you have saved about the user, including facts not " +
+      "shown in your memory list. Use this when the list says more facts are " +
+      "saved and the answer might be one of them, or when the user refers to " +
+      "something you were told a while ago. Searches your saved facts only — " +
+      "never the web, never files.",
+    parameters: recallParams,
+    executionMode: "parallel",
+    execute: (args) => {
+      const hits = searchMemories(access.list(), args.query);
+      if (hits.length === 0) {
+        return `Nothing saved about "${args.query}".`;
+      }
+      // Positions are deliberately absent: these come from the whole store,
+      // and a number here would collide with the prompt list's numbering,
+      // which is what forget and update_memory resolve against.
+      return hits.map((memory) => `- ${memory.text}`).join("\n");
+    },
+  };
+  return [remember, update, forget, recall];
 }
 
 /**

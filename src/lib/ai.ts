@@ -899,12 +899,16 @@ export async function streamBlobTurn(options: {
     let nudgeMark = 0;
     /** Everything shown for this turn: earlier segments plus the live one. */
     const full = () => [...said, text].filter((segment) => segment.trim() !== "").join("\n\n");
-    const memoryTools = new Set(["remember", "update_memory", "forget"]);
+    // Memory *writes* only. `recall_memory` stays: it reads facts the prompt
+    // already carries a working set of, cannot change or delete one, and is
+    // what makes the block's "N more saved facts" line true rather than a
+    // dead end the model has to apologise for.
+    const memoryWriteTools = new Set(["remember", "update_memory", "forget"]);
     // Pass the model so web_fetch sizes its page budget to the real context
     // window: a Tinfoil enclave model can take a whole article, a 16k local
     // one cannot.
     const webTools = makeBlobTools(options.memory, options.model).filter(
-      (tool) => !memoryTools.has(tool.name),
+      (tool) => !memoryWriteTools.has(tool.name),
     );
     // The connected-apps surface is three tools no matter how many apps are
     // connected, so it costs a chat turn the same as a routine — and "read my
@@ -931,7 +935,13 @@ export async function streamBlobTurn(options: {
       model: options.model,
       blobName: "this Blob",
       thinking: options.thinking === true,
-      readOnlyTools: [...webTools, ...(fs === null ? [] : fs.readOnly)],
+      // A helper researches a question the Blob hands it; it has no business
+      // reading the user's saved facts. Least privilege, and it keeps the
+      // helper's short catalog focused on the lookup it was spawned for.
+      readOnlyTools: [
+        ...webTools.filter((tool) => tool.name !== "recall_memory"),
+        ...(fs === null ? [] : fs.readOnly),
+      ],
       signal: options.signal,
     });
     const tools = [

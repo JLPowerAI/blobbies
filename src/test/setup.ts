@@ -29,6 +29,21 @@ if (hasDom && typeof Element.prototype.scrollIntoView !== "function") {
   Element.prototype.scrollIntoView = function scrollIntoView() {};
 }
 
+// jsdom ships no media stack, so the notification chime (`src/lib/sound.ts`)
+// makes every notifying test print a "Not implemented" error through jsdom's
+// virtual console — 72 of them across the suite, none of them a failure.
+//
+// A resolved promise is also the honest stand-in: `playChime` is already
+// fire-and-forget and ignores rejection, so nothing branches on the result.
+// This shims the missing browser API, exactly like the two scroll shims
+// above; it does not suppress any error the app itself raises.
+if (hasDom && typeof HTMLMediaElement !== "undefined") {
+  HTMLMediaElement.prototype.play = function play() {
+    return Promise.resolve();
+  };
+  HTMLMediaElement.prototype.pause = function pause() {};
+}
+
 // Every preference reads through localStorage (`src/lib/preferences.ts`), and
 // whether jsdom provides one varies by environment — the local build ships
 // none, CI's does. Installing this Map-backed stand-in *unconditionally*

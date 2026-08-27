@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "@/App";
@@ -14,6 +14,25 @@ import {
   saveBlobRoutines,
   saveBlobTranscript,
 } from "@/lib/store";
+
+/**
+ * Let App's boot effect finish before asserting.
+ *
+ * `App` loads the roster, settings, groups, skills and Composio state across
+ * several awaits (`src/App.tsx:530`). A test that renders and asserts purely
+ * synchronously returns while that chain is still in flight, so the state
+ * updates land with no act() scope open and React warns that the test ended
+ * mid-update. Tests driven by `userEvent` never see this — every await gives
+ * the chain a scope to settle in — so only the synchronous ones need it.
+ *
+ * Awaiting a macrotask covers the whole chain: the Tauri store mocks resolve
+ * on the next tick rather than the microtask queue.
+ */
+async function settleBoot() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
 
 /** Completes the first-run creator with the given Blob name. */
 async function createFirstBlob(user: UserEvent, name = "Ken") {
@@ -140,8 +159,9 @@ describe("App", () => {
     expect(screen.getByLabelText("Message Bob")).toHaveValue("");
   });
 
-  it("shows the first-run creator when no Blobs exist", () => {
+  it("shows the first-run creator when no Blobs exist", async () => {
     render(<App />);
+    await settleBoot();
 
     expect(screen.getByRole("heading", { name: "New Blob", level: 1 })).toBeInTheDocument();
     expect(screen.getByText("Create your first Blob")).toBeInTheDocument();
@@ -1489,7 +1509,7 @@ describe("onboarding", () => {
     expect(window.localStorage.getItem("pref:timezone")).toBe("Europe/Berlin");
   });
 
-  it("replays for VITE_ONBOARDING without writing a preference", () => {
+  it("replays for VITE_ONBOARDING without writing a preference", async () => {
     // Registered before the stub: a failed assertion below must not leave
     // the flag set for every test that follows.
     onTestFinished(() => {
@@ -1500,6 +1520,7 @@ describe("onboarding", () => {
     vi.stubEnv("VITE_ONBOARDING", "1");
     // The suite default marks the app onboarded; the flag must win.
     render(<App />);
+    await settleBoot();
 
     expect(screen.getByRole("dialog", { name: "Welcome to Blobbies" })).toBeInTheDocument();
     // Replaying is not completing: the completed flag is untouched.
@@ -1510,6 +1531,7 @@ describe("onboarding", () => {
     const user = userEvent.setup();
     // The suite default marks the app onboarded.
     const { unmount } = render(<App />);
+    await settleBoot();
     expect(screen.queryByRole("dialog", { name: "Welcome to Blobbies" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Ken Kai/ }));
@@ -1521,6 +1543,7 @@ describe("onboarding", () => {
     expect(screen.getByRole("dialog", { name: "Welcome to Blobbies" })).toBeInTheDocument();
     unmount();
     render(<App />);
+    await settleBoot();
     expect(screen.queryByRole("dialog", { name: "Welcome to Blobbies" })).not.toBeInTheDocument();
   });
 });

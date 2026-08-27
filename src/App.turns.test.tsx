@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { Message as AiMessage } from "@kenkaiiii/gg-ai";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_SHAPES, type Agent, AVATAR_TONES, GREETING } from "@/data/agents";
@@ -131,6 +131,16 @@ const toolContext = { signal: new AbortController().signal, toolCallId: "t1" };
  * roster, so what is left to prove is that App's implementation actually
  * creates and deletes Blobs that persist.
  */
+/**
+ * Whether React will accept an `act()` call right now.
+ *
+ * Testing Library owns this flag and clears it while `waitFor` polls, so it
+ * has to be read at call time rather than assumed.
+ */
+function isActEnvironment(): boolean {
+  return (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT === true;
+}
+
 async function callRosterTool(name: string, args: Record<string, unknown>) {
   const roster = calls[calls.length - 1]?.roster;
   if (roster === undefined) {
@@ -142,7 +152,25 @@ async function callRosterTool(name: string, args: Record<string, unknown>) {
   if (tool === undefined) {
     throw new Error(`no such tool: ${name}`);
   }
-  return String(await tool.execute(args, toolContext));
+  // Inside act(): these tools are App's own roster handlers, so spawning or
+  // deleting a Blob sets React state. Calling them straight from the test
+  // reaches that state outside any event handler or effect, which is exactly
+  // the case act() exists for — without it React warns, and the assertions
+  // that follow can read a tree that has not re-rendered yet.
+  //
+  // Only when an act environment is actually open, though. A model script may
+  // call a roster tool while the test is parked in `waitFor`, and Testing
+  // Library turns the flag off for the duration of a `waitFor` poll — calling
+  // act() there trades one warning for another, and `waitFor` is already
+  // awaiting the very updates act() would flush.
+  if (!isActEnvironment()) {
+    return String(await tool.execute(args, toolContext));
+  }
+  let result = "";
+  await act(async () => {
+    result = String(await tool.execute(args, toolContext));
+  });
+  return result;
 }
 
 /**

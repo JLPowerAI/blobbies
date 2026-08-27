@@ -3,11 +3,17 @@ import {
   applyMemoryWrite,
   type BlobMemory,
   knownFact,
-  MEMORY_LIMIT,
+  MEMORY_PROFILE_PROMPT_LIMIT,
+  MEMORY_RECENT_PROMPT_LIMIT,
+  MEMORY_STORE_LIMIT,
   MEMORY_TEXT_LIMIT,
+  type MemoryTier,
   normaliseFact,
+  recallMemories,
   renderMemories,
+  searchMemories,
 } from "@/lib/memory";
+import { estimateTokens } from "@/lib/tokens";
 
 /**
  * The memory lifecycle, at the one place every writer goes through.
@@ -31,6 +37,12 @@ const fact = (text: string, at = tick()): BlobMemory => ({
   id: crypto.randomUUID().slice(0, 8),
   text,
   createdAt: at,
+});
+
+/** A fact at an explicit tier; `fact()` leaves the tier absent, i.e. `log`. */
+const tiered = (text: string, tier: MemoryTier, at = tick()): BlobMemory => ({
+  ...fact(text, at),
+  tier,
 });
 
 const texts = (memories: BlobMemory[]) => memories.map((memory) => memory.text);
@@ -162,20 +174,43 @@ describe("applyMemoryWrite: save", () => {
   });
 });
 
-describe("applyMemoryWrite: the size limit", () => {
+describe("applyMemoryWrite: the store limit", () => {
   const full = () =>
-    Array.from({ length: MEMORY_LIMIT }, (_, index) => fact(`fact number ${index}`));
+    Array.from({ length: MEMORY_STORE_LIMIT }, (_, index) => fact(`fact number ${index}`));
 
-  it("evicts the least recently touched fact to make room", () => {
-    // The old per-Blob path refused the write instead ("Memory is full"),
-    // which meant memory silently stopped working at 40 facts.
+  it("keeps saving well past what the prompt can show", () => {
+    // The whole point of splitting store from working set: the 41st fact used
+    // to destroy the 1st, because every stored fact was injected every turn.
+    let memories: BlobMemory[] = [];
+    for (let index = 0; index < 120; index++) {
+      const result = applyMemoryWrite(memories, { kind: "save", text: `fact number ${index}` });
+      memories = result.memories;
+      expect(result.evicted).toEqual([]);
+    }
+    expect(memories).toHaveLength(120);
+    expect(texts(memories)).toContain("fact number 0");
+  });
+
+  it("evicts the weakest fact only at the store cap", () => {
     const before = full();
     const result = applyMemoryWrite(before, { kind: "save", text: "a brand new thing" });
     expect(result.outcome).toBe("saved");
-    expect(result.memories).toHaveLength(MEMORY_LIMIT);
+    expect(result.memories).toHaveLength(MEMORY_STORE_LIMIT);
     expect(result.evicted.map((memory) => memory.text)).toEqual(["fact number 0"]);
-    expect(texts(result.memories)).toContain("a brand new thing");
     expect(texts(result.memories)).not.toContain("fact number 0");
+  });
+
+  it("drops a stale note before an older profile fact when the store is full", () => {
+    // Rank, not raw age: tier is what makes an old identity fact worth more
+    // than a recent throwaway.
+    const before = [
+      tiered("the user is a paramedic in Leeds", "profile"),
+      ...Array.from({ length: MEMORY_STORE_LIMIT - 2 }, (_, index) => fact(`fact number ${index}`)),
+      tiered("the user mentioned a cafe once", "note"),
+    ];
+    const result = applyMemoryWrite(before, { kind: "save", text: "a brand new thing" });
+    expect(result.evicted.map((memory) => memory.text)).toEqual(["the user mentioned a cafe once"]);
+    expect(texts(result.memories)).toContain("the user is a paramedic in Leeds");
   });
 
   it("keeps an old fact that was recently reinforced, dropping an untouched newer one", () => {
@@ -199,7 +234,144 @@ describe("applyMemoryWrite: the size limit", () => {
     });
     expect(result.outcome).toBe("replaced");
     expect(result.evicted).toEqual([]);
-    expect(result.memories).toHaveLength(MEMORY_LIMIT);
+    expect(result.memories).toHaveLength(MEMORY_STORE_LIMIT);
+  });
+});
+
+describe("tiers", () => {
+  it("defaults a saved fact to log, leaving profile a deliberate choice", () => {
+    const result = applyMemoryWrite([], { kind: "save", text: "the user booked a dentist" });
+    expect(result.memories[0]?.tier).toBe("log");
+  });
+
+  it("stores the tier the caller asked for", () => {
+    const result = applyMemoryWrite([], {
+      kind: "save",
+      text: "the user is called Ken",
+      tier: "profile",
+    });
+    expect(result.memories[0]?.tier).toBe("profile");
+  });
+
+  it("promotes a known fact restated at a stronger tier", () => {
+    // Otherwise profile is reachable only by editing an existing fact by id,
+    // and "remember that X — it matters" has nowhere to go.
+    const before = [fact("the user is called Ken")];
+    const result = applyMemoryWrite(before, {
+      kind: "save",
+      text: "the user is called Ken",
+      tier: "profile",
+    });
+    expect(result.outcome).toBe("updated");
+    expect(result.memories).toHaveLength(1);
+    expect(result.memories[0]?.tier).toBe("profile");
+  });
+
+  it("does not demote a fact restated at a weaker tier", () => {
+    const before = [tiered("the user is called Ken", "profile")];
+    const result = applyMemoryWrite(before, {
+      kind: "save",
+      text: "the user is called Ken",
+      tier: "note",
+    });
+    expect(result.outcome).toBe("duplicate");
+    expect(result.changed).toBe(false);
+    expect(result.memories[0]?.tier).toBe("profile");
+  });
+
+  it("reads a fact stored before tiers existed as log", () => {
+    const legacy = fact("saved last year");
+    expect(legacy.tier).toBeUndefined();
+    const recall = recallMemories([legacy]);
+    expect(recall.recent).toHaveLength(1);
+    expect(recall.profile).toEqual([]);
+  });
+});
+
+describe("recallMemories", () => {
+  it("carries stored positions through, so [n] still addresses the right fact", () => {
+    const memories = [fact("one"), tiered("two", "profile"), fact("three")];
+    const recall = recallMemories(memories);
+    expect(recall.profile.map((entry) => entry.position)).toEqual([2]);
+    expect(recall.recent.map((entry) => entry.position)).toEqual([3, 1]);
+  });
+
+  it("caps each tier independently and reports the rest as omitted", () => {
+    const memories = [
+      ...Array.from({ length: MEMORY_PROFILE_PROMPT_LIMIT + 5 }, (_, index) =>
+        tiered(`profile fact ${index}`, "profile"),
+      ),
+      ...Array.from({ length: MEMORY_RECENT_PROMPT_LIMIT + 7 }, (_, index) =>
+        fact(`log fact ${index}`),
+      ),
+    ];
+    const recall = recallMemories(memories);
+    expect(recall.profile).toHaveLength(MEMORY_PROFILE_PROMPT_LIMIT);
+    expect(recall.recent).toHaveLength(MEMORY_RECENT_PROMPT_LIMIT);
+    expect(recall.omitted).toBe(12);
+  });
+
+  it("ranks a log fact above a note that is newer but slighter", () => {
+    // Within one bucket, so this tests the rank weights themselves rather
+    // than the profile/recent split. A note must be a full half-life newer
+    // than a log fact to outrank it; 20 days is not enough.
+    const now = 400 * 24 * 60 * 60 * 1_000;
+    const day = 24 * 60 * 60 * 1_000;
+    const memories = [
+      tiered("the user shipped the billing migration", "log", now - 25 * day),
+      tiered("the user liked a cafe", "note", now - 5 * day),
+    ];
+    const recall = recallMemories(memories, { now, recentLimit: 1 });
+    expect(recall.recent.map((entry) => entry.memory.text)).toEqual([
+      "the user shipped the billing migration",
+    ]);
+  });
+
+  it("lets a note win once it is far newer than the log fact", () => {
+    // The other side of the same trade: the weighting is a tilt, not a veto.
+    const now = 400 * 24 * 60 * 60 * 1_000;
+    const day = 24 * 60 * 60 * 1_000;
+    const memories = [
+      tiered("the user shipped the billing migration", "log", now - 200 * day),
+      tiered("the user liked a cafe", "note", now - 5 * day),
+    ];
+    const recall = recallMemories(memories, { now, recentLimit: 1 });
+    expect(recall.recent.map((entry) => entry.memory.text)).toEqual(["the user liked a cafe"]);
+  });
+
+  it("keeps a profile fact in the prompt that recency alone would drop", () => {
+    // The regression this guards: ranking by recency alone let a throwaway
+    // detail from this morning push out identity stated months ago.
+    const now = 400 * 24 * 60 * 60 * 1_000;
+    const day = 24 * 60 * 60 * 1_000;
+    const memories = [
+      tiered("the user is a paramedic in Leeds", "profile", now - 120 * day),
+      ...Array.from({ length: MEMORY_RECENT_PROMPT_LIMIT + 10 }, (_, index) =>
+        tiered(`minor detail ${index}`, "note", now - index * 60_000),
+      ),
+    ];
+    const rendered = renderMemories(memories, { scope: "blob", now });
+    expect(rendered).toContain("the user is a paramedic in Leeds");
+  });
+});
+
+describe("searchMemories", () => {
+  it("finds a fact that never reached the prompt", () => {
+    const memories = [fact("the user's dentist is Dr Okafor"), fact("the user runs 10k")];
+    expect(texts(searchMemories(memories, "dentist"))).toEqual(["the user's dentist is Dr Okafor"]);
+  });
+
+  it("ranks the fact sharing more query words first", () => {
+    // Not factOverlap: that normalises by the shorter text, so a two-word
+    // fact would beat the long specific one the user meant.
+    const memories = [fact("Okafor called"), fact("the user's dentist is Dr Okafor in Leeds")];
+    expect(texts(searchMemories(memories, "dentist Okafor"))[0]).toBe(
+      "the user's dentist is Dr Okafor in Leeds",
+    );
+  });
+
+  it("returns nothing for a query of only stop words", () => {
+    expect(searchMemories([fact("the user runs")], "the a is")).toEqual([]);
   });
 });
 
@@ -391,9 +563,10 @@ describe("renderMemories", () => {
   });
 
   it("drops the oldest facts first when the budget is tight", () => {
+    // 5 tokens: room for exactly one of these two lines.
     const rendered = renderMemories([fact("oldest fact here"), fact("newest fact here")], {
       scope: "user",
-      budget: 20,
+      budget: 5,
     });
     expect(rendered).toContain("newest fact here");
     expect(rendered).not.toContain("oldest fact here");
@@ -402,5 +575,92 @@ describe("renderMemories", () => {
   it("renders nothing for an empty list or a spent budget", () => {
     expect(renderMemories([], { scope: "blob" })).toBe("");
     expect(renderMemories([fact("a thing")], { scope: "blob", budget: 0 })).toBe("");
+  });
+
+  it("shows profile facts before dated history", () => {
+    const rendered = renderMemories(
+      [fact("booked a dentist"), tiered("the user is called Ken", "profile")],
+      { scope: "blob" },
+    );
+    expect(rendered.indexOf("the user is called Ken")).toBeLessThan(
+      rendered.indexOf("booked a dentist"),
+    );
+  });
+
+  it("keeps numbering in stored order even though selection is by rank", () => {
+    // The model addresses a fact by the number it was shown, and resolveMemory
+    // reads that against the stored list — so [2] must still be row 2.
+    const rendered = renderMemories(
+      [fact("booked a dentist"), tiered("the user is called Ken", "profile")],
+      { scope: "blob" },
+    );
+    expect(rendered).toContain("- [1] booked a dentist");
+    expect(rendered).toContain("- [2] the user is called Ken");
+  });
+
+  it("tells the model when facts are saved but not shown", () => {
+    // Without this the prompt reads as the whole truth, and the model answers
+    // "you never told me" about a fact it still has.
+    const memories = Array.from({ length: MEMORY_RECENT_PROMPT_LIMIT + 3 }, (_, index) =>
+      fact(`fact number ${index}`),
+    );
+    const rendered = renderMemories(memories, { scope: "blob" });
+    expect(rendered).toContain("3 more saved facts not shown");
+    expect(rendered).toContain("recall_memory");
+  });
+
+  it("spends a tight budget on facts rather than on the overflow line", () => {
+    // Giving back a real memory to make room for a note about missing
+    // memories is a bad trade; the note is what goes.
+    const rendered = renderMemories([fact("oldest fact here"), fact("newest fact here")], {
+      scope: "user",
+      budget: 5,
+    });
+    expect(rendered).toContain("newest fact here");
+    expect(rendered).not.toContain("not shown");
+  });
+
+  it("never lets the rendered block exceed the budget it was given", () => {
+    // Ollama answers an over-long prompt by silently truncating it, taking
+    // the conversation rather than the memories.
+    const memories = Array.from({ length: 60 }, (_, index) =>
+      fact(`fact number ${index} with some padding text to spend budget`),
+    );
+    for (const budget of [10, 30, 100, 250]) {
+      const rendered = renderMemories(memories, { scope: "blob", budget });
+      const body = rendered.split("\n").slice(4).join("\n");
+      expect(estimateTokens(body)).toBeLessThanOrEqual(budget);
+    }
+  });
+
+  it("holds the budget for CJK facts, which cost ~4x their character count", () => {
+    // The reason the budget counts tokens rather than characters: measured in
+    // chars, these 40 facts look like a quarter of their real cost, and the
+    // block silently overruns a Chinese-speaking user's context window.
+    const memories = Array.from({ length: 40 }, (_, index) =>
+      fact(`用户喜欢在星期一开会讨论项目进展${index}`),
+    );
+    for (const budget of [10, 30, 100, 250]) {
+      const rendered = renderMemories(memories, { scope: "blob", budget });
+      const body = rendered.split("\n").slice(4).join("\n");
+      expect(estimateTokens(body)).toBeLessThanOrEqual(budget);
+      // Ground truth independent of `estimateTokens`, which would otherwise
+      // both set and mark its own homework. Every CJK character costs at
+      // least one token, so their count alone is a hard lower bound on the
+      // block's real cost — the Latin "- [12] " prefixes are extra on top.
+      // An estimator that stopped counting dense script would pack in ~4x and
+      // fail here while still satisfying the assertion above.
+      const dense = body.match(/[\u4e00-\u9fff]/gu)?.length ?? 0;
+      expect(dense).toBeLessThanOrEqual(budget);
+    }
+  });
+
+  it("stays silent about overflow in the redacted preview", () => {
+    const memories = Array.from({ length: MEMORY_RECENT_PROMPT_LIMIT + 3 }, (_, index) =>
+      fact(`fact number ${index}`),
+    );
+    const rendered = renderMemories(memories, { scope: "blob", redact: true });
+    expect(rendered).not.toContain("not shown");
+    expect(rendered).toContain("open Memories");
   });
 });
